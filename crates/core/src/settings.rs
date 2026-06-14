@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::sort::{SortField, SortOrder};
 
-/// User settings. Every field is `#[serde(default)]` via the struct attribute,
-/// so partial/old config files load fine — adding a setting can never break an
-/// existing `settings.json`. To add one: add a field here with a default in
-/// `Default`, then bind a control in the settings UI.
+/// User settings. `#[serde(default)]` keeps partial/old `settings.json` loading,
+/// so adding a field is always backward-compatible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -62,9 +60,8 @@ fn default_download_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// Owns the settings and their file. The single place settings are read and
-/// written: every mutation goes through [`update`](Self::update), which persists
-/// immediately, so callers never touch the file directly.
+/// Owns the settings and their file; [`update`](Self::update) persists on every
+/// mutation, so callers never touch the file directly.
 pub struct SettingsStore {
     settings: Settings,
     path: PathBuf,

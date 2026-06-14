@@ -18,11 +18,8 @@ struct Stamped<V> {
 }
 
 /// A stale-while-revalidate cache: stores values with their fetch time and
-/// classifies a key as fresh / stale / miss against `stale_after`.
-///
-/// This owns only storage and the freshness policy. Running the background
-/// fetch and applying results is the caller's job, since that is runtime- and
-/// UI-specific (e.g. dispatching to a tokio runtime and notifying a view).
+/// classifies a key as fresh / stale / miss against `stale_after`. Owns only
+/// storage and policy; fetching and applying results is the caller's job.
 pub struct QueryCache<K, V> {
     stale_after: Duration,
     entries: HashMap<K, Stamped<V>>,

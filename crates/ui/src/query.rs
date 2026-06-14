@@ -72,12 +72,9 @@ where
         }
     }
 
-    /// Make `key` the current query: serve cache, then fetch in the background
-    /// if missing or stale.
-    ///
-    /// `access` recovers `&mut Self` from the owning view (e.g. `|v| &mut
-    /// v.query`); `fetch` builds the fetch future from the key. The future is
-    /// driven on gpui's executor — make it own its inputs so it is `'static`.
+    /// Make `key` the current query: serve cache, fetch in the background if
+    /// missing or stale. `access` recovers `&mut Self` from the view; `fetch`
+    /// builds the (`'static`) future from the key.
     pub fn load<View, E, Fut>(
         &mut self,
         key: K,
@@ -102,9 +99,8 @@ where
                 self.status = Status::Revalidating;
                 true
             }
-            // Keep an existing error on screen while we refetch the same key in the
-            // background (stale-while-revalidate for errors); only show the loading
-            // state on a fresh key or first load.
+            // Keep a prior error visible while refetching the same key; only show
+            // loading on a fresh key or first load.
             Lookup::Miss if same_key && matches!(self.status, Status::Error(_)) => true,
             Lookup::Miss => {
                 self.data = None;
@@ -195,9 +191,8 @@ where
     }
 }
 
-/// Focus-gated, self-cancelling interval poll: runs `tick` on the view every
-/// `interval_of(view)` while the window is active; the loop ends when the view
-/// is gone. The interval is read each tick so it tracks live config changes.
+/// Focus-gated interval poll: runs `tick` every `interval_of(view)` while the
+/// window is active, ending when the view is gone. Interval is re-read each tick.
 pub fn poll<View: 'static>(
     window: &Window,
     cx: &mut Context<View>,

@@ -13,11 +13,8 @@ pub enum ServiceError {
     Cancelled,
 }
 
-/// Bridge between the UI executor and the rclone daemon.
-///
-/// RC calls run on the tokio runtime (where reqwest's reactor lives); the result
-/// returns over a oneshot the UI awaits on gpui's executor. Cloneable so views
-/// can hold their own handle.
+/// Bridge between the UI executor and the rclone daemon: RC calls run on the
+/// tokio runtime, results return over a oneshot the UI awaits. Cloneable.
 #[derive(Clone)]
 pub struct Service {
     handle: Handle,
@@ -57,12 +54,10 @@ impl Service {
         rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
     }
 
-    /// Submit a download of `remote:path` into `dest` as an async rclone job in
-    /// stats group `group`, returning the job id.
+    /// Download `remote:path` into `dest` as an async job in stats group `group`.
     ///
-    /// We do not decide file-vs-directory: a single `sync/copy` from the item's
-    /// parent, filtered to just that item, lets rclone resolve the type and
-    /// preserves the item's name under `dest`.
+    /// A `sync/copy` from the item's parent filtered to just that item lets
+    /// rclone resolve file-vs-directory and preserves the name under `dest`.
     pub async fn download(
         &self,
         remote: String,

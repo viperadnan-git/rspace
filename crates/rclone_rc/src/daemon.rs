@@ -24,10 +24,9 @@ pub enum DaemonError {
 
 /// A running `rclone rcd` instance bound to loopback with token auth.
 ///
-/// Lifecycle is leak-proof on three fronts: `kill_on_drop` reaps the child on a
-/// normal exit or panic unwind, [`Daemon::shutdown`] does a graceful quit, and a
-/// pid file lets the next launch [`reap_orphan`] a daemon left behind by a hard
-/// crash where neither of the first two could run.
+/// Leak-proof via `kill_on_drop` (normal exit/unwind), [`Daemon::shutdown`]
+/// (graceful quit), signal cleanup, and a pid file [`reap_orphan`]ed on the next
+/// launch after a hard crash.
 pub struct Daemon {
     child: Child,
     client: RcClient,
@@ -94,12 +93,9 @@ impl Daemon {
         let _ = std::fs::remove_file(&self.pidfile);
     }
 
-    /// Spawn a task on `handle` that runs the same cleanup as [`shutdown`] when
-    /// the process receives SIGINT or SIGTERM, then exits.
-    ///
-    /// `kill_on_drop` only covers a normal `Drop`/unwind; a signal terminates the
-    /// process without running it, orphaning the daemon until the next launch
-    /// reaps it. This closes that gap so a signalled shutdown is clean too.
+    /// Run [`shutdown`]-equivalent cleanup on a termination signal, then exit —
+    /// `kill_on_drop` doesn't run when a signal kills the process.
+    /// Unix: SIGINT/SIGTERM. Windows: Ctrl-C/Break/Close/Shutdown/Logoff.
     #[cfg(unix)]
     pub fn install_signal_cleanup(&self, handle: &tokio::runtime::Handle) {
         use tokio::signal::unix::{signal, SignalKind};
@@ -117,21 +113,53 @@ impl Daemon {
                 _ = term.recv() => {}
                 _ = int.recv() => {}
             }
-            let _ = tokio::time::timeout(Duration::from_secs(2), client.quit()).await;
-            if let Some(pid) = pid {
-                terminate(pid);
+            cleanup_and_exit(client, pid, pidfile).await;
+        });
+    }
+
+    #[cfg(windows)]
+    pub fn install_signal_cleanup(&self, handle: &tokio::runtime::Handle) {
+        use tokio::signal::windows;
+
+        let client = self.client.clone();
+        let pid = self.child.id();
+        let pidfile = self.pidfile.clone();
+        handle.spawn(async move {
+            let (Ok(mut cc), Ok(mut brk), Ok(mut close), Ok(mut shutdown), Ok(mut logoff)) = (
+                windows::ctrl_c(),
+                windows::ctrl_break(),
+                windows::ctrl_close(),
+                windows::ctrl_shutdown(),
+                windows::ctrl_logoff(),
+            ) else {
+                return;
+            };
+            tokio::select! {
+                _ = cc.recv() => {}
+                _ = brk.recv() => {}
+                _ = close.recv() => {}
+                _ = shutdown.recv() => {}
+                _ = logoff.recv() => {}
             }
-            let _ = std::fs::remove_file(&pidfile);
-            std::process::exit(130);
+            cleanup_and_exit(client, pid, pidfile).await;
         });
     }
 }
 
-/// Kill a daemon orphaned by a previous run, then clear the pid file.
-///
-/// Verifies the recorded pid is actually an `rclone rcd` before signalling it,
-/// so a pid recycled by an unrelated process is left untouched. Safe to call
-/// when no pid file exists (a no-op).
+/// Graceful quit (bounded), then ensure the daemon is dead and the pid file is
+/// gone, then exit. Shared by the per-platform signal handlers.
+#[cfg(any(unix, windows))]
+async fn cleanup_and_exit(client: RcClient, pid: Option<u32>, pidfile: PathBuf) -> ! {
+    let _ = tokio::time::timeout(Duration::from_secs(2), client.quit()).await;
+    if let Some(pid) = pid {
+        terminate(pid);
+    }
+    let _ = std::fs::remove_file(&pidfile);
+    std::process::exit(130);
+}
+
+/// Kill a daemon orphaned by a previous run, then clear the pid file. The pid is
+/// verified as an `rclone rcd` first, so a recycled pid is left untouched.
 pub fn reap_orphan(pidfile: &Path) {
     let Some(pid) = read_pid(pidfile) else {
         return;
@@ -153,10 +181,8 @@ fn write_pidfile(path: &Path, pid: u32) -> std::io::Result<()> {
     std::fs::write(path, pid.to_string())
 }
 
-/// Reserve a free loopback port by binding to `:0` and reading the assignment.
-///
-/// rclone re-binds the same addr moments later; the gap is a benign race on a
-/// single-user loopback interface.
+/// Reserve a free loopback port via `:0`. rclone re-binds it moments later — a
+/// benign race on a single-user loopback interface.
 fn free_loopback_port() -> std::io::Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     Ok(listener.local_addr()?.port())

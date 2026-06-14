@@ -52,7 +52,7 @@ const FG_SUBTLE: u32 = 0x656c76;
 const ACCENT: u32 = 0x478be6;
 const SUCCESS: u32 = 0x57ab5a;
 const DANGER: u32 = 0xe5534b;
-// Neutral element overlays (rgba) so they read over both pane backgrounds.
+// Translucent element overlays, neutral over either pane background.
 const OVERLAY: u32 = 0x656c7626;
 const SELECT: u32 = 0x656c7659;
 const SELECT_MUTED: u32 = 0x656c7633;
@@ -123,7 +123,7 @@ impl AssetSource for Assets {
     }
 }
 
-/// A small hover tooltip (Zed-style: elevated box, used via [`tooltip_text`]).
+/// Hover tooltip surface, built via [`tooltip_text`].
 struct Tooltip {
     text: SharedString,
 }
@@ -561,9 +561,7 @@ impl Workspace {
         .detach();
     }
 
-    /// Ping the rc daemon every few seconds and reflect reachability in the
-    /// status-bar dot. Runs regardless of window focus so a dropped daemon is
-    /// noticed promptly.
+    /// Ping the rc daemon on an interval for the status-bar dot; runs unfocused.
     fn poll_health(window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -1168,8 +1166,7 @@ impl Workspace {
         )
     }
 
-    // Battle-tested overflow: collapse the middle when the path is deep
-    // (remote › … › parent › current); each segment truncates with ellipsis.
+    // Deep paths collapse the middle: remote › … › parent › current.
     fn render_breadcrumb(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let container = h_flex().gap_1().min_w(px(0.0));
         let Some(remote) = self.open_remote.clone() else {
@@ -1224,9 +1221,8 @@ impl Workspace {
         row.child(self.copy_button(cx))
     }
 
-    // Deferred absolute overlay straddling the sidebar's right border (Zed's
-    // dock pattern): the border is the flush divider, the handle takes no layout
-    // space, and `deferred` lets it paint/hit-test on top of the next pane.
+    // Overlay on the sidebar's right border; takes no layout space, so
+    // `deferred` paints/hit-tests it over the next pane.
     fn resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         deferred(
             div()
@@ -1340,7 +1336,6 @@ impl Workspace {
                     cx.notify();
                 }),
             )
-            // A pinned remote leads with the pin glyph, mirroring the name's color.
             .when(pinned, |r| {
                 r.child(svg().path("icons/pin.svg").size(px(12.0)).flex_shrink_0().text_color(rgb(ACCENT)))
             })
@@ -1382,8 +1377,7 @@ impl Workspace {
             .child(self.resize_handle(cx))
             .child(div().px_3().py_2().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))
             .child(
-                // One list; pinned remotes simply lead it (Telegram-style), so
-                // they scroll with everything else when there are many.
+                // Single list so pinned rows (which lead it) scroll with the rest.
                 uniform_list(
                     "remotes",
                     count,
@@ -1571,18 +1565,15 @@ impl Workspace {
             .child(label)
     }
 
-    /// Clear every transient popover. Menu actions call this so the menu closes
-    /// regardless of which one it belongs to.
+    /// Close every transient popover.
     fn close_menus(&mut self) {
         self.context = None;
         self.remote_menu = None;
         self.sort_menu_open = false;
     }
 
-    /// Float `items` as a popover anchored at `pos`. The surface occludes the
-    /// mouse — the root fix for hover/click bleeding through to content behind —
-    /// and dismisses on an outside mouse-down. Every right-click menu goes
-    /// through here so behaviour stays uniform.
+    /// Popover anchored at `pos`, dismissed on outside mouse-down. `occlude`
+    /// stops hover/click reaching content behind it.
     fn popover(
         &self,
         id: &'static str,
@@ -1692,7 +1683,6 @@ impl Workspace {
         self.popover("remote-menu", pos, items, cx)
     }
 
-    // Bottom dock panel (Zed-style): the browser stays visible above it.
     fn render_transfers(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let has_done = self.jobs.iter().any(|j| j.done);
         let count = self.jobs.len();
@@ -1730,8 +1720,7 @@ impl Workspace {
         };
         outer
             .bg(rgb(INSET))
-            // Maximized sits flush under the title bar, which already draws the
-            // boundary; only the docked panel needs its own top border.
+            // Maximized is flush under the title bar's border; only the dock needs its own.
             .when(!maximized, |el| el.border_t_1().border_color(rgb(BORDER_MUTED)))
             .child(
                 h_flex()
@@ -2118,17 +2107,15 @@ impl Render for Workspace {
             .text_sm()
             .child(self.render_title_bar(window, cx))
             .child({
-                // A panel only covers the browser while it is open AND zoomed
-                // (Zed's dock-zoom model); closing it always reveals the browser,
-                // so zoom state can never leave the content region blank.
+                // A panel covers the browser only while open AND zoomed, so
+                // closing it can never leave the content region blank.
                 let zoomed = self.jobs_open && self.jobs_maximized;
                 v_flex()
                     .flex_1()
                     .min_h(px(0.0))
                     .when(!zoomed, |el| {
                         el.child(
-                            // Plain flex_row (not h_flex): panes must stretch to full
-                            // height, not center on the cross-axis.
+                            // Plain flex_row, not h_flex: panes stretch to full height.
                             div()
                                 .flex()
                                 .flex_row()
@@ -2148,8 +2135,7 @@ impl Render for Workspace {
     }
 }
 
-/// One labeled setting: title, description, and its control. Adding a setting
-/// to the page is one of these.
+/// A labeled setting: title, description, and its control.
 fn setting_block(title: &str, desc: &str, control: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_2()

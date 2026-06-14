@@ -50,9 +50,7 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// Compute a storage report off the async runtime's worker threads.
-///
-/// Directory walks can be large; they must never run on the UI thread.
+/// Compute a storage report off the UI thread (directory walks can be large).
 pub async fn report(paths: &Paths) -> StorageReport {
     let dirs = paths.categories();
     tokio::task::spawn_blocking(move || {
