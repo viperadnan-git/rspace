@@ -9,6 +9,13 @@ publish.workspace = true
 name = "rspace"
 path = "src/main.rs"
 
+# `cargo bundle` packages crates/app into rspace.app with this icon.
+[package.metadata.bundle]
+name = "rspace"
+identifier = "com.viperadnan.rspace"
+icon = ["resources/rspace.icns"]
+category = "public.app-category.utilities"
+
 [dependencies]
 rspace-core.workspace = true
 rspace-rclone-rc.workspace = true
