@@ -1,24 +1,31 @@
 //! gpui desktop shell: a two-pane remote browser.
 
+mod jobs;
+mod menus;
+mod panels;
 mod query;
+mod theme;
+mod views;
+mod widgets;
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
-    uniform_list, Anchor,
-    Animation, AnimationExt as _, AnyElement, AnyView, App, AssetSource, Bounds, ClickEvent, ClipboardItem,
-    Context, Div,
-    DragMoveEvent, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent,
+    uniform_list, Anchor, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
+    Div, DragMoveEvent, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use rspace_core::{Paths, SettingsStore, SortField, SortOrder};
-use rspace_rclone_rc::{Entry, RemoteInfo, Service, ServiceError};
+use rspace_rclone_rc::{Entry, RemoteInfo, Service, ServiceError, TransferMode};
 
 use query::{Query, Status};
+use theme::*;
+use widgets::*;
 
 actions!(
     rspace,
@@ -37,174 +44,45 @@ actions!(
         Minimize,
         Zoom,
         ToggleFullscreen,
-        CloseSettings
+        CloseSettings,
+        CopyEntry,
+        CutEntry,
+        PasteEntry,
+        DeleteEntry,
+        ConfirmAccept,
+        SelectAll,
+        NewFolder,
+        NewFile,
+        Rename,
+        PromptSubmit,
+        PromptCancel
     ]
 );
-
-// GitHub Dark Dimmed (Zed theme).
-const CANVAS: u32 = 0x212830;
-const INSET: u32 = 0x151b23;
-const ELEVATED: u32 = 0x2a313c;
-const BORDER_MUTED: u32 = 0x3d444d;
-const FG: u32 = 0xd1d7e0;
-const FG_MUTED: u32 = 0x9198a1;
-const FG_SUBTLE: u32 = 0x656c76;
-const ACCENT: u32 = 0x478be6;
-const SUCCESS: u32 = 0x57ab5a;
-const DANGER: u32 = 0xe5534b;
-// Translucent element overlays, neutral over either pane background.
-const OVERLAY: u32 = 0x656c7626;
-const SELECT: u32 = 0x656c7659;
-const SELECT_MUTED: u32 = 0x656c7633;
-
-const SIDEBAR_W: f32 = 248.0;
-const SIDEBAR_MIN: f32 = 180.0;
-const SIDEBAR_MAX: f32 = 480.0;
-const RESIZE_HANDLE_W: f32 = 6.0;
-const TITLE_BAR_H: f32 = 36.0;
-const MAX_CRUMBS: usize = 4;
-
-/// Left inset of the custom title bar to clear the window controls.
-#[cfg(target_os = "macos")]
-const TITLE_BAR_LEAD: f32 = 80.0; // macOS traffic lights
-#[cfg(not(target_os = "macos"))]
-const TITLE_BAR_LEAD: f32 = 12.0;
 
 struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        Ok(match path {
-            "icons/folder.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/folder.svg").as_slice()))
-            }
-            "icons/file.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/file.svg").as_slice()))
-            }
-            "icons/copy.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/copy.svg").as_slice()))
-            }
-            "icons/check.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/check.svg").as_slice()))
-            }
-            "icons/settings.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/settings.svg").as_slice()))
-            }
-            "icons/alert.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/alert.svg").as_slice()))
-            }
-            "icons/maximize.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/maximize.svg").as_slice()))
-            }
-            "icons/minimize.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/minimize.svg").as_slice()))
-            }
-            "icons/download.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/download.svg").as_slice()))
-            }
-            "icons/folder_open.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/folder_open.svg").as_slice()))
-            }
-            "icons/pin.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/pin.svg").as_slice()))
-            }
-            "icons/chevron_up.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/chevron_up.svg").as_slice()))
-            }
-            "icons/chevron_down.svg" => {
-                Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/icons/chevron_down.svg").as_slice()))
-            }
-            _ => None,
-        })
+        // Each name maps `icons/<name>.svg` to the embedded bytes; add one word here.
+        macro_rules! icons {
+            ($($name:literal),* $(,)?) => {
+                match path {
+                    $(concat!("icons/", $name, ".svg") => Some(std::borrow::Cow::Borrowed(
+                        include_bytes!(concat!("../assets/icons/", $name, ".svg")).as_slice(),
+                    )),)*
+                    _ => None,
+                }
+            };
+        }
+        Ok(icons!(
+            "folder", "file", "copy", "check", "settings", "alert", "maximize", "minimize", "download",
+            "folder_open", "pin", "chevron_up", "chevron_down", "scissors", "clipboard", "refresh",
+            "activity", "trash", "x", "edit"
+        ))
     }
 
     fn list(&self, _path: &str) -> anyhow::Result<Vec<SharedString>> {
         Ok(Vec::new())
-    }
-}
-
-/// Hover tooltip surface, built via [`tooltip_text`].
-struct Tooltip {
-    text: SharedString,
-}
-
-impl Render for Tooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(BORDER_MUTED))
-            .shadow_lg()
-            .text_xs()
-            .text_color(rgb(FG))
-            .child(self.text.clone())
-    }
-}
-
-fn tooltip_text(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    let text = text.into();
-    move |_window, cx| cx.new(|_| Tooltip { text: text.clone() }).into()
-}
-
-fn file_icon(is_dir: bool) -> impl IntoElement {
-    let path = if is_dir { "icons/folder.svg" } else { "icons/file.svg" };
-    svg().path(path).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))
-}
-
-fn h_flex() -> Div {
-    div().flex().flex_row().items_center()
-}
-
-fn v_flex() -> Div {
-    div().flex().flex_col()
-}
-
-fn list_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
-    let base = h_flex()
-        .id(id)
-        .w_full()
-        .justify_between()
-        .gap_2()
-        .px_3()
-        .py_1()
-        .cursor_pointer();
-    if selected && focused {
-        base.bg(rgba(SELECT))
-    } else if selected {
-        base.bg(rgba(SELECT_MUTED))
-    } else {
-        base.hover(|s| s.bg(rgba(OVERLAY)))
-    }
-}
-
-/// A square 22px icon button: muted svg glyph, rounded hover background.
-fn icon_button(id: &'static str, icon: &'static str) -> Stateful<Div> {
-    h_flex()
-        .id(id)
-        .size(px(22.0))
-        .justify_center()
-        .rounded_md()
-        .cursor_pointer()
-        .text_color(rgb(FG_MUTED))
-        .hover(|s| s.bg(rgba(OVERLAY)))
-        .child(svg().path(icon).size(px(14.0)).text_color(rgb(FG_MUTED)))
-}
-
-fn nav_button(id: &'static str, glyph: &'static str, enabled: bool) -> Stateful<Div> {
-    let b = h_flex()
-        .id(id)
-        .size(px(24.0))
-        .justify_center()
-        .rounded_md()
-        .text_color(if enabled { rgb(FG) } else { rgb(FG_SUBTLE) })
-        .child(glyph);
-    if enabled {
-        b.cursor_pointer().hover(|s| s.bg(rgba(OVERLAY)))
-    } else {
-        b
     }
 }
 
@@ -279,19 +157,38 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
-        KeyBinding::new("down", SelectNext, Some("Workspace")),
-        KeyBinding::new("j", SelectNext, Some("Workspace")),
-        KeyBinding::new("up", SelectPrev, Some("Workspace")),
-        KeyBinding::new("k", SelectPrev, Some("Workspace")),
-        KeyBinding::new("enter", Open, Some("Workspace")),
-        KeyBinding::new("tab", TogglePane, Some("Workspace")),
-        KeyBinding::new("backspace", GoUp, Some("Workspace")),
-        KeyBinding::new("cmd-[", GoBack, Some("Workspace")),
-        KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
-        KeyBinding::new("cmd-r", Reload, Some("Workspace")),
+        // Navigation/mutation are inert while a confirm dialog owns the keyboard.
+        KeyBinding::new("down", SelectNext, Some("Workspace && !modal")),
+        KeyBinding::new("j", SelectNext, Some("Workspace && !modal")),
+        KeyBinding::new("up", SelectPrev, Some("Workspace && !modal")),
+        KeyBinding::new("k", SelectPrev, Some("Workspace && !modal")),
+        // Shift extends the selection (handler reads live modifiers).
+        KeyBinding::new("shift-down", SelectNext, Some("Workspace && !modal")),
+        KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal")),
+        KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal")),
+        KeyBinding::new("shift-k", SelectPrev, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !modal")),
+        KeyBinding::new("enter", Open, Some("Workspace && !modal")),
+        KeyBinding::new("tab", TogglePane, Some("Workspace && !modal")),
+        KeyBinding::new("backspace", GoUp, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-[", GoBack, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-]", GoForward, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-r", Reload, Some("Workspace && !modal")),
+        KeyBinding::new("left", FocusSidebar, Some("Workspace && !modal")),
+        KeyBinding::new("right", FocusExplorer, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-c", CopyEntry, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-x", CutEntry, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-v", PasteEntry, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-backspace", DeleteEntry, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-shift-n", NewFolder, Some("Workspace && !modal")),
+        KeyBinding::new("cmd-u", NewFile, Some("Workspace && !modal")),
+        KeyBinding::new("f2", Rename, Some("Workspace && !modal")),
         KeyBinding::new("escape", CloseSettings, Some("Workspace")),
-        KeyBinding::new("left", FocusSidebar, Some("Workspace")),
-        KeyBinding::new("right", FocusExplorer, Some("Workspace")),
+        // Confirm dialog: Enter accepts (Escape dismisses via the line above).
+        KeyBinding::new("enter", ConfirmAccept, Some("Confirm")),
+        // Text-input dialog: Enter submits, Escape cancels.
+        KeyBinding::new("enter", PromptSubmit, Some("Prompt")),
+        KeyBinding::new("escape", PromptCancel, Some("Prompt")),
     ]);
 }
 
@@ -331,6 +228,7 @@ enum Pane {
 enum CopySource {
     Path,
     Error,
+    JobCommand(usize),
 }
 
 /// Reachability of the rclone rc daemon, surfaced by the status-bar dot.
@@ -339,13 +237,6 @@ enum RcHealth {
     Unknown,
     Up,
     Down(String),
-}
-
-fn sort_arrow(order: SortOrder) -> &'static str {
-    match order {
-        SortOrder::Asc => "↑",
-        SortOrder::Desc => "↓",
-    }
 }
 
 #[derive(Clone)]
@@ -368,6 +259,39 @@ struct Job {
     bytes: u64,
     total: u64,
     speed: f64,
+    /// Refresh the open listing when this job succeeds (paste changed a remote).
+    reload_on_done: bool,
+    /// Elapsed from rclone: live `core/stats.elapsedTime`, then `job/status.duration`.
+    elapsed_ms: u64,
+    /// Equivalent rclone CLI command, for the row's copy button.
+    command: String,
+}
+
+/// Source for a cross-remote copy/cut, resolved against the destination at paste.
+#[derive(Clone)]
+struct Clipboard {
+    remote: String,
+    entries: Vec<Entry>,
+    mode: TransferMode,
+}
+
+/// A pending confirmation dialog: its copy plus the action run once confirmed.
+struct Confirm {
+    title: SharedString,
+    message: SharedString,
+    confirm_label: SharedString,
+    danger: bool,
+    action: Box<dyn FnOnce(&mut Workspace, &mut Context<Workspace>)>,
+}
+
+/// An inline text edit in the explorer list (new folder / rename). `target` is
+/// the path of the entry being renamed, or `None` for a new item at the top.
+struct Prompt {
+    value: String,
+    placeholder: SharedString,
+    icon_dir: bool,
+    target: Option<String>,
+    action: Box<dyn FnOnce(&mut Workspace, String, &mut Context<Workspace>)>,
 }
 
 #[derive(Clone)]
@@ -410,6 +334,7 @@ struct Workspace {
     service: Service,
     version: String,
     focus: FocusHandle,
+    dialog_focus: FocusHandle,
     pane: Pane,
     remotes: Vec<RemoteInfo>,
     remote_sel: usize,
@@ -420,7 +345,13 @@ struct Workspace {
     open_remote: Option<String>,
     /// Empty = root.
     path: String,
+    /// Cursor (lead) row index.
     entry_sel: usize,
+    /// Multi-selection by entry path; survives re-sort and refresh. Always
+    /// contains the cursor's path unless explicitly toggled off.
+    selected: HashSet<String>,
+    /// Anchor index for shift-range selection.
+    sel_anchor: usize,
     entry_scroll: UniformListScrollHandle,
     /// A row to select by name once the next listing loads (e.g. the child
     /// folder after navigating up).
@@ -438,11 +369,18 @@ struct Workspace {
     settings_open: bool,
     /// Right-click context menu: the targeted entry and the cursor position.
     context: Option<(Entry, Point<Pixels>)>,
+    /// Right-click on empty list space: the cursor position.
+    bg_menu: Option<Point<Pixels>>,
+    /// Pending confirmation dialog (destructive or irreversible actions).
+    confirm: Option<Confirm>,
+    /// Pending text-input dialog (new folder, rename, …).
+    prompt: Option<Prompt>,
     jobs: Vec<Job>,
     job_seq: usize,
     jobs_open: bool,
     jobs_maximized: bool,
     rc_health: RcHealth,
+    clipboard: Option<Clipboard>,
 }
 
 impl Workspace {
@@ -462,6 +400,7 @@ impl Workspace {
             service,
             version,
             focus,
+            dialog_focus: cx.focus_handle(),
             pane: Pane::Sidebar,
             remotes: Vec::new(),
             remote_sel: 0,
@@ -471,6 +410,8 @@ impl Workspace {
             open_remote: None,
             path: String::new(),
             entry_sel: 0,
+            selected: HashSet::new(),
+            sel_anchor: 0,
             entry_scroll: UniformListScrollHandle::new(),
             pending_select: None,
             dir_query: Query::new(stale),
@@ -484,11 +425,15 @@ impl Workspace {
             store,
             settings_open: false,
             context: None,
+            bg_menu: None,
+            confirm: None,
+            prompt: None,
             jobs: Vec::new(),
             job_seq: 0,
             jobs_open: false,
             jobs_maximized: false,
             rc_health: RcHealth::Unknown,
+            clipboard: None,
         };
         this.load_remotes(cx);
         Self::poll_health(window, cx);
@@ -529,24 +474,37 @@ impl Workspace {
                     let stats = service.stats(group).await.ok();
                     let alive = cx.update(|_, app| {
                         this.update(app, |v, vcx| {
+                            let mut reload = false;
                             if let Some(j) = v.jobs.iter_mut().find(|j| j.id == id) {
                                 if let Some(s) = &stats {
                                     j.bytes = s.bytes;
                                     j.total = s.total_bytes;
                                     j.speed = s.speed;
+                                    j.elapsed_ms = (s.elapsed_time * 1000.0) as u64;
                                 }
                                 if let Some(st) = &status {
-                                    if st.finished {
+                                    if st.finished && !j.done {
                                         j.done = true;
-                                        if !st.success {
-                                            j.error = Some(if st.error.is_empty() {
-                                                "failed".into()
+                                        if st.duration > 0.0 {
+                                            j.elapsed_ms = (st.duration * 1000.0) as u64;
+                                        }
+                                        if st.success {
+                                            reload = j.reload_on_done;
+                                            tracing::debug!(job = %j.title, elapsed_ms = j.elapsed_ms, "job done");
+                                        } else {
+                                            let msg = if st.error.is_empty() {
+                                                "failed".to_string()
                                             } else {
                                                 st.error.clone()
-                                            });
+                                            };
+                                            tracing::warn!(job = %j.title, elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
+                                            j.error = Some(msg);
                                         }
                                     }
                                 }
+                            }
+                            if reload {
+                                v.force_reload_entries(vcx);
                             }
                             vcx.notify();
                         })
@@ -629,6 +587,11 @@ impl Workspace {
     }
 
     fn reload(&mut self, _: &Reload, _window: &mut Window, cx: &mut Context<Self>) {
+        self.force_reload_entries(cx);
+    }
+
+    /// Force a refetch of the open directory, bypassing the stale gate.
+    fn force_reload_entries(&mut self, cx: &mut Context<Self>) {
         let service = self.service.clone();
         let (field, order) = (self.sort_field, self.sort_order);
         self.dir_query.reload(cx, |this| &mut this.dir_query, move |(remote, path)| async move {
@@ -636,6 +599,103 @@ impl Workspace {
             sort_entries(&mut entries, field, order);
             Ok::<_, ServiceError>(entries)
         });
+    }
+
+    fn ask_confirm(
+        &mut self,
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+        confirm_label: impl Into<SharedString>,
+        danger: bool,
+        action: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm = Some(Confirm {
+            title: title.into(),
+            message: message.into(),
+            confirm_label: confirm_label.into(),
+            danger,
+            action: Box::new(action),
+        });
+        cx.notify();
+    }
+
+    fn confirm_accept(&mut self, _: &ConfirmAccept, _window: &mut Window, cx: &mut Context<Self>) {
+        self.run_confirm(cx);
+    }
+
+    fn run_confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(c) = self.confirm.take() {
+            (c.action)(self, cx);
+        }
+        cx.notify();
+    }
+
+    fn dismiss_confirm(&mut self, cx: &mut Context<Self>) {
+        self.confirm = None;
+        cx.notify();
+    }
+
+    /// Start an inline edit; `action` runs with the entered text on submit.
+    /// `target` is the renamed entry's path, or `None` for a new item at the top.
+    fn begin_edit(
+        &mut self,
+        value: impl Into<String>,
+        placeholder: impl Into<SharedString>,
+        icon_dir: bool,
+        target: Option<String>,
+        action: impl FnOnce(&mut Self, String, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.prompt = Some(Prompt {
+            value: value.into(),
+            placeholder: placeholder.into(),
+            icon_dir,
+            target,
+            action: Box::new(action),
+        });
+        cx.notify();
+    }
+
+    fn prompt_submit(&mut self, _: &PromptSubmit, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(p) = self.prompt.take() {
+            let value = p.value.trim().to_string();
+            if value.is_empty() {
+                // Nothing entered: reopen unchanged rather than silently doing nothing.
+                self.prompt = Some(p);
+                return;
+            }
+            (p.action)(self, value, cx);
+        }
+        cx.notify();
+    }
+
+    fn prompt_cancel(&mut self, _: &PromptCancel, _window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt = None;
+        cx.notify();
+    }
+
+    /// Feed a key into the open prompt's text field (printable chars + backspace).
+    fn prompt_key(&mut self, ev: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(p) = self.prompt.as_mut() else {
+            return;
+        };
+        match ev.keystroke.key.as_str() {
+            "backspace" => {
+                p.value.pop();
+                cx.notify();
+            }
+            _ => {
+                let m = ev.keystroke.modifiers;
+                if m.platform || m.control || m.function {
+                    return;
+                }
+                if let Some(ch) = &ev.keystroke.key_char {
+                    p.value.push_str(ch);
+                    cx.notify();
+                }
+            }
+        }
     }
 
     fn choose_sort(&mut self, field: SortField, cx: &mut Context<Self>) {
@@ -768,6 +828,8 @@ impl Workspace {
         self.history.push(Location { remote, path, selected: None });
         self.history_pos = self.history.len() - 1;
         self.entry_sel = 0;
+        self.sel_anchor = 0;
+        self.selected.clear();
         self.pending_select = want;
         self.load_entries(cx);
     }
@@ -809,6 +871,8 @@ impl Workspace {
         self.path = loc.path;
         self.pane = Pane::Explorer;
         self.entry_sel = 0;
+        self.sel_anchor = 0;
+        self.selected.clear();
         self.pending_select = loc.selected;
         self.load_entries(cx);
     }
@@ -827,6 +891,17 @@ impl Workspace {
         let len = self.entries().len();
         if len > 0 && self.entry_sel >= len {
             self.entry_sel = len - 1;
+        }
+        // Prune stale paths only for a real multi-selection (single-select is kept
+        // valid by the cursor logic, so the common path allocates nothing).
+        if self.selected.len() > 1 {
+            let valid: HashSet<String> = self.entries().iter().map(|e| e.path.clone()).collect();
+            self.selected.retain(|p| valid.contains(p));
+        }
+        if self.selected.is_empty() {
+            if let Some(p) = self.entry_path_at(self.entry_sel) {
+                self.selected.insert(p);
+            }
         }
     }
 
@@ -847,11 +922,20 @@ impl Workspace {
             || self.sort_menu_open
             || self.context.is_some()
             || self.remote_menu.is_some()
+            || self.bg_menu.is_some()
+            || self.confirm.is_some()
+            || self.prompt.is_some()
             || self.jobs_open
         {
             self.settings_open = false;
             self.jobs_open = false;
+            self.confirm = None;
+            self.prompt = None;
             self.close_menus();
+            cx.notify();
+        } else if self.pane == Pane::Explorer && self.selected.len() > 1 {
+            // Nothing to close: collapse a multi-selection back to the cursor.
+            self.select_only(self.entry_sel);
             cx.notify();
         }
     }
@@ -887,75 +971,7 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
-    fn download_entry(&mut self, entry: &Entry, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
-            return;
-        };
-        let dest = self.store.get().download_dir();
-        let id = self.job_seq;
-        self.job_seq += 1;
-        let group = format!("rspace/{id}");
-        self.jobs.push(Job {
-            id,
-            group: group.clone(),
-            jobid: None,
-            title: format!("Download {}", entry.name),
-            done: false,
-            error: None,
-            bytes: 0,
-            total: 0,
-            speed: 0.0,
-        });
-        cx.notify();
-
-        let service = self.service.clone();
-        let path = entry.path.clone();
-        cx.spawn(async move |this, cx| {
-            let result = service.download(remote, path, dest, group).await;
-            this.update(cx, |this, cx| {
-                if let Some(j) = this.jobs.iter_mut().find(|j| j.id == id) {
-                    match result {
-                        Ok(jobid) => j.jobid = Some(jobid),
-                        Err(e) => {
-                            j.done = true;
-                            j.error = Some(e.to_string());
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
-        let Some(jobid) = self.jobs.iter().find(|j| j.id == id).and_then(|j| j.jobid) else {
-            return;
-        };
-        let service = self.service.clone();
-        cx.spawn(async move |this, cx| {
-            let _ = service.job_stop(jobid).await;
-            this.update(cx, |this, cx| {
-                if let Some(j) = this.jobs.iter_mut().find(|j| j.id == id) {
-                    j.done = true;
-                    j.error.get_or_insert_with(|| "cancelled".into());
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn clear_finished(&mut self, cx: &mut Context<Self>) {
-        self.jobs.retain(|j| !j.done);
-        if self.jobs.is_empty() {
-            self.jobs_open = false;
-        }
-        cx.notify();
-    }
-
+    /// Download every selected entry to the configured folder, one job each.
     fn action_back(&mut self, _: &GoBack, _window: &mut Window, cx: &mut Context<Self>) {
         self.go_back(cx);
     }
@@ -984,25 +1000,102 @@ impl Workspace {
         }
     }
 
-    fn select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
-        let len = self.active_len();
-        let sel = match self.pane {
-            Pane::Sidebar => &mut self.remote_sel,
-            Pane::Explorer => &mut self.entry_sel,
-        };
-        if *sel + 1 < len {
-            *sel += 1;
-            cx.notify();
+    fn entry_path_at(&self, ix: usize) -> Option<String> {
+        self.entries().get(ix).map(|e| e.path.clone())
+    }
+
+    /// Selected entries in display order; falls back to the cursor row.
+    fn selected_entries(&self) -> Vec<Entry> {
+        let entries = self.entries();
+        if self.selected.is_empty() {
+            return entries.get(self.entry_sel).cloned().into_iter().collect();
         }
+        entries.iter().filter(|e| self.selected.contains(&e.path)).cloned().collect()
+    }
+
+    /// Cursor becomes the sole selection (plain click / arrow).
+    fn select_only(&mut self, ix: usize) {
+        self.entry_sel = ix;
+        self.sel_anchor = ix;
+        self.selected.clear();
+        if let Some(p) = self.entry_path_at(ix) {
+            self.selected.insert(p);
+        }
+    }
+
+    /// Toggle `ix`'s membership (cmd-click); cursor and anchor move to it.
+    fn toggle_at(&mut self, ix: usize) {
+        self.entry_sel = ix;
+        self.sel_anchor = ix;
+        if let Some(p) = self.entry_path_at(ix) {
+            if !self.selected.remove(&p) {
+                self.selected.insert(p);
+            }
+        }
+    }
+
+    /// Select the inclusive anchor..=ix range (shift-click / shift-arrow).
+    fn select_range_to(&mut self, ix: usize) {
+        let (lo, hi) = (self.sel_anchor.min(ix), self.sel_anchor.max(ix));
+        let paths: Vec<String> = self
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i >= lo && *i <= hi)
+            .map(|(_, e)| e.path.clone())
+            .collect();
+        self.selected = paths.into_iter().collect();
+        self.entry_sel = ix;
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.pane != Pane::Explorer {
+            return;
+        }
+        let all: HashSet<String> = self.entries().iter().map(|e| e.path.clone()).collect();
+        self.selected = all;
+        cx.notify();
+    }
+
+    fn select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
+        let len = self.active_len();
+        if len == 0 {
+            return;
+        }
+        match self.pane {
+            Pane::Sidebar => {
+                if self.remote_sel + 1 < len {
+                    self.remote_sel += 1;
+                }
+            }
+            Pane::Explorer => {
+                let next = (self.entry_sel + 1).min(len - 1);
+                if window.modifiers().shift {
+                    self.select_range_to(next);
+                } else {
+                    self.select_only(next);
+                }
+            }
+        }
+        cx.notify();
         self.scroll_to_selection();
     }
 
-    fn select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
-        let sel = match self.pane {
-            Pane::Sidebar => &mut self.remote_sel,
-            Pane::Explorer => &mut self.entry_sel,
-        };
-        *sel = sel.saturating_sub(1);
+    fn select_prev(&mut self, _: &SelectPrev, window: &mut Window, cx: &mut Context<Self>) {
+        match self.pane {
+            Pane::Sidebar => self.remote_sel = self.remote_sel.saturating_sub(1),
+            Pane::Explorer => {
+                if self.entries().is_empty() {
+                    return;
+                }
+                let prev = self.entry_sel.saturating_sub(1);
+                if window.modifiers().shift {
+                    self.select_range_to(prev);
+                } else {
+                    self.select_only(prev);
+                }
+            }
+        }
         cx.notify();
         self.scroll_to_selection();
     }
@@ -1026,10 +1119,7 @@ impl Workspace {
             cx.notify();
         } else {
             let child = self.path.rsplit('/').next().unwrap_or_default().to_string();
-            let parent = match self.path.rsplit_once('/') {
-                Some((parent, _)) => parent.to_string(),
-                None => String::new(),
-            };
+            let parent = parent_of(&self.path).to_string();
             let remote = self.open_remote.clone().unwrap_or_default();
             self.navigate(remote, parent, Some(child), cx);
         }
@@ -1068,8 +1158,35 @@ impl Workspace {
         }
     }
 
-    fn copy_path(&mut self, cx: &mut Context<Self>) {
-        self.copy_with_feedback(CopySource::Path, self.copy_text(), cx);
+    /// A copy-to-clipboard button: copy/check icon, tooltip, and a check-flash
+    /// scoped to `source`. Shared by the breadcrumb, error card, and task rows.
+    fn copy_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        source: CopySource,
+        text: String,
+        tip: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let done = self.copied == Some(source);
+        h_flex()
+            .id(id)
+            .size(px(22.0))
+            .flex_shrink_0()
+            .justify_center()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(OVERLAY)))
+            .tooltip(tooltip_text(if done { "Copied" } else { tip }))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.copy_with_feedback(source, text.clone(), cx)
+            }))
+            .child(
+                svg()
+                    .path(if done { "icons/check.svg" } else { "icons/copy.svg" })
+                    .size(px(13.0))
+                    .text_color(rgb(if done { SUCCESS } else { FG_MUTED })),
+            )
     }
 
     /// Copy `text` and flash the check on `source`'s button for 1.2s.
@@ -1093,990 +1210,21 @@ impl Workspace {
         .detach();
     }
 
-    fn copy_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let copied = self.copied == Some(CopySource::Path);
-        h_flex()
-            .id("copy-path")
-            .size(px(22.0))
-            .ml_1()
-            .flex_shrink_0()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_path(cx)))
-            .child(
-                svg()
-                    .path(if copied { "icons/check.svg" } else { "icons/copy.svg" })
-                    .size(px(13.0))
-                    .flex_shrink_0()
-                    .text_color(if copied { rgb(SUCCESS) } else { rgb(FG_MUTED) }),
-            )
-    }
-
-    fn render_error(&self, message: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let copied = self.copied == Some(CopySource::Error);
-        let to_copy = message.clone();
-        v_flex().size_full().justify_center().items_center().p_8().child(
-            v_flex()
-                .max_w(px(440.0))
-                .items_center()
-                .gap_3()
-                .child(svg().path("icons/alert.svg").size(px(28.0)).text_color(rgb(DANGER)))
-                .child(div().text_color(rgb(FG)).child("Failed to load"))
-                .child(
-                    div()
-                        .w_full()
-                        .max_h(px(180.0))
-                        .overflow_hidden()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .bg(rgb(INSET))
-                        .border_1()
-                        .border_color(rgb(BORDER_MUTED))
-                        .text_xs()
-                        .text_color(rgb(FG_MUTED))
-                        .child(message),
-                )
-                .child(
-                    h_flex().w_full().justify_end().child(
-                        h_flex()
-                            .id("copy-error")
-                            .gap_1p5()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(if copied { rgb(SUCCESS) } else { rgb(FG_MUTED) })
-                            .hover(|s| s.bg(rgba(OVERLAY)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.copy_with_feedback(CopySource::Error, to_copy.clone(), cx)
-                            }))
-                            .child(
-                                svg()
-                                    .path(if copied { "icons/check.svg" } else { "icons/copy.svg" })
-                                    .size(px(13.0))
-                                    .text_color(if copied { rgb(SUCCESS) } else { rgb(FG_MUTED) }),
-                            )
-                            .child(if copied { "Copied" } else { "Copy" }),
-                    ),
-                ),
-        )
-    }
-
-    // Deep paths collapse the middle: remote › … › parent › current.
-    fn render_breadcrumb(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let container = h_flex().gap_1().min_w(px(0.0));
-        let Some(remote) = self.open_remote.clone() else {
-            return container.child(div().text_color(rgb(FG_SUBTLE)).child("Select a remote"));
-        };
-
-        let mut segs: Vec<(String, String)> = vec![(remote.clone(), String::new())];
-        if !self.path.is_empty() {
-            let mut acc = String::new();
-            for part in self.path.split('/') {
-                if !acc.is_empty() {
-                    acc.push('/');
-                }
-                acc.push_str(part);
-                segs.push((part.to_string(), acc.clone()));
-            }
-        }
-
-        let n = segs.len();
-        let visible: Vec<(usize, bool)> = if n <= MAX_CRUMBS {
-            (0..n).map(|i| (i, false)).collect()
-        } else {
-            vec![(0, false), (n - 3, true), (n - 2, false), (n - 1, false)]
-        };
-
-        let mut row = container;
-        for (pos, (idx, ellipsis)) in visible.into_iter().enumerate() {
-            if pos > 0 {
-                row = row.child(div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child("›"));
-            }
-            let (label, path) = segs[idx].clone();
-            let label = if ellipsis { "…".to_string() } else { label };
-            let is_last = idx == n - 1;
-            let remote = remote.clone();
-            row = row.child(
-                div()
-                    .id(SharedString::from(format!("crumb-{pos}")))
-                    .px_1()
-                    .rounded_md()
-                    .flex_shrink_0()
-                    .max_w(px(160.0))
-                    .truncate()
-                    .cursor_pointer()
-                    .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
-                    .hover(|s| s.bg(rgba(OVERLAY)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.navigate(remote.clone(), path.clone(), None, cx)
-                    }))
-                    .child(label),
-            );
-        }
-        row.child(self.copy_button(cx))
-    }
-
-    // Overlay on the sidebar's right border; takes no layout space, so
-    // `deferred` paints/hit-tests it over the next pane.
-    fn resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        deferred(
-            div()
-                .id("sidebar-resize")
-                .absolute()
-                .top(px(0.0))
-                .right(px(-RESIZE_HANDLE_W / 2.0))
-                .w(px(RESIZE_HANDLE_W))
-                .h_full()
-                .cursor_col_resize()
-                .occlude()
-                .on_drag(DragSidebar, |_, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.new(|_| DragSidebar)
-                })
-                .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
-                    if e.click_count() >= 2 {
-                        this.sidebar_width = px(SIDEBAR_W);
-                        cx.notify();
-                    }
-                })),
-        )
-    }
-
-    fn render_sort(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = format!("{} {}", self.sort_field.label(), sort_arrow(self.sort_order));
-        h_flex()
-            .id("sort-button")
-            .gap_1()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(rgb(FG_MUTED))
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.sort_menu_open = !this.sort_menu_open;
-                cx.notify();
-            }))
-            .child(label)
-            .when(self.sort_menu_open, |b| {
-                b.child(
-                    deferred(
-                        anchored()
-                            .anchor(Anchor::TopRight)
-                            .snap_to_window_with_margin(px(8.0))
-                            .child(self.sort_menu(cx)),
-                    )
-                    .priority(1),
-                )
-            })
-    }
-
-    fn sort_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .id("sort-menu")
-            .occlude()
-            .mt(px(22.0))
-            .min_w(px(160.0))
-            .p_1()
-            .rounded_md()
-            .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(BORDER_MUTED))
-            .shadow_lg()
-            .text_color(rgb(FG))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.sort_menu_open = false;
-                cx.notify();
-            }))
-            .child(self.sort_item(SortField::Name, cx))
-            .child(self.sort_item(SortField::Size, cx))
-            .child(self.sort_item(SortField::Modified, cx))
-    }
-
-    fn sort_item(&self, field: SortField, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.sort_field == field;
-        let arrow = if active { sort_arrow(self.sort_order) } else { "" };
-        h_flex()
-            .id(field.label())
-            .w_full()
-            .justify_between()
-            .gap_4()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(if active { rgb(FG) } else { rgb(FG_MUTED) })
-            .hover(|s| s.bg(rgba(SELECT_MUTED)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_sort(field, cx)))
-            .child(field.label())
-            .child(div().text_color(rgb(ACCENT)).child(arrow))
-    }
-
-    fn remote_row(
-        &self,
-        ix: usize,
-        remote: RemoteInfo,
-        pinned: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let focused = self.pane == Pane::Sidebar;
-        let selected = ix == self.remote_sel;
-        let menu_name = remote.name.clone();
-        let mut row = list_item(ix, selected, focused)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.load_remote(ix, cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    this.remote_menu = Some((menu_name.clone(), ev.position));
-                    cx.notify();
-                }),
-            )
-            .when(pinned, |r| {
-                r.child(svg().path("icons/pin.svg").size(px(12.0)).flex_shrink_0().text_color(rgb(ACCENT)))
-            })
-            .child(
-                div()
-                    .flex_grow(1.0)
-                    .min_w(px(0.0))
-                    .truncate()
-                    .text_color(rgb(FG))
-                    .child(remote.name.clone()),
-            )
-            .child(div().text_xs().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child(remote.kind.clone()));
-
-        if pinned {
-            let drag_name = remote.name.clone();
-            let target = remote.name.clone();
-            row = row
-                .on_drag(DraggedRemote { name: drag_name }, |d, _, _, app| {
-                    app.new(|_| DragLabel { text: d.name.clone().into() })
-                })
-                .drag_over::<DraggedRemote>(|s, _, _, _| s.bg(rgba(SELECT_MUTED)))
-                .on_drop(cx.listener(move |this, d: &DraggedRemote, _, cx| {
-                    this.reorder_pinned(&d.name, &target, cx)
-                }));
-        }
-        row
-    }
-
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.remotes.len();
-        v_flex()
-            .relative()
-            .w(self.sidebar_width)
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(rgb(INSET))
-            .border_r_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle(cx))
-            .child(div().px_3().py_2().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))
-            .child(
-                // Single list so pinned rows (which lead it) scroll with the rest.
-                uniform_list(
-                    "remotes",
-                    count,
-                    cx.processor(|this, range: Range<usize>, _window, cx| {
-                        let ordered = this.ordered_remotes();
-                        let pinned_count = this.pinned_remotes().len();
-                        range
-                            .filter_map(|ix| ordered.get(ix).map(|r| (ix, r.clone())))
-                            .map(|(ix, remote)| this.remote_row(ix, remote, ix < pinned_count, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.remote_scroll)
-                .flex_1(),
-            )
-    }
-
-    fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.entries().len();
-        let count_text = match self.dir_query.status() {
-            _ if self.open_remote.is_none() => String::new(),
-            Status::Error(_) => String::new(),
-            _ => format!("{count} items"),
-        };
-
-        let body = if self.open_remote.is_none() {
-            centered("Select a remote to browse", FG_SUBTLE).into_any_element()
-        } else if matches!(self.dir_query.status(), Status::Loading) {
-            loading_view().into_any_element()
-        } else if let Status::Error(message) = self.dir_query.status() {
-            self.render_error(message.clone(), cx).into_any_element()
-        } else {
-            uniform_list(
-                "entries",
-                count,
-                cx.processor(|this, range: Range<usize>, _window, cx| {
-                    let focused = this.pane == Pane::Explorer;
-                    range
-                        .filter_map(|ix| this.entries().get(ix).map(|e| (ix, e.clone())))
-                        .map(|(ix, entry)| {
-                            let selected = ix == this.entry_sel;
-                            let is_dir = entry.is_dir;
-                            let size_label = human_size(entry.size);
-                            let name = entry.name.clone();
-                            let ctx_entry = entry.clone();
-                            list_item(ix, selected, focused)
-                                .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                                    this.entry_sel = ix;
-                                    this.pane = Pane::Explorer;
-                                    this.context = None;
-                                    if ev.click_count() >= 2 {
-                                        this.descend(ix, cx);
-                                    } else {
-                                        cx.notify();
-                                    }
-                                }))
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                                        this.entry_sel = ix;
-                                        this.pane = Pane::Explorer;
-                                        this.context = Some((ctx_entry.clone(), ev.position));
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    h_flex()
-                                        .id(SharedString::from(format!("name-{ix}")))
-                                        .gap_2()
-                                        .flex_grow(1.0)
-                                        .min_w(px(0.0))
-                                        .tooltip(tooltip_text(name.clone()))
-                                        .child(file_icon(is_dir))
-                                        .child(div().truncate().child(name)),
-                                )
-                                .child(if is_dir {
-                                    div()
-                                } else {
-                                    div().text_xs().text_color(rgb(FG_MUTED)).child(size_label)
-                                })
-                        })
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .track_scroll(&self.entry_scroll)
-            .flex_1()
-            .into_any_element()
-        };
-
-        v_flex()
-            .flex_1()
-            .bg(rgb(CANVAS))
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .justify_between()
-                    .pl_1()
-                    .pr_3()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(rgb(BORDER_MUTED))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .min_w(px(0.0))
-                            .child(nav_button("nav-back", "←", self.can_back()).when(
-                                self.can_back(),
-                                |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_back(cx))),
-                            ))
-                            .child(nav_button("nav-forward", "→", self.can_forward()).when(
-                                self.can_forward(),
-                                |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_forward(cx))),
-                            ))
-                            .child(self.render_breadcrumb(cx)),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(rgb(FG_MUTED))
-                            .when(self.dir_query.is_fetching(), |el| {
-                                el.child(spinner("fetch-spinner", px(12.0), FG_MUTED))
-                            })
-                            .child(count_text)
-                            .when(self.open_remote.is_some(), |el| {
-                                el.child(self.render_sort(cx))
-                            }),
-                    ),
-            )
-            .child(body)
-    }
-
-    fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let lead = if window.is_fullscreen() { 12.0 } else { TITLE_BAR_LEAD };
-        h_flex()
-            .h(px(TITLE_BAR_H))
-            .flex_shrink_0()
-            .w_full()
-            .pl(px(lead))
-            .pr_2()
-            .justify_end()
-            .bg(rgb(INSET))
-            .border_b_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(
-                h_flex()
-                    .id("settings-button")
-                    .size(px(24.0))
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgba(OVERLAY)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.settings_open = true;
-                        cx.notify();
-                    }))
-                    .child(svg().path("icons/settings.svg").size(px(16.0)).text_color(rgb(FG_MUTED))),
-            )
-    }
-
-    fn menu_item(
-        &self,
-        label: &'static str,
-        icon: &'static str,
-        cx: &mut Context<Self>,
-        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-    ) -> impl IntoElement {
-        h_flex()
-            .id(label)
-            .w_full()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                action(this, cx);
-                this.close_menus();
-                cx.notify();
-            }))
-            .child(svg().path(icon).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
-            .child(label)
-    }
-
-    /// Close every transient popover.
-    fn close_menus(&mut self) {
-        self.context = None;
-        self.remote_menu = None;
-        self.sort_menu_open = false;
-    }
-
-    /// Popover anchored at `pos`, dismissed on outside mouse-down. `occlude`
-    /// stops hover/click reaching content behind it.
-    fn popover(
-        &self,
-        id: &'static str,
-        pos: Point<Pixels>,
-        items: Vec<AnyElement>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let menu = v_flex()
-            .id(id)
-            .occlude()
-            .min_w(px(180.0))
-            .p_1()
-            .rounded_md()
-            .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(BORDER_MUTED))
-            .shadow_lg()
-            .text_color(rgb(FG))
-            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.close_menus();
-                cx.notify();
-            }))
-            .children(items);
-        deferred(anchored().position(pos).snap_to_window_with_margin(px(8.0)).child(menu)).priority(2)
-    }
-
-    fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (entry, pos) = self.context.clone().unwrap();
-        let remote = self.open_remote.clone().unwrap_or_default();
-        let mut items: Vec<AnyElement> = Vec::new();
-
-        if entry.is_dir {
-            let (e, r) = (entry.clone(), remote.clone());
-            items.push(
-                self.menu_item("Open", "icons/folder_open.svg", cx, move |this, cx| {
-                    this.navigate(r.clone(), e.path.clone(), None, cx)
-                })
-                .into_any_element(),
-            );
-        }
-        let e_dl = entry.clone();
-        let (e_cp, r_cp) = (entry.clone(), remote.clone());
-        let e_nm = entry.clone();
-        items.push(
-            self.menu_item("Download", "icons/download.svg", cx, move |this, cx| {
-                this.download_entry(&e_dl, cx)
-            })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, cx| {
-                this.copy_to_clipboard(format!("{}:{}", r_cp, e_cp.path), cx)
-            })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item("Copy name", "icons/copy.svg", cx, move |this, cx| {
-                this.copy_to_clipboard(e_nm.name.clone(), cx)
-            })
-            .into_any_element(),
-        );
-
-        self.popover("context-menu", pos, items, cx)
-    }
-
-    fn render_remote_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (name, pos) = self.remote_menu.clone().unwrap();
-        let pinned = self.is_pinned(&name);
-        let mut items: Vec<AnyElement> = Vec::new();
-
-        let open_name = name.clone();
-        items.push(
-            self.menu_item("Open", "icons/folder_open.svg", cx, move |this, cx| {
-                if let Some(ix) = this.ordered_remotes().iter().position(|r| r.name == open_name) {
-                    this.load_remote(ix, cx);
-                }
-            })
-            .into_any_element(),
-        );
-
-        let pin_name = name.clone();
-        let (pin_label, pin_icon) = if pinned { ("Unpin", "icons/pin.svg") } else { ("Pin", "icons/pin.svg") };
-        items.push(
-            self.menu_item(pin_label, pin_icon, cx, move |this, cx| {
-                this.toggle_pin(pin_name.clone(), cx)
-            })
-            .into_any_element(),
-        );
-
-        if pinned {
-            let up_name = name.clone();
-            let down_name = name.clone();
-            items.push(
-                self.menu_item("Move up", "icons/chevron_up.svg", cx, move |this, cx| {
-                    this.move_pinned(&up_name, true, cx)
-                })
-                .into_any_element(),
-            );
-            items.push(
-                self.menu_item("Move down", "icons/chevron_down.svg", cx, move |this, cx| {
-                    this.move_pinned(&down_name, false, cx)
-                })
-                .into_any_element(),
-            );
-        }
-
-        self.popover("remote-menu", pos, items, cx)
-    }
-
-    fn render_transfers(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_done = self.jobs.iter().any(|j| j.done);
-        let count = self.jobs.len();
-        let body = if count == 0 {
-            centered("No transfers", FG_SUBTLE).into_any_element()
-        } else {
-            uniform_list(
-                "transfers",
-                count,
-                cx.processor(|this, range: Range<usize>, _window, cx| {
-                    let n = this.jobs.len();
-                    range
-                        // Newest first.
-                        .filter_map(|i| {
-                            n.checked_sub(1 + i).and_then(|idx| this.jobs.get(idx).cloned()).map(|j| (i, j))
-                        })
-                        .map(|(i, job)| {
-                            div()
-                                .px_3()
-                                .when(i > 0, |d| d.border_t_1().border_color(rgb(BORDER_MUTED)))
-                                .child(this.job_row(&job, cx))
-                        })
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .flex_1()
-            .into_any_element()
-        };
-
-        let maximized = self.jobs_maximized;
-        let outer = if maximized {
-            v_flex().flex_1().min_h(px(0.0))
-        } else {
-            v_flex().h(px(260.0)).flex_shrink_0()
-        };
-        outer
-            .bg(rgb(INSET))
-            // Maximized is flush under the title bar's border; only the dock needs its own.
-            .when(!maximized, |el| el.border_t_1().border_color(rgb(BORDER_MUTED)))
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .px_3()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(rgb(BORDER_MUTED))
-                    .child(div().text_color(rgb(FG)).child("Transfers"))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .when(has_done, |el| {
-                                el.child(
-                                    h_flex()
-                                        .id("clear-finished")
-                                        .px_2()
-                                        .py_1()
-                                        .mr_1()
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(FG_MUTED))
-                                        .hover(|s| s.bg(rgba(OVERLAY)))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.clear_finished(cx)
-                                        }))
-                                        .child("Clear finished"),
-                                )
-                            })
-                            .child(
-                                icon_button(
-                                    "transfers-maximize",
-                                    if maximized { "icons/minimize.svg" } else { "icons/maximize.svg" },
-                                )
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.jobs_maximized = !this.jobs_maximized;
-                                    cx.notify();
-                                })),
-                            )
-                            .child(
-                                h_flex()
-                                    .id("transfers-close")
-                                    .size(px(22.0))
-                                    .justify_center()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .text_color(rgb(FG_MUTED))
-                                    .hover(|s| s.bg(rgba(OVERLAY)))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.jobs_open = false;
-                                        cx.notify();
-                                    }))
-                                    .child("✕"),
-                            ),
-                    ),
-            )
-            .child(body)
-    }
-
-    fn job_row(&self, job: &Job, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let pct = if job.total > 0 {
-            (job.bytes as f64 / job.total as f64).clamp(0.0, 1.0)
-        } else if job.done && job.error.is_none() {
-            1.0
-        } else {
-            0.0
-        };
-        let bar = if job.error.is_some() {
-            DANGER
-        } else if job.done {
-            SUCCESS
-        } else {
-            ACCENT
-        };
-        let detail = if let Some(e) = &job.error {
-            e.clone()
-        } else if job.done {
-            "Done".to_string()
-        } else if job.total > 0 {
-            format!(
-                "{} / {} · {}/s",
-                human_size(job.bytes as i64),
-                human_size(job.total as i64),
-                human_size(job.speed as i64)
-            )
-        } else {
-            "Starting…".to_string()
-        };
-        let id = job.id;
-
-        v_flex()
-            .gap_1p5()
-            .py_2p5()
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_grow(1.0)
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_color(rgb(FG))
-                            .child(job.title.clone()),
-                    )
-                    .when(!job.done, |el| {
-                        el.child(
-                            h_flex()
-                                .id(SharedString::from(format!("cancel-{id}")))
-                                .px_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(FG_MUTED))
-                                .hover(|s| s.bg(rgba(OVERLAY)))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.cancel_job(id, cx)
-                                }))
-                                .child("Cancel"),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(4.0))
-                    .rounded_full()
-                    .bg(rgba(OVERLAY))
-                    .child(div().h_full().rounded_full().bg(rgb(bar)).w(relative(pct as f32))),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if job.error.is_some() { rgb(DANGER) } else { rgb(FG_MUTED) })
-                    .child(detail),
-            )
-    }
-
-    fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        deferred(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .justify_center()
-                .items_center()
-                .bg(rgba(0x0000_0099))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.settings_open = false;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    v_flex()
-                        .id("settings-card")
-                        .w(px(460.0))
-                        .gap_5()
-                        .p_5()
-                        .rounded_lg()
-                        .bg(rgb(ELEVATED))
-                        .border_1()
-                        .border_color(rgb(BORDER_MUTED))
-                        .shadow_lg()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-                        )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .items_center()
-                                .child(div().text_lg().text_color(rgb(FG)).child("Settings"))
-                                .child(
-                                    h_flex()
-                                        .id("settings-close")
-                                        .size(px(24.0))
-                                        .justify_center()
-                                        .rounded_md()
-                                        .cursor_pointer()
-                                        .text_color(rgb(FG_MUTED))
-                                        .hover(|s| s.bg(rgba(OVERLAY)))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.settings_open = false;
-                                            cx.notify();
-                                        }))
-                                        .child("✕"),
-                                ),
-                        )
-                        .child(self.refresh_setting(cx))
-                        .child(self.download_setting(cx))
-                        .child(self.settings_info()),
-                ),
-        )
-        .priority(2)
-    }
-
-    fn download_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let current = self.store.get().download_dir().display().to_string();
-        setting_block(
-            "Download location",
-            "Where files are saved. Defaults to your Downloads folder.",
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    div()
-                        .flex_grow(1.0)
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_xs()
-                        .text_color(rgb(FG_MUTED))
-                        .child(current),
-                )
-                .child(
-                    h_flex()
-                        .id("choose-dir")
-                        .flex_shrink_0()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(rgba(OVERLAY))
-                        .text_color(rgb(FG))
-                        .hover(|s| s.bg(rgba(SELECT_MUTED)))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.choose_download_dir(cx)
-                        }))
-                        .child("Choose…"),
-                ),
-        )
-    }
-
-    fn refresh_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        setting_block(
-            "Refresh interval",
-            "How often open folders revalidate in the background.",
-            h_flex()
-                .gap_1()
-                .child(self.refresh_preset(5, cx))
-                .child(self.refresh_preset(15, cx))
-                .child(self.refresh_preset(30, cx))
-                .child(self.refresh_preset(60, cx)),
-        )
-    }
-
-    fn refresh_preset(&self, secs: u64, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.store.get().refresh_secs == secs;
-        let base = h_flex()
-            .id(SharedString::from(format!("preset-{secs}")))
-            .px_3()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(if active { rgb(FG) } else { rgb(FG_MUTED) })
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_refresh(secs, cx)))
-            .child(format!("{secs}s"));
-        if active {
-            base.bg(rgba(SELECT))
-        } else {
-            base.hover(|s| s.bg(rgba(OVERLAY)))
-        }
-    }
-
-    fn settings_info(&self) -> impl IntoElement {
-        v_flex()
-            .gap_2()
-            .pt_3()
-            .border_t_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(info_row("rclone", &self.version))
-            .child(info_row("Data", &self.paths.root().display().to_string()))
-            .child(info_row("Config", &self.paths.config_dir().display().to_string()))
-    }
-
-    fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let info = if self.open_remote.is_some() {
-            format!("{} items", self.entries().len())
-        } else {
-            format!("{} remotes", self.remotes.len())
-        };
-        h_flex()
-            .w_full()
-            .flex_shrink_0()
-            .justify_between()
-            .px_3()
-            .py_1()
-            .border_t_1()
-            .border_color(rgb(BORDER_MUTED))
-            .bg(rgb(INSET))
-            .text_xs()
-            .text_color(rgb(FG_MUTED))
-            .child(
-                h_flex().gap_2().child(self.health_dot()).children(self.active_remote().map(|r| {
-                    h_flex()
-                        .gap_2()
-                        .child(div().text_color(rgb(FG)).child(r.name.clone()))
-                        .child(div().text_color(rgb(FG_SUBTLE)).child(r.kind.clone()))
-                })),
-            )
-            .child(
-                h_flex()
-                    .gap_3()
-                    .when(!self.jobs.is_empty(), |el| el.child(self.jobs_indicator(cx)))
-                    .child(info)
-                    .child(self.version.clone()),
-            )
-    }
-
-    fn health_dot(&self) -> impl IntoElement {
-        let (color, tip) = match &self.rc_health {
-            RcHealth::Unknown => (FG_SUBTLE, "Checking rclone daemon…".to_string()),
-            RcHealth::Up if self.version.is_empty() => (SUCCESS, "rclone rc daemon connected".to_string()),
-            RcHealth::Up => (SUCCESS, format!("rclone {} · rc daemon connected", self.version)),
-            RcHealth::Down(e) => (DANGER, format!("rclone rc daemon unreachable: {e}")),
-        };
-        h_flex()
-            .id("rc-health")
-            .child(div().text_color(rgb(color)).child("●"))
-            .tooltip(tooltip_text(tip))
-    }
-
-    fn jobs_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.jobs.iter().filter(|j| !j.done).count();
-        let label = if active > 0 {
-            format!("↓ {active}")
-        } else {
-            format!("✓ {}", self.jobs.len())
-        };
-        h_flex()
-            .id("jobs-indicator")
-            .gap_1()
-            .px_2()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(if active > 0 { rgb(FG) } else { rgb(FG_MUTED) })
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.jobs_open = !this.jobs_open;
-                cx.notify();
-            }))
-            .child(label)
-    }
 }
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.resolve_selection();
+        // Keep focus on the open dialog, else on the workspace — so each owns the
+        // keyboard while shown, and focus returns here when it closes.
+        let want = if self.confirm.is_some() || self.prompt.is_some() {
+            &self.dialog_focus
+        } else {
+            &self.focus
+        };
+        if !want.is_focused(window) {
+            want.focus(window, cx);
+        }
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
@@ -2094,6 +1242,14 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_pane))
             .on_action(cx.listener(Self::focus_sidebar))
             .on_action(cx.listener(Self::focus_explorer))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::new_folder))
+            .on_action(cx.listener(Self::new_file))
+            .on_action(cx.listener(Self::rename))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragSidebar>, _, cx| {
                 let x = f32::from(e.event.position.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
                 if px(x) != this.sidebar_width {
@@ -2131,91 +1287,9 @@ impl Render for Workspace {
             .child(self.render_status_bar(cx))
             .when(self.context.is_some(), |el| el.child(self.render_context_menu(cx)))
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
+            .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
+            .when(self.confirm.is_some(), |el| el.child(self.render_confirm(cx)))
             .when(self.settings_open, |el| el.child(self.render_settings(cx)))
     }
 }
 
-/// A labeled setting: title, description, and its control.
-fn setting_block(title: &str, desc: &str, control: impl IntoElement) -> impl IntoElement {
-    v_flex()
-        .gap_2()
-        .child(div().text_sm().text_color(rgb(FG)).child(title.to_string()))
-        .child(div().text_xs().text_color(rgb(FG_MUTED)).child(desc.to_string()))
-        .child(control)
-}
-
-fn info_row(label: &str, value: &str) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .justify_between()
-        .gap_4()
-        .text_xs()
-        .child(div().flex_shrink_0().text_color(rgb(FG_MUTED)).child(label.to_string()))
-        .child(
-            div()
-                .min_w(px(0.0))
-                .truncate()
-                .text_color(rgb(FG_SUBTLE))
-                .child(value.to_string()),
-        )
-}
-
-fn centered(text: &'static str, color: u32) -> Div {
-    v_flex().size_full().justify_center().items_center().text_color(rgb(color)).child(text)
-}
-
-fn spinner(id: &'static str, size: Pixels, color: u32) -> impl IntoElement {
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    div().text_size(size).text_color(rgb(color)).with_animation(
-        id,
-        Animation::new(Duration::from_millis(800)).repeat(),
-        |el, delta| {
-            let i = ((delta * FRAMES.len() as f32) as usize).min(FRAMES.len() - 1);
-            el.child(FRAMES[i])
-        },
-    )
-}
-
-fn loading_view() -> impl IntoElement {
-    v_flex()
-        .size_full()
-        .justify_center()
-        .items_center()
-        .gap_3()
-        .child(spinner("panel-spinner", px(28.0), ACCENT))
-        .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Loading…"))
-}
-
-/// Directories first, then by `field`/`order` within each group.
-fn sort_entries(entries: &mut [Entry], field: SortField, order: SortOrder) {
-    entries.sort_by(|a, b| {
-        let within = match field {
-            SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortField::Size => a.size.cmp(&b.size),
-            SortField::Modified => a.mod_time.cmp(&b.mod_time),
-        };
-        let within = match order {
-            SortOrder::Asc => within,
-            SortOrder::Desc => within.reverse(),
-        };
-        b.is_dir.cmp(&a.is_dir).then(within)
-    });
-}
-
-fn human_size(bytes: i64) -> String {
-    if bytes < 0 {
-        return "—".to_string();
-    }
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
-    }
-}

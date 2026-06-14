@@ -8,4 +8,4 @@ pub mod service;
 pub use client::{Entry, JobStatus, RcClient, RcError, RemoteInfo, Stats};
 pub use daemon::{reap_orphan, Daemon, DaemonError};
 pub use detect::{detect, NotFound, Rclone, INSTALL_URL};
-pub use service::{Service, ServiceError};
+pub use service::{Service, ServiceError, TransferMode};

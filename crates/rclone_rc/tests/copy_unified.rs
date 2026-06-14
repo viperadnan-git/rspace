@@ -1,43 +1,91 @@
-//! Verify a single `sync/copy` (parent + include filter) copies both a file and
-//! a directory, letting rclone resolve the type. Ignored by default.
+//! Verify the literal-path transfer ops handle files (incl. glob-metachar names
+//! like `[...]`), directories, and moves. Ignored by default.
 
-use rspace_rclone_rc::{detect, Daemon};
+use std::time::Duration;
+
+use rspace_rclone_rc::{detect, Daemon, RcClient};
 use serde_json::{json, Value};
+
+async fn run_job(client: &RcClient, method: &str, params: Value) {
+    let group = "rspace-test/0";
+    let jobid =
+        client.call_async(method, params, group).await.unwrap_or_else(|e| panic!("submit {method}: {e}"));
+    for _ in 0..50 {
+        let st = client.job_status(jobid).await.expect("job/status");
+        if st.finished {
+            assert!(st.success, "{method} failed: {}", st.error);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{method} never finished");
+}
 
 #[tokio::test]
 #[ignore = "requires rclone"]
-async fn unified_copy_handles_file_and_dir() {
+async fn copyfile_handles_glob_metachar_name() {
     let rclone = detect().expect("rclone");
     let tmp = tempfile::tempdir().unwrap();
     let daemon = Daemon::start(&rclone.path, tmp.path().join("rcd.pid")).await.expect("daemon");
     let client = daemon.client();
 
-    // Source tree: a file and a subdir-with-file.
+    // A filename with brackets — a glob character class if treated as a pattern.
+    let name = "King - [The Shining 02].epub";
     let src = tmp.path().join("src");
-    std::fs::create_dir_all(src.join("subdir")).unwrap();
-    std::fs::write(src.join("file.txt"), b"hello").unwrap();
-    std::fs::write(src.join("subdir").join("inner.txt"), b"world").unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join(name), b"hi").unwrap();
+    let dst = tmp.path().join("dst");
 
-    let copy = |item: &str, dst: String| {
-        let params = json!({
-            "srcFs": src.to_string_lossy(),
-            "dstFs": dst,
-            "_filter": { "IncludeRule": [format!("/{item}"), format!("/{item}/**")] },
-        });
-        async move { client.call::<Value>("sync/copy", &params).await }
-    };
+    run_job(
+        client,
+        "operations/copyfile",
+        json!({
+            "srcFs": src.to_string_lossy(), "srcRemote": name,
+            "dstFs": dst.to_string_lossy(), "dstRemote": name,
+        }),
+    )
+    .await;
+    assert!(dst.join(name).exists(), "bracketed file not copied");
 
-    // Download the file.
-    let d1 = tmp.path().join("dl1");
-    copy("file.txt", d1.to_string_lossy().into_owned()).await.expect("copy file");
-    println!("file -> {}", d1.join("file.txt").exists());
-    assert!(d1.join("file.txt").exists(), "file not copied to dst/file.txt");
+    daemon.shutdown().await;
+}
 
-    // Download the directory (name preserved).
-    let d2 = tmp.path().join("dl2");
-    copy("subdir", d2.to_string_lossy().into_owned()).await.expect("copy dir");
-    println!("dir -> {}", d2.join("subdir").join("inner.txt").exists());
-    assert!(d2.join("subdir").join("inner.txt").exists(), "dir not copied to dst/subdir/");
+#[tokio::test]
+#[ignore = "requires rclone"]
+async fn sync_copy_handles_dir_and_move_relocates() {
+    let rclone = detect().expect("rclone");
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(&rclone.path, tmp.path().join("rcd.pid")).await.expect("daemon");
+    let client = daemon.client();
+
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(src.join("dir")).unwrap();
+    std::fs::write(src.join("dir").join("inner.txt"), b"x").unwrap();
+    std::fs::write(src.join("file.txt"), b"y").unwrap();
+
+    // Directory copy: dst fs is the named destination dir.
+    let dcopy = tmp.path().join("dcopy");
+    run_job(
+        client,
+        "sync/copy",
+        json!({ "srcFs": src.join("dir").to_string_lossy(), "dstFs": dcopy.join("dir").to_string_lossy() }),
+    )
+    .await;
+    assert!(dcopy.join("dir").join("inner.txt").exists(), "dir not copied");
+
+    // File move: relocates and removes the source.
+    let dmove = tmp.path().join("dmove");
+    run_job(
+        client,
+        "operations/movefile",
+        json!({
+            "srcFs": src.to_string_lossy(), "srcRemote": "file.txt",
+            "dstFs": dmove.to_string_lossy(), "dstRemote": "file.txt",
+        }),
+    )
+    .await;
+    assert!(dmove.join("file.txt").exists(), "file not moved to dst");
+    assert!(!src.join("file.txt").exists(), "source not removed by move");
 
     daemon.shutdown().await;
 }

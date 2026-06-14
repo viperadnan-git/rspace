@@ -13,6 +13,9 @@ pub struct JobStatus {
     pub success: bool,
     #[serde(default)]
     pub error: String,
+    /// Run time in seconds; set by rclone once finished.
+    #[serde(default)]
+    pub duration: f64,
 }
 
 /// Transfer progress for a job's stats group (`core/stats`).
@@ -26,6 +29,9 @@ pub struct Stats {
     pub speed: f64,
     #[serde(default)]
     pub eta: Option<u64>,
+    /// Live elapsed seconds since the stats group started.
+    #[serde(default, rename = "elapsedTime")]
+    pub elapsed_time: f64,
 }
 
 /// A configured remote and its backend type (e.g. `drive`, `s3`).
@@ -85,7 +91,26 @@ impl RcClient {
     }
 
     /// POST to an RC method with a JSON body, returning the decoded response.
+    /// Polls log at `trace`, other calls at `debug`, failures at `warn`.
     pub async fn call<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        body: &Value,
+    ) -> Result<T, RcError> {
+        let start = std::time::Instant::now();
+        let result = self.call_inner(method, body).await;
+        let ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Err(e) => tracing::warn!(method, elapsed_ms = ms, error = %e, "rc call failed"),
+            Ok(_) if matches!(method, "job/status" | "core/stats") => {
+                tracing::trace!(method, elapsed_ms = ms, "rc call")
+            }
+            Ok(_) => tracing::debug!(method, elapsed_ms = ms, "rc call"),
+        }
+        result
+    }
+
+    async fn call_inner<T: DeserializeOwned>(
         &self,
         method: &str,
         body: &Value,

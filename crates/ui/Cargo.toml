@@ -11,6 +11,7 @@ gpui_platform.workspace = true
 rspace-core.workspace = true
 rspace-rclone-rc.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

@@ -11,6 +11,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["process", "time", "rt", "sync", "signal", "macros"] }
 
 [dev-dependencies]

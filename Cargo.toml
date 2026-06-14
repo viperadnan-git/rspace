@@ -25,6 +25,7 @@ anyhow = "1"
 rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 rspace-core = { path = "crates/core" }
 rspace-rclone-rc = { path = "crates/rclone_rc" }
