@@ -1,0 +1,11 @@
+[package]
+name = "rspace-platform-windows"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

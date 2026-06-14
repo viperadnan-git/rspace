@@ -1,0 +1,191 @@
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use thiserror::Error;
+
+/// State of an async rclone job (`job/status`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct JobStatus {
+    #[serde(default)]
+    pub finished: bool,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub error: String,
+}
+
+/// Transfer progress for a job's stats group (`core/stats`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Stats {
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default, rename = "totalBytes")]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub speed: f64,
+    #[serde(default)]
+    pub eta: Option<u64>,
+}
+
+/// A configured remote and its backend type (e.g. `drive`, `s3`).
+#[derive(Debug, Clone)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub kind: String,
+}
+
+/// One entry from `operations/list`. Field names match rclone's JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Entry {
+    #[serde(rename = "Name")]
+    pub name: String,
+    /// Path relative to the remote root; used to descend into directories.
+    #[serde(rename = "Path")]
+    pub path: String,
+    #[serde(rename = "Size")]
+    pub size: i64,
+    /// RFC3339; empty when the backend omits it. Sorts chronologically as text.
+    #[serde(rename = "ModTime", default)]
+    pub mod_time: String,
+    #[serde(rename = "IsDir")]
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum RcError {
+    #[error("rc request: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("{message}")]
+    Status { status: u16, message: String },
+}
+
+/// Pull rclone's human-readable `error` field out of an RC error body, falling
+/// back to the trimmed raw body when it isn't the expected JSON shape.
+fn rc_error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| body.trim().to_string())
+}
+
+/// Authenticated client for the rclone remote-control API.
+#[derive(Debug, Clone)]
+pub struct RcClient {
+    base_url: String,
+    user: String,
+    pass: String,
+    http: Client,
+}
+
+impl RcClient {
+    pub fn new(base_url: String, user: String, pass: String) -> Self {
+        Self { base_url, user, pass, http: Client::new() }
+    }
+
+    /// POST to an RC method with a JSON body, returning the decoded response.
+    pub async fn call<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        body: &Value,
+    ) -> Result<T, RcError> {
+        let resp = self
+            .http
+            .post(format!("{}/{method}", self.base_url))
+            .basic_auth(&self.user, Some(&self.pass))
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(RcError::Status {
+                status: status.as_u16(),
+                message: rc_error_message(&body),
+            });
+        }
+        Ok(resp.json::<T>().await?)
+    }
+
+    /// Liveness check (`rc/noop`).
+    pub async fn noop(&self) -> Result<(), RcError> {
+        let _: Value = self.call("rc/noop", &json!({})).await?;
+        Ok(())
+    }
+
+    /// Names of configured remotes.
+    pub async fn list_remotes(&self) -> Result<Vec<String>, RcError> {
+        #[derive(serde::Deserialize)]
+        struct Remotes {
+            remotes: Vec<String>,
+        }
+        let r: Remotes = self.call("config/listremotes", &json!({})).await?;
+        Ok(r.remotes)
+    }
+
+    /// Configured remotes with their backend types, sorted by name.
+    pub async fn remotes(&self) -> Result<Vec<RemoteInfo>, RcError> {
+        let dump: std::collections::BTreeMap<String, Value> =
+            self.call("config/dump", &json!({})).await?;
+        let mut out: Vec<RemoteInfo> = dump
+            .into_iter()
+            .map(|(name, cfg)| {
+                let kind = cfg.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+                RemoteInfo { name, kind }
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(out)
+    }
+
+    /// List one directory level. `fs` is the remote (e.g. `"drive:"`), `remote`
+    /// is the path within it (empty for the root).
+    pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<Entry>, RcError> {
+        #[derive(Deserialize)]
+        struct Listing {
+            list: Vec<Entry>,
+        }
+        let r: Listing = self.call("operations/list", &json!({ "fs": fs, "remote": remote })).await?;
+        Ok(r.list)
+    }
+
+    /// Run `method` as an async rclone job in stats group `group`, returning the
+    /// job id immediately. Progress is then read via [`stats`](Self::stats) and
+    /// state via [`job_status`](Self::job_status).
+    pub async fn call_async(
+        &self,
+        method: &str,
+        mut params: Value,
+        group: &str,
+    ) -> Result<u64, RcError> {
+        params["_async"] = Value::Bool(true);
+        params["_group"] = Value::String(group.to_string());
+        #[derive(Deserialize)]
+        struct JobId {
+            jobid: u64,
+        }
+        let r: JobId = self.call(method, &params).await?;
+        Ok(r.jobid)
+    }
+
+    pub async fn job_status(&self, jobid: u64) -> Result<JobStatus, RcError> {
+        self.call("job/status", &json!({ "jobid": jobid })).await
+    }
+
+    pub async fn job_stop(&self, jobid: u64) -> Result<(), RcError> {
+        let _: Value = self.call("job/stop", &json!({ "jobid": jobid })).await?;
+        Ok(())
+    }
+
+    /// Transfer stats for a job's stats group.
+    pub async fn stats(&self, group: &str) -> Result<Stats, RcError> {
+        self.call("core/stats", &json!({ "group": group })).await
+    }
+
+    /// Ask the daemon to terminate.
+    pub async fn quit(&self) -> Result<(), RcError> {
+        let _: Value = self.call("core/quit", &json!({})).await?;
+        Ok(())
+    }
+}

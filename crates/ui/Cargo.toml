@@ -1,0 +1,16 @@
+[package]
+name = "rspace-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+rspace-core.workspace = true
+rspace-rclone-rc.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

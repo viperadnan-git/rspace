@@ -1,0 +1,22 @@
+[package]
+name = "rspace-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rspace"
+path = "src/main.rs"
+
+[dependencies]
+rspace-core.workspace = true
+rspace-rclone-rc.workspace = true
+rspace-ui.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true
