@@ -57,7 +57,6 @@ impl Workspace {
         self.context = None;
         self.remote_menu = None;
         self.bg_menu = None;
-        self.sort_menu_open = false;
     }
 
     /// Popover anchored at `pos`, dismissed on outside mouse-down. `occlude`
@@ -204,7 +203,7 @@ impl Workspace {
                 .into_any_element(),
         );
         items.push(
-            self.menu_item("Upload file", "icons/download.svg", cx, |this, cx| this.begin_upload(cx))
+            self.menu_item("Upload", "icons/upload.svg", cx, |this, cx| this.begin_upload(cx))
                 .into_any_element(),
         );
         if self.clipboard.is_some() {

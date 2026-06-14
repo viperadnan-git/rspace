@@ -15,6 +15,12 @@ pub const OVERLAY: u32 = 0x656c7626;
 pub const SELECT: u32 = 0x656c7659;
 pub const SELECT_MUTED: u32 = 0x656c7633;
 
+/// Faint horizontal divider between file-list rows (Finder-style).
+pub const SEPARATOR: u32 = 0x2d343d;
+/// Fixed column widths in the file-list table.
+pub const COL_DATE: f32 = 150.0;
+pub const COL_SIZE: f32 = 84.0;
+
 pub const SIDEBAR_W: f32 = 248.0;
 pub const SIDEBAR_MIN: f32 = 180.0;
 pub const SIDEBAR_MAX: f32 = 480.0;

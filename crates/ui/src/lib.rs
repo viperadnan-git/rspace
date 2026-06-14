@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
-    uniform_list, Anchor, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
+    uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
     Div, DragMoveEvent, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
@@ -76,8 +76,8 @@ impl AssetSource for Assets {
         }
         Ok(icons!(
             "folder", "file", "copy", "check", "settings", "alert", "maximize", "minimize", "download",
-            "folder_open", "pin", "chevron_up", "chevron_down", "scissors", "clipboard", "refresh",
-            "activity", "trash", "x", "edit"
+            "upload", "folder_open", "pin", "chevron_up", "chevron_down", "scissors", "clipboard",
+            "refresh", "activity", "trash", "x", "edit"
         ))
     }
 
@@ -259,6 +259,8 @@ struct Job {
     bytes: u64,
     total: u64,
     speed: f64,
+    transfers: u64,
+    total_transfers: u64,
     /// Refresh the open listing when this job succeeds (paste changed a remote).
     reload_on_done: bool,
     /// Elapsed from rclone: live `core/stats.elapsedTime`, then `job/status.duration`.
@@ -308,7 +310,16 @@ struct DraggedRemote {
     name: String,
 }
 
-/// The floating label rendered under the cursor while dragging a pinned remote.
+/// An explorer entry being dragged onto a folder. `count` lets the preview read
+/// "N items" when the dragged row is part of the multi-selection.
+struct DraggedEntry {
+    path: String,
+    name: String,
+    is_dir: bool,
+    count: usize,
+}
+
+/// The floating label rendered under the cursor while dragging.
 struct DragLabel {
     text: SharedString,
 }
@@ -320,8 +331,6 @@ impl Render for DragLabel {
             .py_1()
             .rounded_md()
             .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(ACCENT))
             .shadow_lg()
             .text_xs()
             .text_color(rgb(FG))
@@ -363,7 +372,6 @@ struct Workspace {
     copied: Option<CopySource>,
     sort_field: SortField,
     sort_order: SortOrder,
-    sort_menu_open: bool,
     paths: Paths,
     store: SettingsStore,
     settings_open: bool,
@@ -420,7 +428,6 @@ impl Workspace {
             copied: None,
             sort_field,
             sort_order,
-            sort_menu_open: false,
             paths,
             store,
             settings_open: false,
@@ -480,6 +487,8 @@ impl Workspace {
                                     j.bytes = s.bytes;
                                     j.total = s.total_bytes;
                                     j.speed = s.speed;
+                                    j.transfers = s.transfers;
+                                    j.total_transfers = s.total_transfers;
                                     j.elapsed_ms = (s.elapsed_time * 1000.0) as u64;
                                 }
                                 if let Some(st) = &status {
@@ -704,7 +713,6 @@ impl Workspace {
         } else {
             self.sort_field = field;
         }
-        self.sort_menu_open = false;
         let (field, order) = (self.sort_field, self.sort_order);
         self.store.update(|s| {
             s.sort_field = field;
@@ -919,7 +927,6 @@ impl Workspace {
 
     fn close_settings(&mut self, _: &CloseSettings, _window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_open
-            || self.sort_menu_open
             || self.context.is_some()
             || self.remote_menu.is_some()
             || self.bg_menu.is_some()

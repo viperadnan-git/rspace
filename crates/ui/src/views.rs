@@ -3,6 +3,22 @@
 use super::*;
 
 impl Workspace {
+    /// Make `el` a drop target that moves (or copies, with Option held) the
+    /// dragged entries into `dst_remote:dst_dir`.
+    fn entry_drop_target(
+        &self,
+        el: Stateful<Div>,
+        dst_remote: String,
+        dst_dir: String,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        el.drag_over::<DraggedEntry>(|s, _, _, _| s.bg(rgba(SELECT))).on_drop(cx.listener(
+            move |this, d: &DraggedEntry, window, cx| {
+                this.drop_into(d, dst_remote.clone(), dst_dir.clone(), window.modifiers().alt, cx)
+            },
+        ))
+    }
+
     fn render_error(&self, message: String, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().size_full().justify_center().items_center().p_8().child(
             v_flex()
@@ -73,22 +89,23 @@ impl Workspace {
             let label = if ellipsis { "…".to_string() } else { label };
             let is_last = idx == n - 1;
             let remote = remote.clone();
-            row = row.child(
-                div()
-                    .id(SharedString::from(format!("crumb-{pos}")))
-                    .px_1()
-                    .rounded_md()
-                    .flex_shrink_0()
-                    .max_w(px(160.0))
-                    .truncate()
-                    .cursor_pointer()
-                    .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
-                    .hover(|s| s.bg(rgba(OVERLAY)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.navigate(remote.clone(), path.clone(), None, cx)
-                    }))
-                    .child(label),
-            );
+            // Dropping entries on a crumb moves them into that ancestor directory.
+            let (remote_for_drop, drop_dir) = (remote.clone(), path.clone());
+            let crumb = div()
+                .id(SharedString::from(format!("crumb-{pos}")))
+                .px_1()
+                .rounded_md()
+                .flex_shrink_0()
+                .max_w(px(160.0))
+                .truncate()
+                .cursor_pointer()
+                .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
+                .hover(|s| s.bg(rgba(OVERLAY)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.navigate(remote.clone(), path.clone(), None, cx)
+                }))
+                .child(label);
+            row = row.child(self.entry_drop_target(crumb, remote_for_drop, drop_dir, cx));
         }
         row.child(self.copy_button("copy-path", CopySource::Path, self.copy_text(), "Copy path", cx).ml_1())
     }
@@ -117,76 +134,6 @@ impl Workspace {
                     }
                 })),
         )
-    }
-
-    fn render_sort(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = format!("{} {}", self.sort_field.label(), sort_arrow(self.sort_order));
-        h_flex()
-            .id("sort-button")
-            .gap_1()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(rgb(FG_MUTED))
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.sort_menu_open = !this.sort_menu_open;
-                cx.notify();
-            }))
-            .child(label)
-            .when(self.sort_menu_open, |b| {
-                b.child(
-                    deferred(
-                        anchored()
-                            .anchor(Anchor::TopRight)
-                            .snap_to_window_with_margin(px(8.0))
-                            .child(self.sort_menu(cx)),
-                    )
-                    .priority(1),
-                )
-            })
-    }
-
-    fn sort_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .id("sort-menu")
-            .occlude()
-            .mt(px(22.0))
-            .min_w(px(160.0))
-            .p_1()
-            .rounded_md()
-            .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(BORDER_MUTED))
-            .shadow_lg()
-            .text_color(rgb(FG))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.sort_menu_open = false;
-                cx.notify();
-            }))
-            .child(self.sort_item(SortField::Name, cx))
-            .child(self.sort_item(SortField::Size, cx))
-            .child(self.sort_item(SortField::Modified, cx))
-    }
-
-    fn sort_item(&self, field: SortField, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.sort_field == field;
-        let arrow = if active { sort_arrow(self.sort_order) } else { "" };
-        h_flex()
-            .id(field.label())
-            .w_full()
-            .justify_between()
-            .gap_4()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(if active { rgb(FG) } else { rgb(FG_MUTED) })
-            .hover(|s| s.bg(rgba(SELECT_MUTED)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_sort(field, cx)))
-            .child(field.label())
-            .child(div().text_color(rgb(ACCENT)).child(arrow))
     }
 
     fn remote_row(
@@ -220,6 +167,9 @@ impl Workspace {
                     .child(remote.name.clone()),
             )
             .child(div().text_xs().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child(remote.kind.clone()));
+
+        // Dropping entries on a remote moves them into that remote's root.
+        row = self.entry_drop_target(row, remote.name.clone(), String::new(), cx);
 
         if pinned {
             let drag_name = remote.name.clone();
@@ -311,6 +261,47 @@ impl Workspace {
             )
     }
 
+    /// A clickable file-list column header (toggles/sets the sort like Finder).
+    fn col_head(
+        &self,
+        field: SortField,
+        label: &'static str,
+        width: Option<f32>,
+        right: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let active = self.sort_field == field;
+        let base = h_flex()
+            .id(label)
+            .gap_1()
+            .cursor_pointer()
+            .text_color(rgb(FG_SUBTLE))
+            .hover(|s| s.text_color(rgb(FG_MUTED)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_sort(field, cx)))
+            .when(right, |x| x.justify_end())
+            .child(label)
+            .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))));
+        match width {
+            Some(w) => base.w(px(w)).flex_shrink_0(),
+            None => base.flex_grow(1.0).min_w(px(0.0)),
+        }
+    }
+
+    fn column_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .px_3()
+            .py_1()
+            .gap_2()
+            .text_xs()
+            .text_color(rgb(FG_SUBTLE))
+            .border_b_1()
+            .border_color(rgb(BORDER_MUTED))
+            .child(self.col_head(SortField::Name, "Name", None, false, cx))
+            .child(self.col_head(SortField::Modified, "Date Modified", Some(COL_DATE), false, cx))
+            .child(self.col_head(SortField::Size, "Size", Some(COL_SIZE), true, cx))
+    }
+
     pub(crate) fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.entries().len();
         let count_text = match self.dir_query.status() {
@@ -341,17 +332,34 @@ impl Workspace {
                                 return this.inline_editor(cx).into_any_element();
                             }
                             let selected = this.selected.contains(&entry.path);
-                            let is_cursor = ix == this.entry_sel;
                             let is_dir = entry.is_dir;
-                            let size_label = human_size(entry.size);
+                            let size_label = if is_dir { "--".to_string() } else { human_size(entry.size) };
+                            let date_label = human_date(&entry.mod_time);
                             let name = entry.name.clone();
                             let ctx_entry = entry.clone();
-                            // Cursor ring only earns its place within a multi-selection
-                            // (single-select already reads from the row background).
-                            let ring = is_cursor && focused && this.selected.len() > 1;
+                            let drag = DraggedEntry {
+                                path: entry.path.clone(),
+                                name: name.clone(),
+                                is_dir,
+                                count: if selected { this.selected.len().max(1) } else { 1 },
+                            };
+                            let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
-                                .border_1()
-                                .border_color(if ring { rgb(ACCENT) } else { rgba(0x0000_0000) })
+                                .border_b_1()
+                                .border_color(rgb(SEPARATOR))
+                                .on_drag(drag, |d, _, _, app| {
+                                    let text: SharedString = if d.count > 1 {
+                                        format!("{} items", d.count).into()
+                                    } else {
+                                        d.name.clone().into()
+                                    };
+                                    app.new(|_| DragLabel { text })
+                                })
+                                // Folders accept a drop: move (or copy with Option) into them.
+                                .when(is_dir, |r| {
+                                    let dst = this.open_remote.clone().unwrap_or_default();
+                                    this.entry_drop_target(r, dst, drop_path, cx)
+                                })
                                 .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                                     this.pane = Pane::Explorer;
                                     this.context = None;
@@ -392,14 +400,26 @@ impl Workspace {
                                         .flex_grow(1.0)
                                         .min_w(px(0.0))
                                         .tooltip(tooltip_text(name.clone()))
-                                        .child(file_icon(is_dir))
+                                        .when(is_dir, |r| r.child(file_icon(true)))
                                         .child(div().truncate().child(name)),
                                 )
-                                .child(if is_dir {
+                                .child(
                                     div()
-                                } else {
-                                    div().text_xs().text_color(rgb(FG_MUTED)).child(size_label)
-                                })
+                                        .w(px(COL_DATE))
+                                        .flex_shrink_0()
+                                        .text_xs()
+                                        .text_color(rgb(FG_MUTED))
+                                        .child(date_label),
+                                )
+                                .child(
+                                    h_flex()
+                                        .w(px(COL_SIZE))
+                                        .flex_shrink_0()
+                                        .justify_end()
+                                        .text_xs()
+                                        .text_color(rgb(FG_MUTED))
+                                        .child(size_label),
+                                )
                                 .into_any_element()
                         })
                         .collect::<Vec<_>>()
@@ -412,10 +432,13 @@ impl Workspace {
 
         // A new-folder edit (no rename target) leads the list.
         let new_item = self.prompt.as_ref().is_some_and(|p| p.target.is_none()) && self.open_remote.is_some();
+        let show_table = self.open_remote.is_some()
+            && !matches!(self.dir_query.status(), Status::Loading | Status::Error(_));
         // Right-click on empty space opens the background menu.
         let body_area = v_flex()
             .flex_1()
             .min_h(px(0.0))
+            .when(show_table, |el| el.child(self.column_header(cx)))
             .when(new_item, |el| el.child(self.inline_editor(cx)))
             .child(body)
             .when(
@@ -469,10 +492,7 @@ impl Workspace {
                             .when(self.dir_query.is_fetching(), |el| {
                                 el.child(spinner("fetch-spinner", px(12.0), FG_MUTED))
                             })
-                            .child(count_text)
-                            .when(self.open_remote.is_some(), |el| {
-                                el.child(self.render_sort(cx))
-                            }),
+                            .child(count_text),
                     ),
             )
             .child(body_area)

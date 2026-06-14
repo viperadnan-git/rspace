@@ -29,6 +29,12 @@ pub struct Stats {
     pub speed: f64,
     #[serde(default)]
     pub eta: Option<u64>,
+    /// Files transferred so far in this group.
+    #[serde(default)]
+    pub transfers: u64,
+    /// Total files queued for this group (0 until rclone has scanned).
+    #[serde(default, rename = "totalTransfers")]
+    pub total_transfers: u64,
     /// Live elapsed seconds since the stats group started.
     #[serde(default, rename = "elapsedTime")]
     pub elapsed_time: f64,

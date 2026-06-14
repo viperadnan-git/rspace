@@ -7,6 +7,47 @@ impl Workspace {
         self.begin_new_folder(cx);
     }
 
+    /// Move (or copy, if `copy`) the dragged entry — or the whole selection it
+    /// belongs to — into `dst_remote:dst_dir`. Works within a remote (folder /
+    /// breadcrumb drop) or across remotes (drop on the sidebar). One job per item.
+    pub(crate) fn drop_into(
+        &mut self,
+        dragged: &DraggedEntry,
+        dst_remote: String,
+        dst_dir: String,
+        copy: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(src_remote) = self.open_remote.clone() else {
+            return;
+        };
+        let same = src_remote == dst_remote;
+        let items: Vec<(String, String, bool)> = if self.selected.contains(&dragged.path) {
+            self.selected_entries().into_iter().map(|e| (e.path, e.name, e.is_dir)).collect()
+        } else {
+            vec![(dragged.path.clone(), dragged.name.clone(), dragged.is_dir)]
+        };
+        let mode = if copy { TransferMode::Copy } else { TransferMode::Move };
+        for (path, name, is_dir) in items {
+            // Within the same remote: skip if already there or a folder onto itself.
+            if same && parent_of(&path) == dst_dir {
+                continue;
+            }
+            if same && is_dir && (dst_dir == path || dst_dir.starts_with(&format!("{path}/"))) {
+                continue;
+            }
+            let to = join_path(&dst_dir, &name);
+            let title = format!("{} {name} → {dst_remote}:{to}", if copy { "Copy" } else { "Move" });
+            let command =
+                rclone_cmd(mode.cli_verb(is_dir), &[&format!("{src_remote}:{path}"), &format!("{dst_remote}:{to}")]);
+            let (sr, dr, dd) = (src_remote.clone(), dst_remote.clone(), dst_dir.clone());
+            let service = self.service.clone();
+            self.spawn_job(title, command, true, cx, move |group| async move {
+                service.paste(sr, path, is_dir, dr, dd, mode, group).await
+            });
+        }
+    }
+
     pub(crate) fn begin_new_folder(&mut self, cx: &mut Context<Self>) {
         if self.open_remote.is_none() {
             return;
@@ -83,7 +124,7 @@ impl Workspace {
         let dst_dir = self.path.clone();
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
-            directories: false,
+            directories: true,
             multiple: true,
             prompt: None,
         });
@@ -91,14 +132,16 @@ impl Workspace {
             if let Ok(Ok(Some(paths))) = rx.await {
                 this.update(cx, |this, cx| {
                     for path in paths {
+                        let is_dir = path.is_dir();
                         let local = path.to_string_lossy().into_owned();
                         let name = local.rsplit('/').next().unwrap_or(&local).to_string();
                         let (r, d) = (remote.clone(), dst_dir.clone());
                         let dst_path = join_path(&d, &name);
-                        let command = rclone_cmd("copyto", &[&local, &format!("{r}:{dst_path}")]);
+                        let verb = if is_dir { "copy" } else { "copyto" };
+                        let command = rclone_cmd(verb, &[&local, &format!("{r}:{dst_path}")]);
                         let service = this.service.clone();
                         this.spawn_job(format!("Upload {name}"), command, true, cx, move |group| async move {
-                            service.upload(local, r, d, group).await
+                            service.upload(local, r, d, is_dir, group).await
                         });
                     }
                 })
@@ -273,6 +316,8 @@ impl Workspace {
             bytes: 0,
             total: 0,
             speed: 0.0,
+            transfers: 0,
+            total_transfers: 0,
             reload_on_done,
             elapsed_ms: 0,
             command,

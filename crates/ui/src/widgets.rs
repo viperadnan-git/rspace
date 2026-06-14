@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView, App, Context, Div,
-    Pixels, Render, SharedString, Stateful, Window,
+    div, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView, App,
+    Context, Div, Pixels, Render, SharedString, Stateful, Transformation, Window,
 };
 use rspace_core::{SortField, SortOrder};
 use rspace_rclone_rc::Entry;
@@ -139,6 +139,20 @@ pub fn spinner(id: impl Into<gpui::ElementId>, size: Pixels, color: u32) -> impl
     )
 }
 
+/// A continuously rotating icon — inline activity indicator for running jobs.
+pub fn spinner_icon(
+    id: impl Into<gpui::ElementId>,
+    icon: &'static str,
+    size: Pixels,
+    color: u32,
+) -> impl IntoElement {
+    svg().path(icon).size(size).flex_shrink_0().text_color(rgb(color)).with_animation(
+        id,
+        Animation::new(Duration::from_millis(900)).repeat(),
+        |svg, delta| svg.with_transformation(Transformation::rotate(percentage(delta))),
+    )
+}
+
 pub fn loading_view() -> impl IntoElement {
     v_flex()
         .size_full()
@@ -204,6 +218,23 @@ pub fn join_path(dir: &str, name: &str) -> String {
     } else {
         format!("{dir}/{name}")
     }
+}
+
+/// Best-effort `Mon D, YYYY  HH:MM` from rclone's RFC3339 mod time (UTC).
+pub fn human_date(rfc3339: &str) -> String {
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    if rfc3339.len() < 16 {
+        return String::new();
+    }
+    let (date, time) = (&rfc3339[..10], &rfc3339[11..16]);
+    let p: Vec<&str> = date.split('-').collect();
+    let (Some(y), Some(m), Some(d)) = (p.first(), p.get(1).and_then(|s| s.parse::<usize>().ok()), p.get(2))
+    else {
+        return String::new();
+    };
+    let mon = MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("");
+    format!("{mon} {}, {y}  {time}", d.trim_start_matches('0'))
 }
 
 pub fn human_size(bytes: i64) -> String {

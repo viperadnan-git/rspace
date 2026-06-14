@@ -111,15 +111,26 @@ impl Workspace {
         } else {
             spinner(SharedString::from(format!("spin-{id}")), px(14.0), ACCENT).into_any_element()
         };
+        // Only meaningful for multi-file transfers; a single file shows just bytes.
+        let files = if job.total_transfers > 1 {
+            format!("{}/{} files · ", job.transfers, job.total_transfers)
+        } else {
+            String::new()
+        };
         let stats = if job.total > 0 {
             format!(
-                "{} / {} · {}/s · {elapsed}",
+                "{files}{} / {} · {}/s · {elapsed}",
                 human_size(job.bytes as i64),
                 human_size(job.total as i64),
                 human_size(job.speed as i64)
             )
         } else {
-            format!("Starting… · {elapsed}")
+            format!("{files}Starting… · {elapsed}")
+        };
+        let done_line = if job.total_transfers > 1 {
+            format!("Done · {} files · {elapsed}", job.total_transfers)
+        } else {
+            format!("Done · {elapsed}")
         };
 
         let command = job.command.clone();
@@ -140,10 +151,12 @@ impl Workspace {
                     .child(div().flex_shrink_0().child(icon))
                     .child(
                         div()
+                            .id(SharedString::from(format!("title-{id}")))
                             .flex_grow(1.0)
                             .min_w(px(0.0))
                             .truncate()
                             .text_color(rgb(FG))
+                            .tooltip(tooltip_text(job.command.clone()))
                             .child(job.title.clone()),
                     )
                     .child(self.copy_button(
@@ -197,7 +210,7 @@ impl Workspace {
                 )
             })
             .when(job.done && error.is_none(), |el| {
-                el.child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(format!("Done · {elapsed}")))
+                el.child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(done_line))
             })
             .when(error.is_some(), |el| {
                 el.child(
@@ -403,7 +416,15 @@ impl Workspace {
                 this.jobs_open = !this.jobs_open;
                 cx.notify();
             }))
-            .when(active > 0, |el| el.child(count_badge("icons/activity.svg", FG, active)))
+            .when(active > 0, |el| {
+                el.child(
+                    h_flex()
+                        .gap_1()
+                        .text_color(rgb(ACCENT))
+                        .child(spinner_icon("jobs-active-spin", "icons/refresh.svg", px(13.0), ACCENT))
+                        .child(active.to_string()),
+                )
+            })
             .when(succeeded > 0, |el| el.child(count_badge("icons/check.svg", SUCCESS, succeeded)))
             .when(failed > 0, |el| el.child(count_badge("icons/alert.svg", DANGER, failed)))
     }

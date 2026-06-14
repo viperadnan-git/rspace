@@ -205,26 +205,37 @@ impl Service {
             .await
     }
 
-    /// Upload the local file `local` into `remote:dst_dir` as an async job.
+    /// Upload a local file or directory `local` into `remote:dst_dir` as an
+    /// async job.
     pub async fn upload(
         &self,
         local: String,
         remote: String,
         dst_dir: String,
+        is_dir: bool,
         group: String,
     ) -> Result<u64, ServiceError> {
         let (parent, name) = split_parent(&local);
-        self.submit(
-            "operations/copyfile",
-            serde_json::json!({
-                "srcFs": parent,
-                "srcRemote": name,
-                "dstFs": format!("{remote}:"),
-                "dstRemote": join(&dst_dir, &name),
-            }),
-            group,
-        )
-        .await
+        let (method, params) = if is_dir {
+            (
+                TransferMode::Copy.dir_method(),
+                serde_json::json!({
+                    "srcFs": local,
+                    "dstFs": format!("{remote}:{}", join(&dst_dir, &name)),
+                }),
+            )
+        } else {
+            (
+                TransferMode::Copy.file_method(),
+                serde_json::json!({
+                    "srcFs": parent,
+                    "srcRemote": name,
+                    "dstFs": format!("{remote}:"),
+                    "dstRemote": join(&dst_dir, &name),
+                }),
+            )
+        };
+        self.submit(method, params, group).await
     }
 
     /// Submit an async job in stats group `group`, returning the job id.
