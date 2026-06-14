@@ -93,6 +93,38 @@ impl Daemon {
         let _ = self.child.kill().await;
         let _ = std::fs::remove_file(&self.pidfile);
     }
+
+    /// Spawn a task on `handle` that runs the same cleanup as [`shutdown`] when
+    /// the process receives SIGINT or SIGTERM, then exits.
+    ///
+    /// `kill_on_drop` only covers a normal `Drop`/unwind; a signal terminates the
+    /// process without running it, orphaning the daemon until the next launch
+    /// reaps it. This closes that gap so a signalled shutdown is clean too.
+    #[cfg(unix)]
+    pub fn install_signal_cleanup(&self, handle: &tokio::runtime::Handle) {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let client = self.client.clone();
+        let pid = self.child.id();
+        let pidfile = self.pidfile.clone();
+        handle.spawn(async move {
+            let (Ok(mut term), Ok(mut int)) =
+                (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
+            else {
+                return;
+            };
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(2), client.quit()).await;
+            if let Some(pid) = pid {
+                terminate(pid);
+            }
+            let _ = std::fs::remove_file(&pidfile);
+            std::process::exit(130);
+        });
+    }
 }
 
 /// Kill a daemon orphaned by a previous run, then clear the pid file.
