@@ -47,8 +47,15 @@ impl Workspace {
             let (from_remote, into_remote, into_dir) =
                 (src_remote.clone(), dst_remote.clone(), dst_dir.clone());
             let service = self.service.clone();
-            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| async move {
-                service.paste(from_remote, path, is_dir, into_remote, into_dir, mode, group).await
+            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| {
+                let (service, from_remote, path, into_remote, into_dir) = (
+                    service.clone(),
+                    from_remote.clone(),
+                    path.clone(),
+                    into_remote.clone(),
+                    into_dir.clone(),
+                );
+                async move { service.paste(from_remote, path, is_dir, into_remote, into_dir, mode, group).await }
             });
         }
     }
@@ -108,7 +115,11 @@ impl Workspace {
             command,
             true,
             cx,
-            move |group| async move { service.move_to(remote, from, to, is_dir, group).await },
+            move |group| {
+                let (service, remote, from, to) =
+                    (service.clone(), remote.clone(), from.clone(), to.clone());
+                async move { service.move_to(remote, from, to, is_dir, group).await }
+            },
         );
     }
 
@@ -121,8 +132,9 @@ impl Workspace {
         let folder = JobTarget::new(name, remote.clone(), path.clone());
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
-        self.spawn_job("New folder", vec![folder], command, true, cx, move |group| async move {
-            service.mkdir(remote, path, group).await
+        self.spawn_job("New folder", vec![folder], command, true, cx, move |group| {
+            let (service, remote, path) = (service.clone(), remote.clone(), path.clone());
+            async move { service.mkdir(remote, path, group).await }
         });
     }
 
@@ -151,8 +163,10 @@ impl Workspace {
                         // Local source has no remote location; only the destination is navigable.
                         let destination = JobTarget::new(name, r.clone(), dst_path);
                         let service = this.service.clone();
-                        this.spawn_job("Upload", vec![destination], command, true, cx, move |group| async move {
-                            service.upload(local, r, d, is_dir, group).await
+                        this.spawn_job("Upload", vec![destination], command, true, cx, move |group| {
+                            let (service, local, r, d) =
+                                (service.clone(), local.clone(), r.clone(), d.clone());
+                            async move { service.upload(local, r, d, is_dir, group).await }
                         });
                     }
                 })
@@ -217,8 +231,9 @@ impl Workspace {
         let command =
             rclone_cmd(if is_dir { "purge" } else { "deletefile" }, &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
-        self.spawn_job("Delete", vec![item], command, true, cx, move |group| async move {
-            service.delete(remote, path, is_dir, group).await
+        self.spawn_job("Delete", vec![item], command, true, cx, move |group| {
+            let (service, remote, path) = (service.clone(), remote.clone(), path.clone());
+            async move { service.delete(remote, path, is_dir, group).await }
         });
     }
 
@@ -242,8 +257,10 @@ impl Workspace {
         let command =
             rclone_cmd(TransferMode::Copy.cli_verb(is_dir), &[&format!("{remote}:{path}"), &local]);
         let service = self.service.clone();
-        self.spawn_job("Download", vec![source], command, false, cx, move |group| async move {
-            service.download(remote, path, is_dir, dest, group).await
+        self.spawn_job("Download", vec![source], command, false, cx, move |group| {
+            let (service, remote, path, dest) =
+                (service.clone(), remote.clone(), path.clone(), dest.clone());
+            async move { service.download(remote, path, is_dir, dest, group).await }
         });
     }
 
@@ -294,8 +311,15 @@ impl Workspace {
                 &[&format!("{src_remote}:{src_path}"), &format!("{dst_remote}:{dst_path}")],
             );
             let service = self.service.clone();
-            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| async move {
-                service.paste(src_remote, src_path, is_dir, dst_remote, dst_dir, mode, group).await
+            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| {
+                let (service, src_remote, src_path, dst_remote, dst_dir) = (
+                    service.clone(),
+                    src_remote.clone(),
+                    src_path.clone(),
+                    dst_remote.clone(),
+                    dst_dir.clone(),
+                );
+                async move { service.paste(src_remote, src_path, is_dir, dst_remote, dst_dir, mode, group).await }
             });
         }
         if matches!(clip.mode, TransferMode::Move) {
@@ -304,9 +328,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Push a tracked job; `run(group)` returns the submission future (the caller
-    /// captures its own `Service` clone so the future owns it). `command` is the
-    /// equivalent rclone CLI shown by the row's copy button.
+    /// Push a tracked job; `run(group)` returns the submission future. `run` is
+    /// `Fn` (re-runnable) so the job can be retried; it must clone its captures
+    /// per call. `command` is the equivalent rclone CLI shown by the copy button.
     fn spawn_job<F, Fut>(
         &mut self,
         verb: impl Into<SharedString>,
@@ -316,9 +340,35 @@ impl Workspace {
         cx: &mut Context<Self>,
         run: F,
     ) where
-        F: FnOnce(String) -> Fut + 'static,
+        F: Fn(String) -> Fut + 'static,
         Fut: std::future::Future<Output = Result<u64, ServiceError>> + 'static,
     {
+        let run: JobRun = Rc::new(move |group| Box::pin(run(group)));
+        self.enqueue(verb.into(), targets, command, reload_on_done, run, cx);
+    }
+
+    /// Re-run a failed/cancelled job: drop the old row, enqueue a fresh one with
+    /// the same operation.
+    pub(crate) fn retry_job(&mut self, id: usize, cx: &mut Context<Self>) {
+        let Some(job) = self.jobs.iter().find(|j| j.id == id) else {
+            return;
+        };
+        let (verb, targets, command, reload, run) =
+            (job.verb.clone(), job.targets.clone(), job.command.clone(), job.reload_on_done, job.run.clone());
+        self.jobs.retain(|j| j.id != id);
+        self.enqueue(verb, targets, command, reload, run, cx);
+        cx.notify();
+    }
+
+    fn enqueue(
+        &mut self,
+        verb: SharedString,
+        targets: Vec<JobTarget>,
+        command: String,
+        reload_on_done: bool,
+        run: JobRun,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.job_seq;
         self.job_seq += 1;
         let group = format!("rspace/{id}");
@@ -326,7 +376,7 @@ impl Workspace {
             id,
             group: group.clone(),
             jobid: None,
-            verb: verb.into(),
+            verb,
             targets,
             done: false,
             error: None,
@@ -338,6 +388,7 @@ impl Workspace {
             reload_on_done,
             elapsed_ms: 0,
             command,
+            run: run.clone(),
         });
         cx.spawn(async move |this, cx| {
             let result = run(group).await;

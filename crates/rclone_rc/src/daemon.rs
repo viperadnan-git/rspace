@@ -54,6 +54,8 @@ impl Daemon {
             .arg(&user)
             .arg("--rc-pass")
             .arg(&pass)
+            // Serve remote objects over the same HTTP endpoint for file previews.
+            .arg("--rc-serve")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true)

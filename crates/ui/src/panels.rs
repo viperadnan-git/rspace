@@ -206,6 +206,11 @@ impl Workspace {
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.request_cancel_job(id, cx)),
                         ))
                     })
+                    .when(job.done && error.is_some(), |el| {
+                        el.child(action_button("retry", "icons/refresh.svg", "Retry").on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_job(id, cx)),
+                        ))
+                    })
                     .when(job.done, |el| {
                         el.child(action_button("clear", "icons/trash.svg", "Remove from list").on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.clear_job(id, cx)),

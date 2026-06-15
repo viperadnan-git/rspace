@@ -139,6 +139,33 @@ impl RcClient {
         Ok(resp.json::<T>().await?)
     }
 
+    /// Fetch up to `max_bytes` of `remote:path`'s content from the `--rc-serve`
+    /// object endpoint (a `Range` request), for file previews.
+    pub async fn fetch_object(
+        &self,
+        remote: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, RcError> {
+        // `--rc-serve` serves objects at `/[remote:]/path` (literal brackets).
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|e| RcError::Status { status: 0, message: e.to_string() })?;
+        url.set_path(&format!("[{remote}:]/{path}"));
+        let resp = self
+            .http
+            .get(url)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header(reqwest::header::RANGE, format!("bytes=0-{}", max_bytes.saturating_sub(1)))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(RcError::Status { status: status.as_u16(), message: rc_error_message(&body) });
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     /// Liveness check (`rc/noop`).
     pub async fn noop(&self) -> Result<(), RcError> {
         let _: Value = self.call("rc/noop", &json!({})).await?;

@@ -23,6 +23,13 @@ pub struct Settings {
     pub sidebar_width: Option<f32>,
     /// Whether the transfers panel was left maximized.
     pub transfers_maximized: bool,
+    /// Whether the file-preview pane is open.
+    pub preview_open: bool,
+    /// Preview pane width in pixels. `None` = the layout default.
+    pub preview_width: Option<f32>,
+    /// File-list column widths in pixels. `None` = the layout default.
+    pub col_date_width: Option<f32>,
+    pub col_size_width: Option<f32>,
 }
 
 impl Default for Settings {
@@ -35,6 +42,10 @@ impl Default for Settings {
             pinned: Vec::new(),
             sidebar_width: None,
             transfers_maximized: false,
+            preview_open: false,
+            preview_width: None,
+            col_date_width: None,
+            col_size_width: None,
         }
     }
 }

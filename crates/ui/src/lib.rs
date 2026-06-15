@@ -3,13 +3,17 @@
 mod jobs;
 mod menus;
 mod panels;
+mod preview;
 mod query;
 mod theme;
 mod views;
 mod widgets;
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::ops::Range;
+use std::pin::Pin;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
@@ -24,6 +28,7 @@ use gpui_platform::application;
 use rspace_core::{Paths, SettingsStore, SortField, SortOrder};
 use rspace_rclone_rc::{Entry, RemoteInfo, Service, ServiceError, TransferMode};
 
+use preview::{Preview, PreviewState};
 use query::{Query, Status};
 use theme::*;
 use widgets::*;
@@ -55,6 +60,7 @@ actions!(
         NewFolder,
         NewFile,
         Rename,
+        TogglePreview,
         PromptSubmit,
         PromptCancel
     ]
@@ -82,7 +88,7 @@ impl AssetSource for Assets {
             "lock", "image", "drive", "dropbox", "gcs", "b2", "box", "mega", "swift",
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
-            "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud"
+            "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right"
         ))
     }
 
@@ -188,6 +194,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-n", NewFolder, Some("Workspace && !modal")),
         KeyBinding::new("cmd-u", NewFile, Some("Workspace && !modal")),
         KeyBinding::new("f2", Rename, Some("Workspace && !modal")),
+        KeyBinding::new("space", TogglePreview, Some("Workspace && !modal")),
         KeyBinding::new("escape", CloseSettings, Some("Workspace")),
         // Confirm dialog: Enter accepts (Escape dismisses via the line above).
         KeyBinding::new("enter", ConfirmAccept, Some("Confirm")),
@@ -275,6 +282,10 @@ impl Job {
     }
 }
 
+/// A re-runnable job submission: takes the stats group, returns the rclone job
+/// id. `Rc` so a finished/failed `Job` stays `Clone` and can be retried.
+type JobRun = Rc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<u64, ServiceError>>>>>;
+
 /// A tracked rclone job (download/copy/…). State mirrors rclone's job + stats.
 #[derive(Clone)]
 struct Job {
@@ -296,6 +307,8 @@ struct Job {
     elapsed_ms: u64,
     /// Equivalent rclone CLI command, for the row's copy button.
     command: String,
+    /// Re-runs the operation; used by the failed-row retry button.
+    run: JobRun,
 }
 
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
@@ -325,10 +338,33 @@ struct Prompt {
     action: Box<dyn FnOnce(&mut Workspace, String, &mut Context<Workspace>)>,
 }
 
-#[derive(Clone)]
-struct DragSidebar;
+/// Which side pane a resize drag is adjusting.
+#[derive(Clone, Copy, PartialEq)]
+enum ResizeTarget {
+    Sidebar,
+    Preview,
+}
 
-impl Render for DragSidebar {
+#[derive(Clone)]
+struct DragResize(ResizeTarget);
+
+impl Render for DragResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// A resizable file-list column (Name flex-grows and isn't resizable).
+#[derive(Clone, Copy, PartialEq)]
+enum Column {
+    Date,
+    Size,
+}
+
+#[derive(Clone)]
+struct DragColumn(Column);
+
+impl Render for DragColumn {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
@@ -380,6 +416,9 @@ struct Workspace {
     /// Right-click menu on a remote: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
     sidebar_width: Pixels,
+    preview_width: Pixels,
+    col_date_width: Pixels,
+    col_size_width: Pixels,
     open_remote: Option<String>,
     /// Empty = root.
     path: String,
@@ -416,6 +455,12 @@ struct Workspace {
     job_seq: usize,
     jobs_open: bool,
     jobs_maximized: bool,
+    /// Right-side file-preview pane.
+    preview_open: bool,
+    /// Preview of the cursor entry; rebuilt by `refresh_preview` as it moves.
+    preview: Option<Preview>,
+    /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
+    preview_cache: Vec<(String, PreviewState)>,
     rc_health: RcHealth,
     clipboard: Option<Clipboard>,
 }
@@ -433,9 +478,13 @@ impl Workspace {
         focus.focus(window, cx);
         let stale = Duration::from_secs(store.get().refresh_secs.max(1));
         let (sort_field, sort_order) = (store.get().sort_field, store.get().sort_order);
-        let sidebar_width =
-            px(store.get().sidebar_width.unwrap_or(SIDEBAR_W).clamp(SIDEBAR_MIN, SIDEBAR_MAX));
-        let jobs_maximized = store.get().transfers_maximized;
+        let s = store.get();
+        let sidebar_width = clamped_width(s.sidebar_width, SIDEBAR_W, SIDEBAR_MIN, SIDEBAR_MAX);
+        let preview_width = clamped_width(s.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
+        let col_date_width = clamped_width(s.col_date_width, COL_DATE, COL_MIN, COL_MAX);
+        let col_size_width = clamped_width(s.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
+        let jobs_maximized = s.transfers_maximized;
+        let preview_open = s.preview_open;
         let this = Self {
             service,
             version,
@@ -447,6 +496,9 @@ impl Workspace {
             remote_scroll: UniformListScrollHandle::new(),
             remote_menu: None,
             sidebar_width,
+            preview_width,
+            col_date_width,
+            col_size_width,
             open_remote: None,
             path: String::new(),
             entry_sel: 0,
@@ -471,6 +523,9 @@ impl Workspace {
             job_seq: 0,
             jobs_open: false,
             jobs_maximized,
+            preview_open,
+            preview: None,
+            preview_cache: Vec::new(),
             rc_health: RcHealth::Unknown,
             clipboard: None,
         };
@@ -884,11 +939,53 @@ impl Workspace {
         self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
     }
 
-    /// Save the sidebar width if a resize changed it (called on mouse release).
-    fn persist_sidebar_width(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
-        let width = f32::from(self.sidebar_width);
-        if self.store.get().sidebar_width != Some(width) {
-            self.store.update(|s| s.sidebar_width = Some(width));
+    /// Resize a file-list column by dragging its left divider. Width is measured
+    /// from the table's right content edge (the Name column flex-grows to fill).
+    fn on_column_drag(&mut self, e: &DragMoveEvent<DragColumn>, _: &mut Window, cx: &mut Context<Self>) {
+        let x = f32::from(e.event.position.x);
+        // Table content edge: body bounds minus the rows' horizontal padding.
+        let right = f32::from(e.bounds.right()) - TABLE_PAD;
+        // Column order is Name (flex), Size, Date — Date is flush right; Size sits
+        // one column gap to its left. Anchor each from the content edge so the
+        // dragged divider tracks the cursor exactly.
+        let date_w = f32::from(self.col_date_width);
+        let (raw, current) = match e.drag(cx).0 {
+            Column::Date => (right - x, &mut self.col_date_width),
+            Column::Size => (right - date_w - COL_GAP - x, &mut self.col_size_width),
+        };
+        let width = px(raw.clamp(COL_MIN, COL_MAX));
+        if width != *current {
+            *current = width;
+            cx.notify();
+        }
+    }
+
+    fn reset_column(&mut self, column: Column, cx: &mut Context<Self>) {
+        match column {
+            Column::Date => self.col_date_width = px(COL_DATE),
+            Column::Size => self.col_size_width = px(COL_SIZE),
+        }
+        cx.notify();
+    }
+
+    /// Save any pane or column width a resize changed (called on mouse release).
+    fn persist_pane_widths(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        let (sidebar, preview, date, size) = (
+            f32::from(self.sidebar_width),
+            f32::from(self.preview_width),
+            f32::from(self.col_date_width),
+            f32::from(self.col_size_width),
+        );
+        let s = self.store.get();
+        let unchanged = (s.sidebar_width, s.preview_width, s.col_date_width, s.col_size_width)
+            == (Some(sidebar), Some(preview), Some(date), Some(size));
+        if !unchanged {
+            self.store.update(|s| {
+                s.sidebar_width = Some(sidebar);
+                s.preview_width = Some(preview);
+                s.col_date_width = Some(date);
+                s.col_size_width = Some(size);
+            });
         }
     }
 
@@ -1272,6 +1369,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.resolve_selection();
+        self.refresh_preview(cx);
         // Keep focus on the open dialog, else on the workspace — so each owns the
         // keyboard while shown, and focus returns here when it closes.
         let want = if self.confirm.is_some() || self.prompt.is_some() {
@@ -1307,15 +1405,26 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_folder))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::rename))
-            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragSidebar>, _, cx| {
-                let x = f32::from(e.event.position.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
-                if px(x) != this.sidebar_width {
-                    this.sidebar_width = px(x);
+            .on_action(cx.listener(Self::toggle_preview))
+            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragResize>, window, cx| {
+                let x = f32::from(e.event.position.x);
+                let (width, current) = match e.drag(cx).0 {
+                    ResizeTarget::Sidebar => {
+                        (px(x.clamp(SIDEBAR_MIN, SIDEBAR_MAX)), &mut this.sidebar_width)
+                    }
+                    ResizeTarget::Preview => {
+                        // Pane is docked right: width grows as the cursor nears the edge.
+                        let from_right = f32::from(window.viewport_size().width) - x;
+                        (px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX)), &mut this.preview_width)
+                    }
+                };
+                if width != *current {
+                    *current = width;
                     cx.notify();
                 }
             }))
-            // Persist the sidebar width once the resize drag releases, not per move.
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_sidebar_width))
+            // Persist pane widths once the resize drag releases, not per move.
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_pane_widths))
             .size_full()
             .bg(rgb(CANVAS))
             .text_color(rgb(FG))
@@ -1338,7 +1447,8 @@ impl Render for Workspace {
                                 .min_h(px(0.0))
                                 .w_full()
                                 .child(self.render_sidebar(cx))
-                                .child(self.render_explorer(cx)),
+                                .child(self.render_explorer(cx))
+                                .when(self.preview_open, |el| el.child(self.render_preview(cx))),
                         )
                     })
                     .when(self.jobs_open, |el| el.child(self.render_transfers(cx)))

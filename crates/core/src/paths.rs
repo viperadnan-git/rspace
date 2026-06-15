@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 use directories::ProjectDirs;
 use thiserror::Error;
 
-use crate::accounting::Category;
-
 /// Reverse-DNS application identifier; also the macOS bundle id.
 pub const APP_QUALIFIER: &str = "com";
 pub const APP_ORG: &str = "viperadnan";
@@ -18,8 +16,8 @@ pub enum PathsError {
 
 /// Single on-disk root for all rspace state, with typed subdirectories.
 ///
-/// Everything here is removed wholesale on uninstall. Anything created *outside*
-/// it (OS-managed storage) is tracked separately in the teardown manifest.
+/// To add a subdirectory: add a `*_dir()` accessor and list it in
+/// [`ensure`](Self::ensure) so it is created on startup.
 #[derive(Debug, Clone)]
 pub struct Paths {
     root: PathBuf,
@@ -47,14 +45,6 @@ impl Paths {
         self.root.join("config")
     }
 
-    pub fn cache_dir(&self) -> PathBuf {
-        self.root.join("cache")
-    }
-
-    pub fn blobs_dir(&self) -> PathBuf {
-        self.root.join("blobs")
-    }
-
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
     }
@@ -63,38 +53,16 @@ impl Paths {
         self.root.join("state")
     }
 
-    /// Teardown manifest path (records OS-managed artifacts outside the root).
-    pub fn manifest_path(&self) -> PathBuf {
-        self.state_dir().join("teardown.jsonl")
-    }
-
     pub fn settings_path(&self) -> PathBuf {
         self.config_dir().join("settings.json")
     }
 
     /// Create the root and all subdirectories if missing.
     pub fn ensure(&self) -> std::io::Result<()> {
-        for dir in [
-            self.config_dir(),
-            self.cache_dir(),
-            self.blobs_dir(),
-            self.logs_dir(),
-            self.state_dir(),
-        ] {
+        for dir in [self.config_dir(), self.logs_dir(), self.state_dir()] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())
-    }
-
-    /// Managed subdirectories paired with their storage category.
-    pub fn categories(&self) -> [(Category, PathBuf); 5] {
-        [
-            (Category::Config, self.config_dir()),
-            (Category::Cache, self.cache_dir()),
-            (Category::Blobs, self.blobs_dir()),
-            (Category::Logs, self.logs_dir()),
-            (Category::State, self.state_dir()),
-        ]
     }
 }
 
@@ -106,6 +74,6 @@ mod tests {
     fn subdirs_live_under_root() {
         let p = Paths::with_root("/tmp/rspace-test");
         assert!(p.config_dir().starts_with(p.root()));
-        assert_eq!(p.manifest_path(), p.state_dir().join("teardown.jsonl"));
+        assert_eq!(p.settings_path(), p.config_dir().join("settings.json"));
     }
 }

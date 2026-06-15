@@ -238,6 +238,21 @@ impl Service {
         self.submit(method, params, group).await
     }
 
+    /// Read up to `max_bytes` of `remote:path`'s content (for previews).
+    pub async fn read_file(
+        &self,
+        remote: String,
+        path: String,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let (tx, rx) = oneshot::channel();
+        let client = self.client.clone();
+        self.handle.spawn(async move {
+            let _ = tx.send(client.fetch_object(&remote, &path, max_bytes).await);
+        });
+        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+    }
+
     /// Submit an async job in stats group `group`, returning the job id.
     async fn submit(
         &self,

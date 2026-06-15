@@ -112,24 +112,38 @@ impl Workspace {
 
     // Overlay on the sidebar's right border; takes no layout space, so
     // `deferred` paints/hit-tests it over the next pane.
-    fn resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A draggable resize strip on a pane edge (the preview's left, the sidebar's
+    /// right); double-click resets to `default`.
+    pub(crate) fn resize_handle(
+        &self,
+        id: &'static str,
+        target: ResizeTarget,
+        default: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let edge = px(-RESIZE_HANDLE_W / 2.0);
+        let left_edge = matches!(target, ResizeTarget::Preview);
         deferred(
             div()
-                .id("sidebar-resize")
+                .id(id)
                 .absolute()
                 .top(px(0.0))
-                .right(px(-RESIZE_HANDLE_W / 2.0))
+                .when(left_edge, |d| d.left(edge))
+                .when(!left_edge, |d| d.right(edge))
                 .w(px(RESIZE_HANDLE_W))
                 .h_full()
                 .cursor_col_resize()
                 .occlude()
-                .on_drag(DragSidebar, |_, _, _, cx| {
+                .on_drag(DragResize(target), move |_, _, _, cx| {
                     cx.stop_propagation();
-                    cx.new(|_| DragSidebar)
+                    cx.new(|_| DragResize(target))
                 })
-                .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if e.click_count() >= 2 {
-                        this.sidebar_width = px(SIDEBAR_W);
+                        match target {
+                            ResizeTarget::Sidebar => this.sidebar_width = px(default),
+                            ResizeTarget::Preview => this.preview_width = px(default),
+                        }
                         cx.notify();
                     }
                 })),
@@ -203,7 +217,7 @@ impl Workspace {
             .bg(rgb(INSET))
             .border_r_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle(cx))
+            .child(self.resize_handle("sidebar-resize", ResizeTarget::Sidebar, SIDEBAR_W, cx))
             .child(div().px_3().py_2().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))
             .child(
                 // Single list so pinned rows (which lead it) scroll with the rest.
@@ -273,8 +287,9 @@ impl Workspace {
         &self,
         field: SortField,
         label: &'static str,
-        width: Option<f32>,
+        width: Option<Pixels>,
         right: bool,
+        resize: Option<Column>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let active = self.sort_field == field;
@@ -287,11 +302,43 @@ impl Workspace {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose_sort(field, cx)))
             .when(right, |x| x.justify_end())
             .child(label)
-            .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))));
+            .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))))
+            .when_some(resize, |x, col| x.relative().child(self.column_resize_handle(col, cx)));
         match width {
-            Some(w) => base.w(px(w)).flex_shrink_0(),
+            // Inset content so it doesn't sit on the resize divider (Finder-style).
+            Some(w) => base.px_2().w(w).flex_shrink_0(),
             None => base.flex_grow(1.0).min_w(px(0.0)),
         }
+    }
+
+    /// A draggable divider on a column's left edge; double-click resets its width.
+    fn column_resize_handle(&self, col: Column, cx: &mut Context<Self>) -> impl IntoElement {
+        let id: &'static str = match col {
+            Column::Date => "col-resize-date",
+            Column::Size => "col-resize-size",
+        };
+        deferred(
+            h_flex()
+                .id(id)
+                .absolute()
+                .top(px(0.0))
+                .left(px(-RESIZE_HANDLE_W / 2.0))
+                .w(px(RESIZE_HANDLE_W))
+                .h_full()
+                .justify_center()
+                .cursor_col_resize()
+                .occlude()
+                .on_drag(DragColumn(col), move |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| DragColumn(col))
+                })
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    if e.click_count() >= 2 {
+                        this.reset_column(col, cx);
+                    }
+                }))
+                .child(div().w(px(1.0)).h(px(13.0)).bg(rgb(BORDER_MUTED))),
+        )
     }
 
     fn column_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -304,9 +351,23 @@ impl Workspace {
             .text_color(rgb(FG_SUBTLE))
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(self.col_head(SortField::Name, "Name", None, false, cx))
-            .child(self.col_head(SortField::Modified, "Date Modified", Some(COL_DATE), false, cx))
-            .child(self.col_head(SortField::Size, "Size", Some(COL_SIZE), true, cx))
+            .child(self.col_head(SortField::Name, "Name", None, false, None, cx))
+            .child(self.col_head(
+                SortField::Size,
+                "Size",
+                Some(self.col_size_width),
+                true,
+                Some(Column::Size),
+                cx,
+            ))
+            .child(self.col_head(
+                SortField::Modified,
+                "Date Modified",
+                Some(self.col_date_width),
+                false,
+                Some(Column::Date),
+                cx,
+            ))
     }
 
     pub(crate) fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -414,21 +475,23 @@ impl Workspace {
                                         .child(div().truncate().child(name)),
                                 )
                                 .child(
-                                    div()
-                                        .w(px(COL_DATE))
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .text_color(rgb(FG_MUTED))
-                                        .child(date_label),
-                                )
-                                .child(
                                     h_flex()
-                                        .w(px(COL_SIZE))
+                                        .w(this.col_size_width)
                                         .flex_shrink_0()
+                                        .px_2()
                                         .justify_end()
                                         .text_xs()
                                         .text_color(rgb(FG_MUTED))
                                         .child(size_label),
+                                )
+                                .child(
+                                    div()
+                                        .w(this.col_date_width)
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(rgb(FG_MUTED))
+                                        .child(date_label),
                                 )
                                 .into_any_element()
                         })
@@ -448,6 +511,7 @@ impl Workspace {
         let body_area = v_flex()
             .flex_1()
             .min_h(px(0.0))
+            .on_drag_move(cx.listener(Self::on_column_drag))
             .when(show_table, |el| el.child(self.column_header(cx)))
             .when(new_item, |el| el.child(self.inline_editor(cx)))
             .child(body)
@@ -472,15 +536,16 @@ impl Workspace {
             .child(
                 h_flex()
                     .w_full()
+                    .h(px(34.0))
                     .gap_2()
                     .justify_between()
                     .pl_1()
                     .pr_3()
-                    .py_1()
                     .border_b_1()
                     .border_color(rgb(BORDER_MUTED))
                     .child(
                         h_flex()
+                            .h_full()
                             .gap_1()
                             .min_w(px(0.0))
                             .child(nav_button("nav-back", "←", self.can_back()).when(
@@ -491,6 +556,7 @@ impl Workspace {
                                 self.can_forward(),
                                 |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_forward(cx))),
                             ))
+                            .child(div().w(px(1.0)).h_full().mx_1().flex_shrink_0().bg(rgb(BORDER_MUTED)))
                             .child(self.render_breadcrumb(cx)),
                     )
                     .child(
@@ -502,10 +568,23 @@ impl Workspace {
                             .when(self.dir_query.is_fetching(), |el| {
                                 el.child(spinner("fetch-spinner", px(12.0), FG_MUTED))
                             })
-                            .child(count_text),
+                            .child(count_text)
+                            .child(
+                                icon_button("toggle-preview", "icons/sidebar_right.svg")
+                                    .when(self.preview_open, |b| b.bg(rgba(SELECT_MUTED)))
+                                    .tooltip(tooltip_text("Preview (Space)"))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        this.toggle_preview(&TogglePreview, window, cx)
+                                    })),
+                            ),
                     ),
             )
             .child(body_area)
+    }
+
+    /// The "rspace" wordmark: bold foreground text.
+    fn render_brand(&self) -> impl IntoElement {
+        div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace")
     }
 
     pub(crate) fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -516,10 +595,11 @@ impl Workspace {
             .w_full()
             .pl(px(lead))
             .pr_2()
-            .justify_end()
+            .justify_between()
             .bg(rgb(INSET))
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
+            .child(self.render_brand())
             .child(
                 h_flex()
                     .id("settings-button")

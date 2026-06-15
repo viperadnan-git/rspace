@@ -289,6 +289,19 @@ pub fn human_date(rfc3339: &str) -> String {
     format!("{mon} {}, {y}  {time}", d.trim_start_matches('0'))
 }
 
+/// A persisted layout width: the stored value or `default`, clamped to bounds.
+pub fn clamped_width(value: Option<f32>, default: f32, min: f32, max: f32) -> Pixels {
+    px(value.unwrap_or(default).clamp(min, max))
+}
+
+/// Friendly type label for the preview info card, e.g. `PNG` / `RS` / `File`.
+pub fn file_kind(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((_, ext)) if !ext.is_empty() => ext.to_ascii_uppercase(),
+        _ => "File".to_string(),
+    }
+}
+
 pub fn human_size(bytes: i64) -> String {
     if bytes < 0 {
         return "—".to_string();
