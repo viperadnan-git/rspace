@@ -71,6 +71,7 @@ impl Workspace {
                                 )
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.jobs_maximized = !this.jobs_maximized;
+                                    this.store.update(|s| s.transfers_maximized = this.jobs_maximized);
                                     cx.notify();
                                 })),
                             )
@@ -94,8 +95,36 @@ impl Workspace {
             .child(body)
     }
 
+    /// A clickable job endpoint, styled like a breadcrumb crumb: shows the name,
+    /// reveals the item in the explorer on click, full `remote:path` on hover.
+    fn job_target_chip(
+        &self,
+        job_id: usize,
+        index: usize,
+        target: JobTarget,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let full_path = format!("{}:{}", target.remote, target.path);
+        let name = target.name.clone();
+        div()
+            .id(SharedString::from(format!("target-{job_id}-{index}")))
+            .min_w(px(0.0))
+            .max_w(px(220.0))
+            .px_1()
+            .rounded_md()
+            .truncate()
+            .cursor_pointer()
+            .text_color(rgb(FG))
+            .hover(|s| s.bg(rgba(OVERLAY)))
+            .tooltip(tooltip_text(full_path))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.reveal_target(target.clone(), cx)))
+            .child(name)
+    }
+
     fn job_row(&self, job: &Job, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let id = job.id;
+        let verb = job.verb.clone();
+        let targets = job.targets.clone();
         let pct = if job.total > 0 {
             (job.bytes as f64 / job.total as f64).clamp(0.0, 1.0)
         } else {
@@ -135,7 +164,7 @@ impl Workspace {
 
         let command = job.command.clone();
         let error = job.error.clone();
-        let btn = move |suffix: &str, svg_icon: &'static str, tip: &'static str| {
+        let action_button = move |suffix: &str, svg_icon: &'static str, tip: &'static str| {
             icon_button(SharedString::from(format!("{suffix}-{id}")), svg_icon).tooltip(tooltip_text(tip))
         };
 
@@ -149,16 +178,22 @@ impl Workspace {
                     .gap_2()
                     .items_center()
                     .child(div().flex_shrink_0().child(icon))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("title-{id}")))
+                    .child({
+                        let mut line = h_flex()
                             .flex_grow(1.0)
                             .min_w(px(0.0))
-                            .truncate()
-                            .text_color(rgb(FG))
-                            .tooltip(tooltip_text(job.command.clone()))
-                            .child(job.title.clone()),
-                    )
+                            .gap_1()
+                            .child(div().flex_shrink_0().text_color(rgb(FG_MUTED)).child(verb));
+                        for (index, target) in targets.into_iter().enumerate() {
+                            if index > 0 {
+                                line = line.child(
+                                    div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child("→"),
+                                );
+                            }
+                            line = line.child(self.job_target_chip(id, index, target, cx));
+                        }
+                        line
+                    })
                     .child(self.copy_button(
                         SharedString::from(format!("copy-cmd-{id}")),
                         CopySource::JobCommand(id),
@@ -167,12 +202,12 @@ impl Workspace {
                         cx,
                     ))
                     .when(!job.done, |el| {
-                        el.child(btn("cancel", "icons/x.svg", "Cancel").on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| this.cancel_job(id, cx)),
+                        el.child(action_button("cancel", "icons/x.svg", "Cancel").on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| this.request_cancel_job(id, cx)),
                         ))
                     })
                     .when(job.done, |el| {
-                        el.child(btn("clear", "icons/trash.svg", "Remove from list").on_click(
+                        el.child(action_button("clear", "icons/trash.svg", "Remove from list").on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.clear_job(id, cx)),
                         ))
                     }),

@@ -147,6 +147,7 @@ impl Workspace {
         let selected = ix == self.remote_sel;
         let menu_name = remote.name.clone();
         let mut row = list_item(ix, selected, focused)
+            .tooltip(tooltip_text(format!("{} · {}", remote.name, remote.kind)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.load_remote(ix, cx)))
             .on_mouse_down(
                 MouseButton::Right,
@@ -155,9 +156,13 @@ impl Workspace {
                     cx.notify();
                 }),
             )
-            .when(pinned, |r| {
-                r.child(svg().path("icons/pin.svg").size(px(12.0)).flex_shrink_0().text_color(rgb(ACCENT)))
-            })
+            .child(
+                svg()
+                    .path(remote_icon(&remote.kind))
+                    .size(px(15.0))
+                    .flex_shrink_0()
+                    .text_color(rgb(FG_MUTED)),
+            )
             .child(
                 div()
                     .flex_grow(1.0)
@@ -166,7 +171,9 @@ impl Workspace {
                     .text_color(rgb(FG))
                     .child(remote.name.clone()),
             )
-            .child(div().text_xs().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child(remote.kind.clone()));
+            .when(pinned, |r| {
+                r.child(svg().path("icons/pin.svg").size(px(11.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
+            });
 
         // Dropping entries on a remote moves them into that remote's root.
         row = self.entry_drop_target(row, remote.name.clone(), String::new(), cx);
@@ -310,12 +317,15 @@ impl Workspace {
             _ => format!("{count} items"),
         };
 
+        let making_new = self.prompt.as_ref().is_some_and(|p| p.target.is_none());
         let body = if self.open_remote.is_none() {
             centered("Select a remote to browse", FG_SUBTLE).into_any_element()
         } else if matches!(self.dir_query.status(), Status::Loading) {
             loading_view().into_any_element()
         } else if let Status::Error(message) = self.dir_query.status() {
             self.render_error(message.clone(), cx).into_any_element()
+        } else if count == 0 && !making_new {
+            centered("This folder is empty", FG_SUBTLE).into_any_element()
         } else {
             uniform_list(
                 "entries",
@@ -431,7 +441,7 @@ impl Workspace {
         };
 
         // A new-folder edit (no rename target) leads the list.
-        let new_item = self.prompt.as_ref().is_some_and(|p| p.target.is_none()) && self.open_remote.is_some();
+        let new_item = making_new && self.open_remote.is_some();
         let show_table = self.open_remote.is_some()
             && !matches!(self.dir_query.status(), Status::Loading | Status::Error(_));
         // Right-click on empty space opens the background menu.
@@ -458,7 +468,7 @@ impl Workspace {
 
         v_flex()
             .flex_1()
-            .bg(rgb(CANVAS))
+            .bg(rgb(INSET))
             .child(
                 h_flex()
                     .w_full()

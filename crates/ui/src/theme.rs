@@ -21,8 +21,8 @@ pub const SEPARATOR: u32 = 0x2d343d;
 pub const COL_DATE: f32 = 150.0;
 pub const COL_SIZE: f32 = 84.0;
 
-pub const SIDEBAR_W: f32 = 248.0;
-pub const SIDEBAR_MIN: f32 = 180.0;
+pub const SIDEBAR_W: f32 = 204.0;
+pub const SIDEBAR_MIN: f32 = 160.0;
 pub const SIDEBAR_MAX: f32 = 480.0;
 pub const RESIZE_HANDLE_W: f32 = 6.0;
 pub const TITLE_BAR_H: f32 = 36.0;

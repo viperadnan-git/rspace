@@ -16,6 +16,7 @@ use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
     Div, DragMoveEvent, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent,
+    MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
@@ -77,7 +78,11 @@ impl AssetSource for Assets {
         Ok(icons!(
             "folder", "file", "copy", "check", "settings", "alert", "maximize", "minimize", "download",
             "upload", "folder_open", "pin", "chevron_up", "chevron_down", "scissors", "clipboard",
-            "refresh", "activity", "trash", "x", "edit"
+            "refresh", "activity", "trash", "x", "edit", "cloud", "hard_drive", "server", "database",
+            "lock", "image", "drive", "dropbox", "gcs", "b2", "box", "mega", "swift",
+            "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
+            "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
+            "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud"
         ))
     }
 
@@ -247,13 +252,37 @@ struct Location {
     selected: Option<String>,
 }
 
+/// A navigable endpoint of a job (a source or destination): shown by name,
+/// clicked to reveal it in the explorer.
+#[derive(Clone)]
+struct JobTarget {
+    name: SharedString,
+    remote: String,
+    path: String,
+}
+
+impl JobTarget {
+    fn new(name: impl Into<SharedString>, remote: String, path: String) -> Self {
+        Self { name: name.into(), remote, path }
+    }
+}
+
+impl Job {
+    /// Plain-text summary for logs, e.g. `Copy report.pdf → archive`.
+    fn label(&self) -> String {
+        let names: Vec<&str> = self.targets.iter().map(|t| t.name.as_ref()).collect();
+        format!("{} {}", self.verb, names.join(" → "))
+    }
+}
+
 /// A tracked rclone job (download/copy/…). State mirrors rclone's job + stats.
 #[derive(Clone)]
 struct Job {
     id: usize,
     group: String,
     jobid: Option<u64>,
-    title: String,
+    verb: SharedString,
+    targets: Vec<JobTarget>,
     done: bool,
     error: Option<String>,
     bytes: u64,
@@ -404,6 +433,9 @@ impl Workspace {
         focus.focus(window, cx);
         let stale = Duration::from_secs(store.get().refresh_secs.max(1));
         let (sort_field, sort_order) = (store.get().sort_field, store.get().sort_order);
+        let sidebar_width =
+            px(store.get().sidebar_width.unwrap_or(SIDEBAR_W).clamp(SIDEBAR_MIN, SIDEBAR_MAX));
+        let jobs_maximized = store.get().transfers_maximized;
         let this = Self {
             service,
             version,
@@ -414,7 +446,7 @@ impl Workspace {
             remote_sel: 0,
             remote_scroll: UniformListScrollHandle::new(),
             remote_menu: None,
-            sidebar_width: px(SIDEBAR_W),
+            sidebar_width,
             open_remote: None,
             path: String::new(),
             entry_sel: 0,
@@ -438,7 +470,7 @@ impl Workspace {
             jobs: Vec::new(),
             job_seq: 0,
             jobs_open: false,
-            jobs_maximized: false,
+            jobs_maximized,
             rc_health: RcHealth::Unknown,
             clipboard: None,
         };
@@ -499,14 +531,14 @@ impl Workspace {
                                         }
                                         if st.success {
                                             reload = j.reload_on_done;
-                                            tracing::debug!(job = %j.title, elapsed_ms = j.elapsed_ms, "job done");
+                                            tracing::debug!(job = %j.label(), elapsed_ms = j.elapsed_ms, "job done");
                                         } else {
                                             let msg = if st.error.is_empty() {
                                                 "failed".to_string()
                                             } else {
                                                 st.error.clone()
                                             };
-                                            tracing::warn!(job = %j.title, elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
+                                            tracing::warn!(job = %j.label(), elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
                                             j.error = Some(msg);
                                         }
                                     }
@@ -840,6 +872,24 @@ impl Workspace {
         self.selected.clear();
         self.pending_select = want;
         self.load_entries(cx);
+    }
+
+    /// Reveal a job target in the explorer: open its containing directory and
+    /// select the item itself.
+    pub(crate) fn reveal_target(&mut self, target: JobTarget, cx: &mut Context<Self>) {
+        self.jobs_open = false;
+        self.pane = Pane::Explorer;
+        self.restore_remote_sel(Some(target.remote.clone()));
+        let containing_dir = parent_of(&target.path).to_string();
+        self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
+    }
+
+    /// Save the sidebar width if a resize changed it (called on mouse release).
+    fn persist_sidebar_width(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        let width = f32::from(self.sidebar_width);
+        if self.store.get().sidebar_width != Some(width) {
+            self.store.update(|s| s.sidebar_width = Some(width));
+        }
     }
 
     fn remember_sel(&mut self) {
@@ -1264,6 +1314,8 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
+            // Persist the sidebar width once the resize drag releases, not per move.
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_sidebar_width))
             .size_full()
             .bg(rgb(CANVAS))
             .text_color(rgb(FG))

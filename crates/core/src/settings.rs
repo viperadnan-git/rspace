@@ -19,6 +19,10 @@ pub struct Settings {
     pub sort_order: SortOrder,
     /// Pinned remote names, in display order. Pinned remotes lead the sidebar.
     pub pinned: Vec<String>,
+    /// Sidebar width in pixels. `None` = the layout default.
+    pub sidebar_width: Option<f32>,
+    /// Whether the transfers panel was left maximized.
+    pub transfers_maximized: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +33,8 @@ impl Default for Settings {
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
             pinned: Vec::new(),
+            sidebar_width: None,
+            transfers_maximized: false,
         }
     }
 }

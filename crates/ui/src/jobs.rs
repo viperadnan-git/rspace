@@ -36,14 +36,19 @@ impl Workspace {
             if same && is_dir && (dst_dir == path || dst_dir.starts_with(&format!("{path}/"))) {
                 continue;
             }
-            let to = join_path(&dst_dir, &name);
-            let title = format!("{} {name} → {dst_remote}:{to}", if copy { "Copy" } else { "Move" });
-            let command =
-                rclone_cmd(mode.cli_verb(is_dir), &[&format!("{src_remote}:{path}"), &format!("{dst_remote}:{to}")]);
-            let (sr, dr, dd) = (src_remote.clone(), dst_remote.clone(), dst_dir.clone());
+            let dst_path = join_path(&dst_dir, &name);
+            let verb = if copy { "Copy" } else { "Move" };
+            let source = JobTarget::new(name.clone(), src_remote.clone(), path.clone());
+            let destination = JobTarget::new(name, dst_remote.clone(), dst_path.clone());
+            let command = rclone_cmd(
+                mode.cli_verb(is_dir),
+                &[&format!("{src_remote}:{path}"), &format!("{dst_remote}:{dst_path}")],
+            );
+            let (from_remote, into_remote, into_dir) =
+                (src_remote.clone(), dst_remote.clone(), dst_dir.clone());
             let service = self.service.clone();
-            self.spawn_job(title, command, true, cx, move |group| async move {
-                service.paste(sr, path, is_dir, dr, dd, mode, group).await
+            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| async move {
+                service.paste(from_remote, path, is_dir, into_remote, into_dir, mode, group).await
             });
         }
     }
@@ -90,13 +95,16 @@ impl Workspace {
         let to = join_path(parent_of(&entry.path), &new_name);
         self.pending_select = Some(new_name.clone());
         let (from, is_dir) = (entry.path.clone(), entry.is_dir);
+        let source = JobTarget::new(entry.name, remote.clone(), from.clone());
+        let destination = JobTarget::new(new_name, remote.clone(), to.clone());
         let command = rclone_cmd(
             TransferMode::Move.cli_verb(is_dir),
             &[&format!("{remote}:{from}"), &format!("{remote}:{to}")],
         );
         let service = self.service.clone();
         self.spawn_job(
-            format!("Rename {} → {new_name}", entry.name),
+            "Rename",
+            vec![source, destination],
             command,
             true,
             cx,
@@ -110,9 +118,10 @@ impl Workspace {
         };
         let path = join_path(&self.path, &name);
         self.pending_select = Some(name.clone());
+        let folder = JobTarget::new(name, remote.clone(), path.clone());
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
-        self.spawn_job(format!("New folder {name}"), command, true, cx, move |group| async move {
+        self.spawn_job("New folder", vec![folder], command, true, cx, move |group| async move {
             service.mkdir(remote, path, group).await
         });
     }
@@ -137,10 +146,12 @@ impl Workspace {
                         let name = local.rsplit('/').next().unwrap_or(&local).to_string();
                         let (r, d) = (remote.clone(), dst_dir.clone());
                         let dst_path = join_path(&d, &name);
-                        let verb = if is_dir { "copy" } else { "copyto" };
-                        let command = rclone_cmd(verb, &[&local, &format!("{r}:{dst_path}")]);
+                        let cli = if is_dir { "copy" } else { "copyto" };
+                        let command = rclone_cmd(cli, &[&local, &format!("{r}:{dst_path}")]);
+                        // Local source has no remote location; only the destination is navigable.
+                        let destination = JobTarget::new(name, r.clone(), dst_path);
                         let service = this.service.clone();
-                        this.spawn_job(format!("Upload {name}"), command, true, cx, move |group| async move {
+                        this.spawn_job("Upload", vec![destination], command, true, cx, move |group| async move {
                             service.upload(local, r, d, is_dir, group).await
                         });
                     }
@@ -202,10 +213,11 @@ impl Workspace {
     /// Enqueue a single delete as an rclone job.
     fn delete_entry(&mut self, remote: String, entry: Entry, cx: &mut Context<Self>) {
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
+        let item = JobTarget::new(entry.name, remote.clone(), path.clone());
         let command =
             rclone_cmd(if is_dir { "purge" } else { "deletefile" }, &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
-        self.spawn_job(format!("Delete {}", entry.name), command, true, cx, move |group| async move {
+        self.spawn_job("Delete", vec![item], command, true, cx, move |group| async move {
             service.delete(remote, path, is_dir, group).await
         });
     }
@@ -225,10 +237,12 @@ impl Workspace {
         let dest = self.store.get().download_dir();
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
         let local = format!("{}/{}", dest.to_string_lossy(), entry.name);
+        // Local destination has no remote location; only the source is navigable.
+        let source = JobTarget::new(entry.name.clone(), remote.clone(), path.clone());
         let command =
             rclone_cmd(TransferMode::Copy.cli_verb(is_dir), &[&format!("{remote}:{path}"), &local]);
         let service = self.service.clone();
-        self.spawn_job(format!("Download {}", entry.name), command, false, cx, move |group| async move {
+        self.spawn_job("Download", vec![source], command, false, cx, move |group| async move {
             service.download(remote, path, is_dir, dest, group).await
         });
     }
@@ -268,18 +282,19 @@ impl Workspace {
                 TransferMode::Copy => "Copy",
                 TransferMode::Move => "Move",
             };
-            let title = format!("{verb} {} → {dst_remote}:{dst_dir}", entry.name);
             let (src_remote, src_path, is_dir, mode) =
                 (clip.remote.clone(), entry.path.clone(), entry.is_dir, clip.mode);
             let dst_remote = dst_remote.clone();
             let dst_dir = dst_dir.clone();
             let dst_path = join_path(&dst_dir, &entry.name);
+            let source = JobTarget::new(entry.name.clone(), src_remote.clone(), src_path.clone());
+            let destination = JobTarget::new(entry.name.clone(), dst_remote.clone(), dst_path.clone());
             let command = rclone_cmd(
                 mode.cli_verb(is_dir),
                 &[&format!("{src_remote}:{src_path}"), &format!("{dst_remote}:{dst_path}")],
             );
             let service = self.service.clone();
-            self.spawn_job(title, command, true, cx, move |group| async move {
+            self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| async move {
                 service.paste(src_remote, src_path, is_dir, dst_remote, dst_dir, mode, group).await
             });
         }
@@ -294,7 +309,8 @@ impl Workspace {
     /// equivalent rclone CLI shown by the row's copy button.
     fn spawn_job<F, Fut>(
         &mut self,
-        title: String,
+        verb: impl Into<SharedString>,
+        targets: Vec<JobTarget>,
         command: String,
         reload_on_done: bool,
         cx: &mut Context<Self>,
@@ -310,7 +326,8 @@ impl Workspace {
             id,
             group: group.clone(),
             jobid: None,
-            title,
+            verb: verb.into(),
+            targets,
             done: false,
             error: None,
             bytes: 0,
@@ -355,6 +372,21 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Confirm, then cancel a running job (reuses [`ask_confirm`]).
+    pub(crate) fn request_cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
+        let Some(label) = self.jobs.iter().find(|j| j.id == id).map(|j| j.label()) else {
+            return;
+        };
+        self.ask_confirm(
+            "Cancel task?",
+            format!("Stop \u{201c}{label}\u{201d}? Work already done is kept."),
+            "Cancel task",
+            true,
+            move |this, cx| this.cancel_job(id, cx),
+            cx,
+        );
     }
 
     pub(crate) fn cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
