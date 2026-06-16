@@ -1,6 +1,5 @@
-//! A confirmation modal entity: title/message/buttons that emit a choice. The
-//! action to run on accept lives in the opener's subscription, so the modal
-//! itself stays purely presentational.
+//! A confirmation modal entity that emits a choice; the accept action lives in
+//! the opener's subscription, keeping the modal presentational.
 
 use gpui::{EventEmitter, FocusHandle, Focusable};
 

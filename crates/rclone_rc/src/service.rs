@@ -144,6 +144,11 @@ impl Service {
         self.run(move |c| async move { c.config_delete(&name).await }).await
     }
 
+    /// Stop rclone's local OAuth webserver (best-effort; errors if none running).
+    pub async fn config_oauth_stop(&self) -> Result<(), ServiceError> {
+        self.run(|c| async move { c.config_oauth_stop().await }).await
+    }
+
     /// Configurable backends and their option schemas.
     pub async fn config_providers(&self) -> Result<Vec<Provider>, ServiceError> {
         self.run(|c| async move { c.config_providers().await }).await

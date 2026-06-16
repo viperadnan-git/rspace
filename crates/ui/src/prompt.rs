@@ -1,6 +1,5 @@
-//! An inline text-edit entity for the explorer list (new folder / rename). It
-//! emits the entered text on submit; the action to run lives in the opener's
-//! subscription, keeping the entity presentational.
+//! An inline text-edit entity for the explorer list (new folder / rename) that
+//! emits the entered text; the action lives in the opener's subscription.
 
 use gpui::{Entity, EventEmitter};
 

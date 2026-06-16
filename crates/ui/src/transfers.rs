@@ -1,7 +1,6 @@
-//! The transfer queue: a [`Jobs`] entity owning tracked rclone jobs (copy /
-//! move / delete / download / upload), their submission, polling, and
-//! lifecycle. File operations live on [`Workspace`] and hand work here via
-//! [`Jobs::spawn_job`].
+//! The transfer queue: a [`Jobs`] entity owning tracked rclone jobs, their
+//! submission, polling, and lifecycle. File operations live on [`Workspace`]
+//! and enqueue here via [`Jobs::spawn_job`].
 
 use std::future::Future;
 use std::pin::Pin;
@@ -168,9 +167,8 @@ impl Jobs {
         .detach();
     }
 
-    /// Push a tracked job; `run(group)` returns the submission future. `run` is
-    /// `Fn` (re-runnable) so the job can be retried; it must clone its captures
-    /// per call. `command` is the equivalent rclone CLI shown by the copy button.
+    /// Push a tracked job. `run` is `Fn` (not `FnOnce`) so a failed job can be
+    /// retried; it must clone its captures per call.
     pub(crate) fn spawn_job<F, Fut>(
         &mut self,
         verb: impl Into<SharedString>,

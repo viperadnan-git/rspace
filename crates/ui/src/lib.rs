@@ -985,7 +985,7 @@ impl Workspace {
             self.jobs_open = false;
             self.confirm = None;
             self.prompt = None;
-            self.remote_config = None;
+            self.close_remote_config(cx);
             self.close_menus();
             cx.notify();
         } else if self.pane == Pane::Explorer && self.selected.len() > 1 {
@@ -1370,10 +1370,7 @@ impl Render for Workspace {
             .when_some(self.remote_config.clone(), |el, modal| {
                 el.child(self.modal_overlay(
                     false,
-                    |this, cx| {
-                        this.remote_config = None;
-                        cx.notify();
-                    },
+                    |this, cx| this.close_remote_config(cx),
                     modal,
                     cx,
                 ))

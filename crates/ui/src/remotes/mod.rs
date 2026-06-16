@@ -1,8 +1,7 @@
 //! Add / edit a remote as a self-contained modal entity. The form is generated
 //! from `config/providers` and submitted via rclone's interactive
 //! `config/create`/`config/update` state machine — no per-backend code, so any
-//! current or future backend works. Text fields are reusable [`TextInput`]
-//! entities; bool fields toggle a value directly.
+//! current or future backend works.
 
 use std::collections::HashMap;
 
@@ -385,6 +384,11 @@ impl RemoteConfigModal {
         cx.emit(RemoteConfigEvent::Dismiss);
     }
 
+    /// In flight: an OAuth backend may have its auth webserver up (stop it on close).
+    pub(crate) fn is_busy(&self) -> bool {
+        self.phase == Phase::Busy
+    }
+
     /// Focus the phase's primary input once after opening or advancing a step.
     fn focus_primary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.autofocus {
@@ -439,12 +443,24 @@ impl Workspace {
                 this.remote_config = None;
                 this.load_remotes(cx);
             }
-            RemoteConfigEvent::Dismiss => {
-                this.remote_config = None;
-                cx.notify();
-            }
+            RemoteConfigEvent::Dismiss => this.close_remote_config(cx),
         }));
         self.remote_config = Some(modal);
+        cx.notify();
+    }
+
+    /// Close the modal. If a config step was in flight, also stop rclone's OAuth
+    /// webserver so an abandoned interactive auth doesn't keep its port bound.
+    pub(crate) fn close_remote_config(&mut self, cx: &mut Context<Self>) {
+        if let Some(modal) = self.remote_config.take() {
+            if modal.read(cx).is_busy() {
+                let service = self.service.clone();
+                cx.spawn(async move |_, _| {
+                    let _ = service.config_oauth_stop().await;
+                })
+                .detach();
+            }
+        }
         cx.notify();
     }
 }

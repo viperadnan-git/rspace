@@ -257,6 +257,17 @@ impl RcClient {
         Ok(())
     }
 
+    /// Stop rclone's local OAuth callback webserver (`config/oauthstop`).
+    /// Best-effort: errors when no auth runs or the method is absent (older
+    /// rclone), so it logs at debug via `call_inner` instead of `call`'s warn.
+    pub async fn config_oauth_stop(&self) -> Result<(), RcError> {
+        let result = self.call_inner::<Value>("config/oauthstop", &json!({})).await;
+        if let Err(e) = &result {
+            tracing::debug!(error = %e, "config/oauthstop best-effort failed");
+        }
+        result.map(|_| ())
+    }
+
     /// All configurable backends and their option schemas (`config/providers`).
     pub async fn config_providers(&self) -> Result<Vec<Provider>, RcError> {
         #[derive(Deserialize)]
