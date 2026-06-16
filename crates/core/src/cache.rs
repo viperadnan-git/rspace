@@ -20,13 +20,16 @@ struct Stamped<V> {
 /// A stale-while-revalidate cache: stores values with their fetch time and
 /// classifies a key as fresh / stale / miss against `stale_after`. Owns only
 /// storage and policy; fetching and applying results is the caller's job.
+///
+/// `stale_after` of `None` disables revalidation: cached entries never go stale,
+/// so a key is fetched at most once (good for short-lived, single-session uses).
 pub struct QueryCache<K, V> {
-    stale_after: Duration,
+    stale_after: Option<Duration>,
     entries: HashMap<K, Stamped<V>>,
 }
 
 impl<K: Eq + Hash, V> QueryCache<K, V> {
-    pub fn new(stale_after: Duration) -> Self {
+    pub fn new(stale_after: Option<Duration>) -> Self {
         Self { stale_after, entries: HashMap::new() }
     }
 
@@ -34,8 +37,10 @@ impl<K: Eq + Hash, V> QueryCache<K, V> {
     pub fn lookup(&self, key: &K) -> Lookup<'_, V> {
         match self.entries.get(key) {
             None => Lookup::Miss,
-            Some(s) if s.fetched_at.elapsed() < self.stale_after => Lookup::Fresh(&s.value),
-            Some(s) => Lookup::Stale(&s.value),
+            Some(s) => match self.stale_after {
+                Some(after) if s.fetched_at.elapsed() >= after => Lookup::Stale(&s.value),
+                _ => Lookup::Fresh(&s.value),
+            },
         }
     }
 
@@ -53,7 +58,7 @@ impl<K: Eq + Hash, V> QueryCache<K, V> {
         self.entries.get_mut(key).map(|s| &mut s.value)
     }
 
-    pub fn set_stale_after(&mut self, stale_after: Duration) {
+    pub fn set_stale_after(&mut self, stale_after: Option<Duration>) {
         self.stale_after = stale_after;
     }
 
@@ -72,13 +77,13 @@ mod tests {
 
     #[test]
     fn miss_when_absent() {
-        let cache: QueryCache<u32, i32> = QueryCache::new(Duration::from_secs(60));
+        let cache: QueryCache<u32, i32> = QueryCache::new(Some(Duration::from_secs(60)));
         assert!(matches!(cache.lookup(&1), Lookup::Miss));
     }
 
     #[test]
     fn fresh_within_window() {
-        let mut cache = QueryCache::new(Duration::from_secs(3600));
+        let mut cache = QueryCache::new(Some(Duration::from_secs(3600)));
         cache.insert(1, vec!["a"]);
         assert!(matches!(cache.lookup(&1), Lookup::Fresh(_)));
     }
@@ -86,14 +91,22 @@ mod tests {
     #[test]
     fn stale_past_window() {
         // Zero window: anything already inserted is immediately stale.
-        let mut cache = QueryCache::new(Duration::ZERO);
+        let mut cache = QueryCache::new(Some(Duration::ZERO));
         cache.insert(1, 10);
         assert!(matches!(cache.lookup(&1), Lookup::Stale(_)));
     }
 
     #[test]
+    fn never_stale_when_disabled() {
+        // No window: cached entries stay fresh, so a key is fetched at most once.
+        let mut cache = QueryCache::new(None);
+        cache.insert(1, 10);
+        assert!(matches!(cache.lookup(&1), Lookup::Fresh(_)));
+    }
+
+    #[test]
     fn invalidate_then_miss() {
-        let mut cache = QueryCache::new(Duration::from_secs(60));
+        let mut cache = QueryCache::new(Some(Duration::from_secs(60)));
         cache.insert(1, 1);
         cache.invalidate(&1);
         assert!(matches!(cache.lookup(&1), Lookup::Miss));

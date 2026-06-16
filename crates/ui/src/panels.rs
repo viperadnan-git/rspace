@@ -303,6 +303,7 @@ impl Workspace {
             .child(self.settings_info());
         self.modal_overlay(
             true,
+            false,
             |this, cx| {
                 this.settings_open = false;
                 cx.notify();
@@ -392,7 +393,10 @@ impl Workspace {
             .w_full()
             .flex_shrink_0()
             .justify_between()
-            .px_3()
+            // Left holds the daemon icon button — tighten so it hugs the corner
+            // (Zed-style), matching the vertical inset; keep the right text padded.
+            .pl_1()
+            .pr_3()
             .py_1()
             .border_t_1()
             .border_color(rgb(BORDER_MUTED))
@@ -563,7 +567,7 @@ impl Workspace {
 
     /// Stop and respawn `rcd`, then refresh. The swap-able client means every
     /// in-flight and future call picks up the new endpoint automatically.
-    fn restart_daemon(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn restart_daemon(&mut self, cx: &mut Context<Self>) {
         self.rc_health = RcHealth::Restarting;
         let service = self.service.clone();
         cx.spawn(async move |this, cx| {

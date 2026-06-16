@@ -278,7 +278,7 @@ impl Workspace {
         match width {
             // Inset content so it doesn't sit on the resize divider (Finder-style).
             Some(w) => base.px_2().w(w).flex_shrink_0(),
-            None => base.flex_grow(1.0).min_w(px(0.0)),
+            None => base.pr_2().flex_grow(1.0).min_w(px(0.0)),
         }
     }
 
@@ -317,7 +317,6 @@ impl Workspace {
             .w_full()
             .px_3()
             .py_1()
-            .gap_2()
             .text_xs()
             .text_color(rgb(FG_SUBTLE))
             .border_b_1()
@@ -388,6 +387,9 @@ impl Workspace {
                             };
                             let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
+                                // Flush columns (no inter-column gap) so cells line up
+                                // with the header and the resize dividers.
+                                .gap_0()
                                 .border_b_1()
                                 .border_color(rgb(SEPARATOR))
                                 .on_drag(drag, |d, _, _, app| {
@@ -442,6 +444,7 @@ impl Workspace {
                                         .gap_2()
                                         .flex_grow(1.0)
                                         .min_w(px(0.0))
+                                        .pr_2()
                                         .tooltip(tooltip_text(name.clone()))
                                         .when(is_dir, |r| r.child(file_icon(true)))
                                         .child(div().truncate().child(name)),
@@ -597,6 +600,7 @@ impl Workspace {
     pub(crate) fn modal_overlay(
         &self,
         deferred_layer: bool,
+        align_top: bool,
         dismiss: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         card: impl IntoElement,
         cx: &mut Context<Self>,
@@ -608,7 +612,8 @@ impl Workspace {
             .size_full()
             .flex()
             .justify_center()
-            .items_center()
+            // Pickers anchor near the top (Zed-style); dialogs center vertically.
+            .map(|el| if align_top { el.items_start().pt(px(80.0)) } else { el.items_center() })
             .bg(rgba(0x0000_0099))
             .on_mouse_down(
                 MouseButton::Left,

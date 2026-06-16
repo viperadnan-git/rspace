@@ -33,7 +33,9 @@ where
     K: Eq + Hash + Clone + 'static,
     V: Clone + 'static,
 {
-    pub fn new(stale_after: Duration) -> Self {
+    /// `stale_after` of `None` disables background revalidation — each key is
+    /// fetched at most once (for short-lived views like the command palette).
+    pub fn new(stale_after: Option<Duration>) -> Self {
         Self {
             cache: QueryCache::new(stale_after),
             current: None,
@@ -55,7 +57,7 @@ where
         self.current.as_ref().is_some_and(|k| self.in_flight.contains(k))
     }
 
-    pub fn set_stale_after(&mut self, stale_after: Duration) {
+    pub fn set_stale_after(&mut self, stale_after: Option<Duration>) {
         self.cache.set_stale_after(stale_after);
     }
 

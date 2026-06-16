@@ -1,12 +1,14 @@
 //! Stateless presentation helpers shared across the views.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
     div, img, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView,
-    App, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Image, MouseButton,
-    MouseDownEvent, ObjectFit, Pixels, Render, SharedString, Stateful, Transformation, Window,
+    App, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, HighlightStyle, Image,
+    MouseButton, MouseDownEvent, ObjectFit, Pixels, Render, SharedString, Stateful, StyledText,
+    Transformation, Window,
 };
 use rspace_core::{SortField, SortOrder};
 use rspace_rclone_rc::Entry;
@@ -115,6 +117,22 @@ pub fn list_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     }
 }
 
+/// A full-width hairline separator.
+pub fn divider() -> impl IntoElement {
+    div().h(px(1.0)).w_full().bg(rgb(BORDER_MUTED))
+}
+
+/// A picker/command-menu row: Zed-style inset selection pill (rounded, off the
+/// card edge). Caller fills the content (label left, key binding right).
+pub fn picker_item(id: usize, selected: bool) -> Stateful<Div> {
+    let base = h_flex().id(id).w_full().justify_between().gap_2().px(px(6.0)).py_1().rounded_md().cursor_pointer();
+    if selected {
+        base.bg(rgba(SELECT))
+    } else {
+        base.hover(|s| s.bg(rgba(OVERLAY)))
+    }
+}
+
 /// A centered image scaled to fit its box: shown at natural size, scaled *down*
 /// (never up) to fit, preserving aspect, and clipped so it can't overflow. The
 /// box must be size-bounded by the caller (e.g. `flex_1().min_h_0()`).
@@ -135,6 +153,48 @@ pub fn image_view(image: Arc<Image>) -> impl IntoElement {
                 .object_fit(ObjectFit::Contain)
                 .with_fallback(|| centered("Can't preview this image", FG_SUBTLE).into_any_element()),
         )
+}
+
+/// A single-line label with fuzzy-matched chars (by char index, ascending)
+/// emphasized in `hl`; the rest in `base`. One text element so it truncates with
+/// an ellipsis when the row is too narrow (grows/shrinks in its flex parent).
+pub fn highlighted_label(text: &str, positions: &[usize], base: u32, hl: u32) -> impl IntoElement {
+    let mut styled = StyledText::new(text.to_string());
+    // Skip the char→byte mapping entirely for the common unmatched case.
+    if !positions.is_empty() {
+        let byte_of: Vec<usize> = text.char_indices().map(|(b, _)| b).chain([text.len()]).collect();
+        let style = HighlightStyle {
+            color: Some(rgb(hl).into()),
+            font_weight: Some(FontWeight::MEDIUM),
+            ..Default::default()
+        };
+        // Char indices → byte ranges, merging consecutive matched chars into runs.
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+        for &ci in positions {
+            if ci + 1 >= byte_of.len() {
+                continue;
+            }
+            let (start, end) = (byte_of[ci], byte_of[ci + 1]);
+            match highlights.last_mut() {
+                Some((r, _)) if r.end == start => r.end = end,
+                _ => highlights.push((start..end, style)),
+            }
+        }
+        styled = styled.with_highlights(highlights);
+    }
+    div().flex_1().min_w(px(0.0)).truncate().text_color(rgb(base)).child(styled)
+}
+
+/// A keyboard-shortcut chip (e.g. the binding shown on a command row).
+pub fn key_binding(keys: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .flex_shrink_0()
+        .px(px(6.0))
+        .rounded_sm()
+        .bg(rgba(OVERLAY))
+        .text_xs()
+        .text_color(rgb(FG_SUBTLE))
+        .child(keys.into())
 }
 
 /// A square icon button: muted svg glyph, rounded hover background.
@@ -383,13 +443,8 @@ pub fn parent_of(path: &str) -> &str {
 }
 
 /// Join `name` under `dir`, avoiding a leading slash at the root.
-pub fn join_path(dir: &str, name: &str) -> String {
-    if dir.is_empty() {
-        name.to_string()
-    } else {
-        format!("{dir}/{name}")
-    }
-}
+// Single source in rclone_rc::ops (the lower crate) so path-joining can't diverge.
+pub use rspace_rclone_rc::join as join_path;
 
 /// Best-effort `Mon D, YYYY  HH:MM` from rclone's RFC3339 mod time (UTC).
 pub fn human_date(rfc3339: &str) -> String {

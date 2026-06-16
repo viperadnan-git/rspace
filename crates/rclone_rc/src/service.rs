@@ -26,6 +26,8 @@ pub enum ServiceError {
     Cancelled,
     #[error("daemon restart: {0}")]
     Daemon(String),
+    #[error("invalid arguments for {0}")]
+    InvalidArgs(&'static str),
 }
 
 /// Whether a paste keeps the source (copy) or removes it (move/cut).
@@ -51,36 +53,20 @@ impl TransferMode {
         }
     }
 
-    /// rclone CLI subcommand equivalent, for displaying the operation.
-    pub fn cli_verb(self, is_dir: bool) -> &'static str {
-        match (self, is_dir) {
-            (Self::Copy, true) => "copy",
-            (Self::Copy, false) => "copyto",
-            (Self::Move, true) => "move",
-            (Self::Move, false) => "moveto",
+    fn operation(self) -> Operation {
+        match self {
+            Self::Copy => Operation::Copy,
+            Self::Move => Operation::Move,
         }
     }
-}
 
-fn basename(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
-}
-
-/// `(parent, name)` for a `/`-separated path; parent is empty at the root.
-fn split_parent(path: &str) -> (String, String) {
-    match path.rsplit_once('/') {
-        Some((p, n)) => (p.to_string(), n.to_string()),
-        None => (String::new(), path.to_string()),
+    /// rclone CLI subcommand equivalent, for displaying the operation.
+    pub fn cli_verb(self, is_dir: bool) -> &'static str {
+        self.operation().cli_verb(is_dir)
     }
 }
 
-fn join(dir: &str, name: &str) -> String {
-    if dir.is_empty() {
-        name.to_string()
-    } else {
-        format!("{dir}/{name}")
-    }
-}
+use crate::ops::{basename, join, split_parent, ArgValue, Operation};
 
 /// Bridge between the UI executor and the rclone daemon: RC calls run on the
 /// tokio runtime, results return over a oneshot the UI awaits. Cloneable.
@@ -255,11 +241,21 @@ impl Service {
     }
 
     /// Copy or move `src_remote:src_path` into the `dst_remote:dst_dir` directory
-    /// as an async job (cross-remote paste).
-    ///
-    /// Uses literal-path operations (`copyfile`/`movefile` for files, `sync` for
-    /// dirs) so names with glob metacharacters (`[`, `*`, `?`, …) transfer
-    /// correctly — an include-filter approach silently matches nothing for them.
+    /// Build and submit a registry [`Operation`] from resolved `args` — the
+    /// single dispatch + validation point shared by the context menu and palette.
+    /// Literal-path methods (`copyfile`/`movefile`) handle names with glob
+    /// metacharacters that an include-filter would silently miss.
+    pub async fn run_operation(
+        &self,
+        op: Operation,
+        args: Vec<ArgValue>,
+        group: String,
+    ) -> Result<u64, ServiceError> {
+        let (method, params) = op.build(&args).ok_or(ServiceError::InvalidArgs(op.label()))?;
+        self.submit(method, params, group).await
+    }
+
+    /// Copy/move `src_remote:src_path` into the `dst_remote:dst_dir` directory.
     pub async fn paste(
         &self,
         src_remote: String,
@@ -270,63 +266,32 @@ impl Service {
         mode: TransferMode,
         group: String,
     ) -> Result<u64, ServiceError> {
-        let name = basename(&src_path);
-        let dst_path = join(&dst_dir, &name);
-        let (method, params) = if is_dir {
-            (
-                mode.dir_method(),
-                serde_json::json!({
-                    "srcFs": format!("{src_remote}:{src_path}"),
-                    "dstFs": format!("{dst_remote}:{dst_path}"),
-                }),
-            )
-        } else {
-            (
-                mode.file_method(),
-                serde_json::json!({
-                    "srcFs": format!("{src_remote}:"),
-                    "srcRemote": src_path,
-                    "dstFs": format!("{dst_remote}:"),
-                    "dstRemote": dst_path,
-                }),
-            )
-        };
-        self.submit(method, params, group).await
+        let args = vec![
+            ArgValue::Path { remote: src_remote, path: src_path, is_dir },
+            ArgValue::Path { remote: dst_remote, path: dst_dir, is_dir: true },
+        ];
+        self.run_operation(mode.operation(), args, group).await
     }
 
-    /// Move `remote:from` to `remote:to` within the same remote (rename) as an
+    /// Rename `remote:from` to `new_name` within its current directory, as an
     /// async job.
     pub async fn move_to(
         &self,
         remote: String,
         from: String,
-        to: String,
+        new_name: String,
         is_dir: bool,
         group: String,
     ) -> Result<u64, ServiceError> {
-        let (method, params) = if is_dir {
-            (
-                "sync/move",
-                serde_json::json!({ "srcFs": format!("{remote}:{from}"), "dstFs": format!("{remote}:{to}") }),
-            )
-        } else {
-            (
-                "operations/movefile",
-                serde_json::json!({
-                    "srcFs": format!("{remote}:"),
-                    "srcRemote": from,
-                    "dstFs": format!("{remote}:"),
-                    "dstRemote": to,
-                }),
-            )
-        };
-        self.submit(method, params, group).await
+        let args = vec![ArgValue::Path { remote, path: from, is_dir }, ArgValue::Name(new_name)];
+        self.run_operation(Operation::Rename, args, group).await
     }
 
     /// Create directory `remote:path` as an async job.
     pub async fn mkdir(&self, remote: String, path: String, group: String) -> Result<u64, ServiceError> {
-        self.submit("operations/mkdir", serde_json::json!({ "fs": format!("{remote}:"), "remote": path }), group)
-            .await
+        let (parent, name) = split_parent(&path);
+        let args = vec![ArgValue::Path { remote, path: parent, is_dir: true }, ArgValue::Name(name)];
+        self.run_operation(Operation::MakeDir, args, group).await
     }
 
     /// Upload a local file or directory `local` into `remote:dst_dir` as an
@@ -372,6 +337,15 @@ impl Service {
         self.run(move |c| async move { c.fetch_object(&remote, &path, max_bytes).await }).await
     }
 
+    /// Call a read-only RC method and return its raw JSON (for info ops).
+    pub async fn query(
+        &self,
+        method: &'static str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ServiceError> {
+        self.run(move |c| async move { c.call::<serde_json::Value>(method, &params).await }).await
+    }
+
     /// Submit an async job in stats group `group`, returning the job id.
     async fn submit(
         &self,
@@ -392,8 +366,8 @@ impl Service {
         is_dir: bool,
         group: String,
     ) -> Result<u64, ServiceError> {
-        let method = if is_dir { "operations/purge" } else { "operations/deletefile" };
-        self.submit(method, serde_json::json!({ "fs": format!("{remote}:"), "remote": path }), group).await
+        let args = vec![ArgValue::Path { remote, path, is_dir }];
+        self.run_operation(Operation::Delete, args, group).await
     }
 
     pub async fn job_status(&self, jobid: u64) -> Result<JobStatus, ServiceError> {

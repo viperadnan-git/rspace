@@ -63,10 +63,19 @@ pub(crate) enum PreviewState {
     Error(SharedString),
 }
 
+/// On-demand directory size (rclone walks the tree, so it's opt-in per dir).
+#[derive(Clone)]
+pub(crate) enum DirSize {
+    Idle,
+    Loading,
+    Done(String),
+}
+
 /// Preview bound to the entry at `path` (selection identity).
 pub(crate) struct Preview {
     pub path: String,
     pub state: PreviewState,
+    pub dir_size: DirSize,
 }
 
 impl Workspace {
@@ -94,7 +103,7 @@ impl Workspace {
         }
         let key = format!("{remote}:{}", entry.path);
         if let Some(state) = self.preview_cache_get(&key) {
-            self.preview = Some(Preview { path: entry.path, state });
+            self.preview = Some(Preview { path: entry.path, state, dir_size: DirSize::Idle });
             return;
         }
         let state = match classify(&entry.name) {
@@ -106,7 +115,39 @@ impl Workspace {
                 PreviewState::Loading
             }
         };
-        self.preview = Some(Preview { path: entry.path, state });
+        self.preview = Some(Preview { path: entry.path, state, dir_size: DirSize::Idle });
+    }
+
+    /// Walk the selected directory to total its size (rclone `operations/size`),
+    /// shown inline in the info card. Opt-in since it can be expensive.
+    fn calculate_dir_size(&mut self, cx: &mut Context<Self>) {
+        let (Some(remote), Some(preview)) = (self.open_remote.clone(), self.preview.as_mut()) else {
+            return;
+        };
+        let path = preview.path.clone();
+        preview.dir_size = DirSize::Loading;
+        cx.notify();
+        let args = vec![ArgValue::Path { remote, path: path.clone(), is_dir: true }];
+        let Some((method, params)) = InfoOp::Size.build(&args) else {
+            return;
+        };
+        let service = self.service.clone();
+        cx.spawn(async move |this, cx| {
+            let res = service.query(method, params).await;
+            this.update(cx, |this, cx| {
+                if let Some(preview) = this.preview.as_mut().filter(|p| p.path == path) {
+                    preview.dir_size = match res.ok().and_then(|v| InfoOp::Size.parse(&v)) {
+                        Some(InfoResult::Size { count, bytes }) => {
+                            DirSize::Done(format!("{count} items \u{b7} {}", human_size(bytes)))
+                        }
+                        _ => DirSize::Done("\u{2014}".into()),
+                    };
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn spawn_preview_fetch(
@@ -147,7 +188,7 @@ impl Workspace {
         };
         self.preview_cache_put(key, state.clone());
         if self.preview_open && self.preview.as_ref().is_some_and(|p| p.path == path) {
-            self.preview = Some(Preview { path, state });
+            self.preview = Some(Preview { path, state, dir_size: DirSize::Idle });
             cx.notify();
         }
     }
@@ -210,7 +251,7 @@ impl Workspace {
             .border_color(rgb(BORDER_MUTED))
             .child(self.resize_handle("preview-resize", ResizeTarget::Preview, PREVIEW_W, cx))
             .child(content)
-            .when_some(entry, |el, entry| el.child(self.preview_info(&entry)))
+            .when_some(entry, |el, entry| el.child(self.preview_info(&entry, cx)))
     }
 
     /// A big type glyph, shown when there's nothing to render (dir / unsupported).
@@ -221,8 +262,9 @@ impl Workspace {
         )
     }
 
-    /// Metadata footer: name, size · type, modified, full path.
-    fn preview_info(&self, entry: &Entry) -> impl IntoElement {
+    /// Metadata footer: name, size · type, modified, and (for dirs) an on-demand
+    /// size row.
+    fn preview_info(&self, entry: &Entry, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = if entry.is_dir { "Folder".to_string() } else { file_kind(&entry.name) };
         let size = if entry.is_dir { String::new() } else { human_size(entry.size) };
         let meta = match (size.is_empty(), human_date(&entry.mod_time)) {
@@ -241,5 +283,30 @@ impl Workspace {
             .when(!meta.is_empty(), |el| {
                 el.child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(meta))
             })
+            .when(entry.is_dir, |el| el.child(self.dir_size_row(cx)))
+    }
+
+    /// The dir-size affordance: a "Calculate size" link, a spinner while walking,
+    /// or the result.
+    fn dir_size_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.preview.as_ref().map(|p| &p.dir_size) {
+            Some(DirSize::Done(text)) => {
+                div().text_xs().text_color(rgb(FG_SUBTLE)).child(text.clone()).into_any_element()
+            }
+            Some(DirSize::Loading) => h_flex()
+                .gap_2()
+                .child(spinner("dir-size", px(12.0), FG_MUTED))
+                .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Calculating…"))
+                .into_any_element(),
+            _ => div()
+                .id("calc-size")
+                .text_xs()
+                .text_color(rgb(ACCENT))
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(ACCENT_HOVER)))
+                .child("Calculate size")
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.calculate_dir_size(cx)))
+                .into_any_element(),
+        }
     }
 }

@@ -1,9 +1,12 @@
 //! gpui desktop shell: a two-pane remote browser.
 
+mod command_palette;
 mod confirm;
+mod fuzzy;
 mod jobs;
 mod menus;
 mod panels;
+mod picker;
 mod preview;
 mod prompt;
 mod query;
@@ -22,19 +25,22 @@ use std::time::Duration;
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
-    Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding, Menu, MenuItem, MouseButton,
-    MouseDownEvent, MouseUpEvent,
+    DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding, Menu, MenuItem,
+    MouseButton, MouseDownEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use rspace_core::{Paths, SettingsStore, SortField, SortOrder};
 use rspace_rclone_rc::{
-    Entry, Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
+    ArgKind, ArgSpec, ArgValue, Entry, InfoOp, InfoResult, Operation, Provider, RemoteInfo,
+    RemoteOption, Service, ServiceError, TransferMode,
 };
 
 use preview::{Preview, PreviewState};
+use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
+use picker::Picker;
 use prompt::PromptModal;
 use toast::Toast;
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
@@ -77,7 +83,12 @@ actions!(
         FocusNext,
         FocusPrev,
         PromptSubmit,
-        PromptCancel
+        PromptCancel,
+        TogglePalette,
+        AddRemote,
+        OpenSettings,
+        RestartDaemon,
+        ToggleTransfers
     ]
 );
 
@@ -132,6 +143,7 @@ pub fn run(startup: Startup) {
     application().with_assets(Assets).run(move |cx: &mut App| {
         bind_keys(cx);
         text_input::bind_keys(cx);
+        picker::bind_keys(cx);
         cx.set_menus(vec![
             Menu::new("rspace").items([MenuItem::action("Quit rspace", Quit)]),
             Menu::new("Window").items([
@@ -182,9 +194,10 @@ pub fn run(startup: Startup) {
 
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        // macOS native chord + the F11 convention used on Linux/Windows.
         KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
+        KeyBinding::new("f11", ToggleFullscreen, None),
         // Navigation/mutation are inert while a confirm dialog owns the keyboard.
         KeyBinding::new("down", SelectNext, Some("Workspace && !modal")),
         KeyBinding::new("j", SelectNext, Some("Workspace && !modal")),
@@ -195,21 +208,25 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal")),
         KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal")),
         KeyBinding::new("shift-k", SelectPrev, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-a", SelectAll, Some("Workspace && !modal")),
         KeyBinding::new("enter", Open, Some("Workspace && !modal")),
         KeyBinding::new("tab", TogglePane, Some("Workspace && !modal")),
         KeyBinding::new("backspace", GoUp, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-[", GoBack, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-]", GoForward, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-r", Reload, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-[", GoBack, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-]", GoForward, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-r", Reload, Some("Workspace && !modal")),
+        // Toggle (not !modal) so it can also close itself; the handler ignores
+        // it while another modal is open.
+        // The modern "cmdk" command-menu shortcut: cmd-k on macOS, ctrl-k elsewhere.
+        KeyBinding::new("secondary-k", TogglePalette, Some("Workspace")),
         KeyBinding::new("left", FocusSidebar, Some("Workspace && !modal")),
         KeyBinding::new("right", FocusExplorer, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-c", CopyEntry, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-x", CutEntry, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-v", PasteEntry, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-backspace", DeleteEntry, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-shift-n", NewFolder, Some("Workspace && !modal")),
-        KeyBinding::new("cmd-u", NewFile, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-c", CopyEntry, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-x", CutEntry, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-v", PasteEntry, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-backspace", DeleteEntry, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-shift-n", NewFolder, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-u", NewFile, Some("Workspace && !modal")),
         KeyBinding::new("f2", Rename, Some("Workspace && !modal")),
         KeyBinding::new("space", TogglePreview, Some("Workspace && !modal")),
         KeyBinding::new("escape", CloseSettings, Some("Workspace")),
@@ -230,6 +247,9 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", PromptSubmit, Some("Prompt")),
         KeyBinding::new("escape", PromptCancel, Some("Prompt")),
     ]);
+    // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns it.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([KeyBinding::new("cmd-m", Minimize, None)]);
 }
 
 struct StatusScreen {
@@ -421,6 +441,9 @@ struct Workspace {
     bg_menu: Option<Point<Pixels>>,
     /// Whether the rcd status popover (status-bar daemon button) is open.
     rc_popover_open: bool,
+    /// Open command palette (⌘⇧P).
+    command_palette: Option<Entity<Picker<CommandPaletteDelegate>>>,
+    command_palette_sub: Option<gpui::Subscription>,
     /// Pending confirmation modal (destructive or irreversible actions).
     confirm: Option<Entity<ConfirmModal>>,
     /// Subscription to the open confirm modal's accept/dismiss events.
@@ -493,7 +516,7 @@ impl Workspace {
             sel_anchor: 0,
             entry_scroll: UniformListScrollHandle::new(),
             pending_select: None,
-            dir_query: Query::new(stale),
+            dir_query: Query::new(Some(stale)),
             history: Vec::new(),
             history_pos: 0,
             copied: None,
@@ -505,6 +528,8 @@ impl Workspace {
             context: None,
             bg_menu: None,
             rc_popover_open: false,
+            command_palette: None,
+            command_palette_sub: None,
             confirm: None,
             confirm_sub: None,
             prompt: None,
@@ -616,6 +641,60 @@ impl Workspace {
             sort_entries(&mut entries, field, order);
             Ok::<_, ServiceError>(entries)
         });
+    }
+
+    /// Open the command palette, or close it if already open. Ignored while
+    /// another modal is up (don't stack modals).
+    fn toggle_palette(&mut self, _: &TogglePalette, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.confirm.is_some() || self.prompt.is_some() || self.remote_config.is_some() {
+            return;
+        }
+        let previous_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
+        let workspace = cx.entity().downgrade();
+        let service = self.service.clone();
+        // Pinned-first (pin order preserved), matching the sidebar; the palette's
+        // stable fuzzy sort keeps this order on empty query and score ties.
+        let remotes = self.ordered_remotes();
+        let current_remote = self.open_remote.clone();
+        let palette = cx.new(|cx| {
+            let delegate = CommandPaletteDelegate::new(
+                previous_focus,
+                workspace,
+                service,
+                remotes,
+                current_remote,
+                window,
+            );
+            Picker::new(delegate, window, cx)
+        });
+        self.command_palette_sub = Some(cx.subscribe(&palette, |this, _, _: &DismissEvent, cx| {
+            this.command_palette = None;
+            cx.notify();
+        }));
+        self.command_palette = Some(palette);
+        cx.notify();
+    }
+
+    fn action_add_remote(&mut self, _: &AddRemote, _: &mut Window, cx: &mut Context<Self>) {
+        self.begin_add_remote(cx);
+    }
+
+    fn action_open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = true;
+        cx.notify();
+    }
+
+    fn action_restart_daemon(&mut self, _: &RestartDaemon, _: &mut Window, cx: &mut Context<Self>) {
+        self.restart_daemon(cx);
+    }
+
+    fn action_toggle_transfers(&mut self, _: &ToggleTransfers, _: &mut Window, cx: &mut Context<Self>) {
+        self.jobs_open = !self.jobs_open;
+        cx.notify();
     }
 
     fn ask_confirm(
@@ -862,13 +941,13 @@ impl Workspace {
         let x = f32::from(e.event.position.x);
         // Table content edge: body bounds minus the rows' horizontal padding.
         let right = f32::from(e.bounds.right()) - TABLE_PAD;
-        // Column order is Name (flex), Size, Date — Date is flush right; Size sits
-        // one column gap to its left. Anchor each from the content edge so the
-        // dragged divider tracks the cursor exactly.
+        // Column order is Name (flex), Size, Date — Date is flush right; Size is
+        // flush to its left. Anchor each from the content edge so the dragged
+        // divider tracks the cursor exactly.
         let date_w = f32::from(self.col_date_width);
         let (raw, current) = match e.drag(cx).0 {
             Column::Date => (right - x, &mut self.col_date_width),
-            Column::Size => (right - date_w - COL_GAP - x, &mut self.col_size_width),
+            Column::Size => (right - date_w - x, &mut self.col_size_width),
         };
         let width = px(raw.clamp(COL_MIN, COL_MAX));
         if width != *current {
@@ -994,6 +1073,7 @@ impl Workspace {
             || self.context.is_some()
             || self.remote_menu.is_some()
             || self.bg_menu.is_some()
+            || self.command_palette.is_some()
             || self.confirm.is_some()
             || self.prompt.is_some()
             || self.remote_config.is_some()
@@ -1001,6 +1081,7 @@ impl Workspace {
         {
             self.settings_open = false;
             self.jobs_open = false;
+            self.command_palette = None;
             self.confirm = None;
             self.prompt = None;
             self.close_remote_config(cx);
@@ -1015,7 +1096,7 @@ impl Workspace {
 
     fn set_refresh(&mut self, secs: u64, cx: &mut Context<Self>) {
         self.store.update(|s| s.refresh_secs = secs);
-        self.dir_query.set_stale_after(Duration::from_secs(secs.max(1)));
+        self.dir_query.set_stale_after(Some(Duration::from_secs(secs.max(1))));
         cx.notify();
     }
 
@@ -1292,7 +1373,11 @@ impl Render for Workspace {
         // Keep focus on the open dialog, else on the workspace — so each owns the
         // keyboard while shown, and focus returns here when it closes. The modal
         // entities (remote config, confirm) steer their own focus.
-        if self.remote_config.is_some() || self.confirm.is_some() || self.prompt.is_some() {
+        if self.remote_config.is_some()
+            || self.confirm.is_some()
+            || self.prompt.is_some()
+            || self.command_palette.is_some()
+        {
             // modal entities own their focus
         } else if !self.focus.is_focused(window) {
             self.focus.focus(window, cx);
@@ -1323,6 +1408,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::rename))
             .on_action(cx.listener(Self::toggle_preview))
+            .on_action(cx.listener(Self::toggle_palette))
+            .on_action(cx.listener(Self::action_add_remote))
+            .on_action(cx.listener(Self::action_open_settings))
+            .on_action(cx.listener(Self::action_restart_daemon))
+            .on_action(cx.listener(Self::action_toggle_transfers))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragResize>, window, cx| {
                 let x = f32::from(e.event.position.x);
                 let (width, current) = match e.drag(cx).0 {
@@ -1375,9 +1465,22 @@ impl Render for Workspace {
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
             .when(self.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
+            .when_some(self.command_palette.clone(), |el, palette| {
+                el.child(self.modal_overlay(
+                    true,
+                    true,
+                    |this, cx| {
+                        this.command_palette = None;
+                        cx.notify();
+                    },
+                    palette,
+                    cx,
+                ))
+            })
             .when_some(self.confirm.clone(), |el, modal| {
                 el.child(self.modal_overlay(
                     true,
+                    false,
                     |this, cx| {
                         this.confirm = None;
                         cx.notify();
@@ -1388,6 +1491,7 @@ impl Render for Workspace {
             })
             .when_some(self.remote_config.clone(), |el, modal| {
                 el.child(self.modal_overlay(
+                    false,
                     false,
                     |this, cx| this.close_remote_config(cx),
                     modal,

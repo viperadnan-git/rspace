@@ -7,7 +7,7 @@ use std::ops::Range;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, Bounds,
     ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, GlobalElementId, LayoutId, MouseDownEvent, MouseMoveEvent,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseDownEvent, MouseMoveEvent,
     PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, Window,
 };
 
@@ -15,25 +15,105 @@ use crate::theme::*;
 
 actions!(
     text_input,
-    [Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Backspace, Delete, Paste, Copy, Cut]
+    [
+        Left,
+        Right,
+        WordLeft,
+        WordRight,
+        SelectLeft,
+        SelectRight,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectAll,
+        Home,
+        End,
+        SelectToHome,
+        SelectToEnd,
+        Backspace,
+        Delete,
+        DeleteWordBack,
+        DeleteWordForward,
+        DeleteToStart,
+        DeleteToEnd,
+        Paste,
+        Copy,
+        Cut
+    ]
 );
 
+/// Events a host can subscribe to. Currently just the backspace-on-empty signal
+/// used by the multi-stage picker to step back a stage.
+pub enum TextInputEvent {
+    BackspaceOnEmpty,
+}
+
+/// Character class for word motion (mirrors Zed's `CharKind`): word chars,
+/// punctuation, and whitespace are distinct, so word motion stops at word⇄
+/// punctuation transitions, not only at spaces.
+#[derive(PartialEq, Clone, Copy)]
+enum CharKind {
+    Whitespace,
+    Punctuation,
+    Word,
+}
+
+fn char_kind(c: char) -> CharKind {
+    if c.is_alphanumeric() || c == '_' {
+        CharKind::Word
+    } else if c.is_whitespace() {
+        CharKind::Whitespace
+    } else {
+        CharKind::Punctuation
+    }
+}
+
 pub fn bind_keys(cx: &mut App) {
+    use gpui::KeyBinding as K;
     let ctx = Some("TextInput");
-    cx.bind_keys([
-        gpui::KeyBinding::new("left", Left, ctx),
-        gpui::KeyBinding::new("right", Right, ctx),
-        gpui::KeyBinding::new("shift-left", SelectLeft, ctx),
-        gpui::KeyBinding::new("shift-right", SelectRight, ctx),
-        gpui::KeyBinding::new("cmd-a", SelectAll, ctx),
-        gpui::KeyBinding::new("home", Home, ctx),
-        gpui::KeyBinding::new("end", End, ctx),
-        gpui::KeyBinding::new("backspace", Backspace, ctx),
-        gpui::KeyBinding::new("delete", Delete, ctx),
-        gpui::KeyBinding::new("cmd-v", Paste, ctx),
-        gpui::KeyBinding::new("cmd-c", Copy, ctx),
-        gpui::KeyBinding::new("cmd-x", Cut, ctx),
+    // Portable across OSes. `secondary-` is cmd on macOS, ctrl elsewhere.
+    let mut binds = vec![
+        K::new("left", Left, ctx),
+        K::new("right", Right, ctx),
+        K::new("shift-left", SelectLeft, ctx),
+        K::new("shift-right", SelectRight, ctx),
+        K::new("home", Home, ctx),
+        K::new("end", End, ctx),
+        K::new("shift-home", SelectToHome, ctx),
+        K::new("shift-end", SelectToEnd, ctx),
+        K::new("backspace", Backspace, ctx),
+        K::new("delete", Delete, ctx),
+        K::new("secondary-a", SelectAll, ctx),
+        K::new("secondary-c", Copy, ctx),
+        K::new("secondary-v", Paste, ctx),
+        K::new("secondary-x", Cut, ctx),
+    ];
+    // Word/line motions use the platform's native modifiers: Option + Cmd on
+    // macOS, Ctrl elsewhere.
+    #[cfg(target_os = "macos")]
+    binds.extend([
+        K::new("alt-left", WordLeft, ctx),
+        K::new("alt-right", WordRight, ctx),
+        K::new("alt-shift-left", SelectWordLeft, ctx),
+        K::new("alt-shift-right", SelectWordRight, ctx),
+        K::new("alt-backspace", DeleteWordBack, ctx),
+        K::new("alt-delete", DeleteWordForward, ctx),
+        K::new("cmd-left", Home, ctx),
+        K::new("cmd-right", End, ctx),
+        K::new("cmd-shift-left", SelectToHome, ctx),
+        K::new("cmd-shift-right", SelectToEnd, ctx),
+        K::new("cmd-backspace", DeleteToStart, ctx),
+        K::new("cmd-delete", DeleteToEnd, ctx),
     ]);
+    #[cfg(not(target_os = "macos"))]
+    binds.extend([
+        K::new("ctrl-left", WordLeft, ctx),
+        K::new("ctrl-right", WordRight, ctx),
+        K::new("ctrl-shift-left", SelectWordLeft, ctx),
+        K::new("ctrl-shift-right", SelectWordRight, ctx),
+        K::new("ctrl-backspace", DeleteWordBack, ctx),
+        K::new("ctrl-delete", DeleteWordForward, ctx),
+    ]);
+    cx.bind_keys(binds);
 }
 
 pub struct TextInput {
@@ -91,6 +171,11 @@ impl TextInput {
         cx.notify();
     }
 
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
+
     /// Set or clear the field-level validation error.
     pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
         self.error = error;
@@ -113,12 +198,36 @@ impl TextInput {
         }, cx);
     }
 
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.prev_word_boundary(self.cursor()), cx);
+    }
+
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.next_word_boundary(self.cursor()), cx);
+    }
+
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.prev_boundary(self.cursor()), cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.next_boundary(self.cursor()), cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.prev_word_boundary(self.cursor()), cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_word_boundary(self.cursor()), cx);
+    }
+
+    fn select_to_home(&mut self, _: &SelectToHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+
+    fn select_to_end(&mut self, _: &SelectToEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -135,6 +244,12 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        // Backspace on an already-empty field is a "go back" signal for hosts
+        // like the multi-stage picker.
+        if self.content.is_empty() {
+            cx.emit(TextInputEvent::BackspaceOnEmpty);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.prev_boundary(self.cursor()), cx);
         }
@@ -144,6 +259,34 @@ impl TextInput {
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    fn delete_word_back(&mut self, _: &DeleteWordBack, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.prev_word_boundary(self.cursor()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    fn delete_word_forward(&mut self, _: &DeleteWordForward, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.next_word_boundary(self.cursor()), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    fn delete_to_start(&mut self, _: &DeleteToStart, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(0, cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    fn delete_to_end(&mut self, _: &DeleteToEnd, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.select_to(self.content.len(), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
     }
@@ -223,6 +366,40 @@ impl TextInput {
         self.content[offset..].char_indices().nth(1).map_or(self.content.len(), |(i, _)| offset + i)
     }
 
+    /// Byte offset of the previous word boundary (Zed's model: skip whitespace,
+    /// then consume one run of a single [`CharKind`] — so motion stops at
+    /// word⇄punctuation transitions, not just spaces).
+    fn prev_word_boundary(&self, offset: usize) -> usize {
+        let chars: Vec<(usize, char)> = self.content[..offset].char_indices().collect();
+        let mut i = chars.len();
+        while i > 0 && char_kind(chars[i - 1].1) == CharKind::Whitespace {
+            i -= 1;
+        }
+        if i > 0 {
+            let kind = char_kind(chars[i - 1].1);
+            while i > 0 && char_kind(chars[i - 1].1) == kind {
+                i -= 1;
+            }
+        }
+        chars.get(i).map_or(offset, |(b, _)| *b)
+    }
+
+    /// Byte offset of the next word boundary (mirror of [`Self::prev_word_boundary`]).
+    fn next_word_boundary(&self, offset: usize) -> usize {
+        let chars: Vec<(usize, char)> = self.content[offset..].char_indices().collect();
+        let mut i = 0;
+        while i < chars.len() && char_kind(chars[i].1) == CharKind::Whitespace {
+            i += 1;
+        }
+        if i < chars.len() {
+            let kind = char_kind(chars[i].1);
+            while i < chars.len() && char_kind(chars[i].1) == kind {
+                i += 1;
+            }
+        }
+        chars.get(i).map_or(self.content.len(), |(b, _)| offset + b)
+    }
+
     fn offset_to_utf16(&self, offset: usize) -> usize {
         self.content[..offset].chars().map(char::len_utf16).sum()
     }
@@ -247,6 +424,8 @@ impl TextInput {
         self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
     }
 }
+
+impl EventEmitter<TextInputEvent> for TextInput {}
 
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -373,13 +552,23 @@ impl Render for TextInput {
             .key_context("TextInput")
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_to_home))
+            .on_action(cx.listener(Self::select_to_end))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::delete_word_back))
+            .on_action(cx.listener(Self::delete_word_forward))
+            .on_action(cx.listener(Self::delete_to_start))
+            .on_action(cx.listener(Self::delete_to_end))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))

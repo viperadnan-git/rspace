@@ -60,6 +60,105 @@ impl Workspace {
         }
     }
 
+    /// Run a registry [`Operation`] from resolved `args` as a tracked job — the
+    /// shared execution path for the command palette (and, later, the context
+    /// menu). Destructive ops confirm first; display targets and command string
+    /// derive from the same `args`.
+    pub(crate) fn run_operation(&mut self, op: Operation, args: Vec<ArgValue>, cx: &mut Context<Self>) {
+        if op.destructive() {
+            let target = args
+                .iter()
+                .find_map(|a| match a {
+                    ArgValue::Path { remote, path, .. } if path.is_empty() => Some(format!("{remote}:")),
+                    ArgValue::Path { remote, path, .. } => Some(format!("{remote}:{path}")),
+                    ArgValue::Name(_) => None,
+                })
+                .unwrap_or_default();
+            let note = match op {
+                Operation::Cleanup => "Removes trash and old versions on the remote.",
+                _ => "This permanently removes it; files are not recoverable.",
+            };
+            let label = op.label();
+            self.ask_confirm(
+                format!("{label}?"),
+                format!("{label} \u{201c}{target}\u{201d}. {note}"),
+                label,
+                true,
+                move |this, cx| this.spawn_operation(op, args, cx),
+                cx,
+            );
+        } else {
+            self.spawn_operation(op, args, cx);
+        }
+    }
+
+    /// Run a read-only [`InfoOp`] and show its result (a toast; a public link is
+    /// copied to the clipboard). Shared by the palette and the preview pane.
+    pub(crate) fn run_info_op(&mut self, op: InfoOp, args: Vec<ArgValue>, cx: &mut Context<Self>) {
+        let Some((method, params)) = op.build(&args) else {
+            return;
+        };
+        let service = self.service.clone();
+        cx.spawn(async move |this, cx| {
+            let res = service.query(method, params).await;
+            this.update(cx, |this, cx| match res {
+                Ok(v) => match op.parse(&v) {
+                    Some(result) => this.show_info_result(result, cx),
+                    None => this.toast(format!("{}: nothing to show", op.label()), false, cx),
+                },
+                Err(e) => this.toast(format!("{} failed: {e}", op.label()), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn show_info_result(&mut self, result: InfoResult, cx: &mut Context<Self>) {
+        let msg = match result {
+            InfoResult::Link(url) => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
+                format!("Link copied: {url}")
+            }
+            InfoResult::Size { count, bytes } => format!("{count} items \u{b7} {}", human_size(bytes)),
+            InfoResult::Quota { used, total, free } => {
+                let part = |o: Option<i64>| o.map(human_size).unwrap_or_else(|| "?".into());
+                format!("Used {} of {} \u{b7} {} free", part(used), part(total), part(free))
+            }
+            InfoResult::Stat { name, bytes, is_dir } => {
+                let what = if is_dir { "folder".to_string() } else { human_size(bytes) };
+                format!("{name} \u{b7} {what}")
+            }
+        };
+        self.toast(msg, false, cx);
+    }
+
+    fn spawn_operation(&mut self, op: Operation, args: Vec<ArgValue>, cx: &mut Context<Self>) {
+        let is_dir = matches!(args.first(), Some(ArgValue::Path { is_dir, .. }) if *is_dir);
+        let targets: Vec<JobTarget> = args
+            .iter()
+            .filter_map(|a| match a {
+                ArgValue::Path { remote, path, .. } => {
+                    let name = path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(remote);
+                    Some(JobTarget::new(name.to_string(), remote.clone(), path.clone()))
+                }
+                ArgValue::Name(_) => None,
+            })
+            .collect();
+        let parts: Vec<String> = args
+            .iter()
+            .map(|a| match a {
+                ArgValue::Path { remote, path, .. } => format!("{remote}:{path}"),
+                ArgValue::Name(n) => n.clone(),
+            })
+            .collect();
+        let command = rclone_cmd(op.cli_verb(is_dir), &parts.iter().map(String::as_str).collect::<Vec<_>>());
+        let service = self.service.clone();
+        self.spawn_job(op.label(), targets, command, true, cx, move |group| {
+            let (service, args) = (service.clone(), args.clone());
+            async move { service.run_operation(op, args, group).await }
+        });
+    }
+
     pub(crate) fn begin_new_folder(&mut self, cx: &mut Context<Self>) {
         if self.open_remote.is_none() {
             return;
@@ -103,7 +202,7 @@ impl Workspace {
         self.pending_select = Some(new_name.clone());
         let (from, is_dir) = (entry.path.clone(), entry.is_dir);
         let source = JobTarget::new(entry.name, remote.clone(), from.clone());
-        let destination = JobTarget::new(new_name, remote.clone(), to.clone());
+        let destination = JobTarget::new(new_name.clone(), remote.clone(), to.clone());
         let command = rclone_cmd(
             TransferMode::Move.cli_verb(is_dir),
             &[&format!("{remote}:{from}"), &format!("{remote}:{to}")],
@@ -116,9 +215,9 @@ impl Workspace {
             true,
             cx,
             move |group| {
-                let (service, remote, from, to) =
-                    (service.clone(), remote.clone(), from.clone(), to.clone());
-                async move { service.move_to(remote, from, to, is_dir, group).await }
+                let (service, remote, from, new_name) =
+                    (service.clone(), remote.clone(), from.clone(), new_name.clone());
+                async move { service.move_to(remote, from, new_name, is_dir, group).await }
             },
         );
     }
