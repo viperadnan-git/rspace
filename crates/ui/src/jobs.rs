@@ -328,9 +328,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Push a tracked job; `run(group)` returns the submission future. `run` is
-    /// `Fn` (re-runnable) so the job can be retried; it must clone its captures
-    /// per call. `command` is the equivalent rclone CLI shown by the copy button.
+    /// Enqueue a tracked job on the [`Jobs`] entity. Thin delegate so the file
+    /// operations above don't reach into the entity directly.
     fn spawn_job<F, Fut>(
         &mut self,
         verb: impl Into<SharedString>,
@@ -343,91 +342,27 @@ impl Workspace {
         F: Fn(String) -> Fut + 'static,
         Fut: std::future::Future<Output = Result<u64, ServiceError>> + 'static,
     {
-        let run: JobRun = Rc::new(move |group| Box::pin(run(group)));
-        self.enqueue(verb.into(), targets, command, reload_on_done, run, cx);
-    }
-
-    /// Re-run a failed/cancelled job: drop the old row, enqueue a fresh one with
-    /// the same operation.
-    pub(crate) fn retry_job(&mut self, id: usize, cx: &mut Context<Self>) {
-        let Some(job) = self.jobs.iter().find(|j| j.id == id) else {
-            return;
-        };
-        let (verb, targets, command, reload, run) =
-            (job.verb.clone(), job.targets.clone(), job.command.clone(), job.reload_on_done, job.run.clone());
-        self.jobs.retain(|j| j.id != id);
-        self.enqueue(verb, targets, command, reload, run, cx);
-        cx.notify();
-    }
-
-    fn enqueue(
-        &mut self,
-        verb: SharedString,
-        targets: Vec<JobTarget>,
-        command: String,
-        reload_on_done: bool,
-        run: JobRun,
-        cx: &mut Context<Self>,
-    ) {
-        let id = self.job_seq;
-        self.job_seq += 1;
-        let group = format!("rspace/{id}");
-        self.jobs.push(Job {
-            id,
-            group: group.clone(),
-            jobid: None,
-            verb,
-            targets,
-            done: false,
-            error: None,
-            bytes: 0,
-            total: 0,
-            speed: 0.0,
-            transfers: 0,
-            total_transfers: 0,
-            reload_on_done,
-            elapsed_ms: 0,
-            command,
-            run: run.clone(),
+        self.jobs.update(cx, move |jobs, cx| {
+            jobs.spawn_job(verb, targets, command, reload_on_done, cx, run)
         });
-        cx.spawn(async move |this, cx| {
-            let result = run(group).await;
-            this.update(cx, |this, cx| this.on_job_submitted(id, result, cx)).ok();
-        })
-        .detach();
     }
 
-    /// Remove a single finished job from the list.
+    pub(crate) fn retry_job(&mut self, id: usize, cx: &mut Context<Self>) {
+        self.jobs.update(cx, |jobs, cx| jobs.retry(id, cx));
+    }
+
+    /// Remove a single finished job; close the panel if it was the last.
     pub(crate) fn clear_job(&mut self, id: usize, cx: &mut Context<Self>) {
-        self.jobs.retain(|j| j.id != id);
-        self.jobs_changed(cx);
-    }
-
-    /// Drop the transfers panel when no jobs remain, then notify.
-    fn jobs_changed(&mut self, cx: &mut Context<Self>) {
-        if self.jobs.is_empty() {
+        self.jobs.update(cx, |jobs, cx| jobs.clear_job(id, cx));
+        if self.jobs.read(cx).is_empty() {
             self.jobs_open = false;
-        }
-        cx.notify();
-    }
-
-    /// Record the rclone job id (or the submission error) for job `id`.
-    fn on_job_submitted(&mut self, id: usize, result: Result<u64, ServiceError>, cx: &mut Context<Self>) {
-        if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
-            match result {
-                Ok(jobid) => j.jobid = Some(jobid),
-                Err(e) => {
-                    j.done = true;
-                    j.error = Some(e.to_string());
-                }
-            }
         }
         cx.notify();
     }
 
     /// Confirm, then cancel a running job (reuses [`ask_confirm`]).
     pub(crate) fn request_cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
-        let Some(label) = self.jobs.iter().find(|j| j.id == id).map(|j| j.label()) else {
+        let Some(label) = self.jobs.read(cx).label_of(id) else {
             return;
         };
         self.ask_confirm(
@@ -435,33 +370,14 @@ impl Workspace {
             format!("Stop \u{201c}{label}\u{201d}? Work already done is kept."),
             "Cancel task",
             true,
-            move |this, cx| this.cancel_job(id, cx),
+            move |this, cx| this.jobs.update(cx, |jobs, cx| jobs.cancel(id, cx)),
             cx,
         );
     }
 
-    pub(crate) fn cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
-        let Some(jobid) = self.jobs.iter().find(|j| j.id == id).and_then(|j| j.jobid) else {
-            return;
-        };
-        let service = self.service.clone();
-        cx.spawn(async move |this, cx| {
-            let _ = service.job_stop(jobid).await;
-            this.update(cx, |this, cx| {
-                if let Some(j) = this.jobs.iter_mut().find(|j| j.id == id) {
-                    j.done = true;
-                    j.error.get_or_insert_with(|| "cancelled".into());
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Confirm, then drop finished jobs from the list (reuses [`ask_confirm`]).
     pub(crate) fn request_clear_finished(&mut self, cx: &mut Context<Self>) {
-        let n = self.jobs.iter().filter(|j| j.done).count();
+        let n = self.jobs.read(cx).finished_count();
         if n == 0 {
             return;
         }
@@ -470,13 +386,13 @@ impl Workspace {
             format!("Remove {n} finished task{} from the list.", if n == 1 { "" } else { "s" }),
             "Clear",
             false,
-            |this, cx| this.clear_finished(cx),
+            |this, cx| {
+                this.jobs.update(cx, |jobs, cx| jobs.clear_finished(cx));
+                if this.jobs.read(cx).is_empty() {
+                    this.jobs_open = false;
+                }
+            },
             cx,
         );
-    }
-
-    fn clear_finished(&mut self, cx: &mut Context<Self>) {
-        self.jobs.retain(|j| !j.done);
-        self.jobs_changed(cx);
     }
 }

@@ -5,7 +5,10 @@ pub mod daemon;
 pub mod detect;
 pub mod service;
 
-pub use client::{Entry, JobStatus, RcClient, RcError, RemoteInfo, Stats};
+pub use client::{
+    ConfigStep, Entry, JobStatus, OptionExample, Provider, RcClient, RcError, RemoteInfo,
+    RemoteOption, Stats,
+};
 pub use daemon::{reap_orphan, Daemon, DaemonError};
 pub use detect::{detect, NotFound, Rclone, INSTALL_URL};
 pub use service::{Service, ServiceError, TransferMode};

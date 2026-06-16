@@ -8,6 +8,9 @@ pub const FG: u32 = 0xd1d7e0;
 pub const FG_MUTED: u32 = 0x9198a1;
 pub const FG_SUBTLE: u32 = 0x656c76;
 pub const ACCENT: u32 = 0x478be6;
+pub const ACCENT_HOVER: u32 = 0x5a9bf0;
+/// Translucent accent fill for selected chips/segments.
+pub const ACCENT_SOFT: u32 = 0x478be626;
 pub const SUCCESS: u32 = 0x57ab5a;
 pub const DANGER: u32 = 0xe5534b;
 // Translucent element overlays, neutral over either pane background.

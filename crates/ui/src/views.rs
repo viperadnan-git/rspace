@@ -218,7 +218,20 @@ impl Workspace {
             .border_r_1()
             .border_color(rgb(BORDER_MUTED))
             .child(self.resize_handle("sidebar-resize", ResizeTarget::Sidebar, SIDEBAR_W, cx))
-            .child(div().px_3().py_2().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))
+            .child(
+                h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .justify_between()
+                    .items_center()
+                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))
+                    .child(
+                        icon_button("add-remote", "icons/plus.svg")
+                            .tooltip(tooltip_text("Add remote"))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.begin_add_remote(cx))),
+                    ),
+            )
             .child(
                 // Single list so pinned rows (which lead it) scroll with the rest.
                 uniform_list(
@@ -238,50 +251,8 @@ impl Workspace {
             )
     }
 
-    /// Inline text field for new-folder / rename, styled to sit in the file list.
-    fn inline_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = self.prompt.as_ref().unwrap();
-        let (value, placeholder, icon_dir) = (p.value.clone(), p.placeholder.clone(), p.icon_dir);
-        let empty = value.is_empty();
-        // Rename pins to the end so the caret stays visible on long names; a new
-        // item grows from the left.
-        let pin_end = p.target.is_some();
-        let caret = || div().w(px(1.5)).h(px(15.0)).flex_shrink_0().bg(rgb(ACCENT));
-        h_flex()
-            .id("inline-editor")
-            .key_context("modal Prompt")
-            .track_focus(&self.dialog_focus)
-            .on_action(cx.listener(Self::prompt_submit))
-            .on_action(cx.listener(Self::prompt_cancel))
-            .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| this.prompt_key(ev, cx)))
-            .w_full()
-            .gap_2()
-            .px_3()
-            .py_1()
-            .items_center()
-            .bg(rgba(SELECT))
-            .border_1()
-            .border_color(rgb(ACCENT))
-            .child(file_icon(icon_dir))
-            .child(
-                // overflow_hidden + flex_shrink_0 text = single line that clips
-                // instead of truncating; justify_end keeps the tail/caret in view.
-                h_flex()
-                    .flex_grow(1.0)
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .items_center()
-                    .when(pin_end, |f| f.justify_end())
-                    .when(empty, |e| {
-                        e.child(caret())
-                            .child(div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child(placeholder))
-                    })
-                    .when(!empty, |e| {
-                        e.child(div().flex_shrink_0().text_color(rgb(FG)).child(value)).child(caret())
-                    }),
-            )
-    }
-
+    /// Inline text field for new-folder / rename: a bare [`TextInput`] in a
+    /// row styled to sit in the file list.
     /// A clickable file-list column header (toggles/sets the sort like Finder).
     fn col_head(
         &self,
@@ -378,7 +349,7 @@ impl Workspace {
             _ => format!("{count} items"),
         };
 
-        let making_new = self.prompt.as_ref().is_some_and(|p| p.target.is_none());
+        let making_new = self.prompt.as_ref().is_some_and(|p| p.read(cx).target.is_none());
         let body = if self.open_remote.is_none() {
             centered("Select a remote to browse", FG_SUBTLE).into_any_element()
         } else if matches!(self.dir_query.status(), Status::Loading) {
@@ -397,10 +368,11 @@ impl Workspace {
                         .filter_map(|ix| this.entries().get(ix).map(|e| (ix, e.clone())))
                         .map(|(ix, entry)| {
                             // Renaming this row: swap in the inline editor.
-                            if this.prompt.as_ref().and_then(|p| p.target.as_deref())
-                                == Some(entry.path.as_str())
-                            {
-                                return this.inline_editor(cx).into_any_element();
+                            let renaming = this.prompt.as_ref().is_some_and(|p| {
+                                p.read(cx).target.as_deref() == Some(entry.path.as_str())
+                            });
+                            if renaming {
+                                return this.prompt.as_ref().unwrap().clone().into_any_element();
                             }
                             let selected = this.selected.contains(&entry.path);
                             let is_dir = entry.is_dir;
@@ -513,7 +485,7 @@ impl Workspace {
             .min_h(px(0.0))
             .on_drag_move(cx.listener(Self::on_column_drag))
             .when(show_table, |el| el.child(self.column_header(cx)))
-            .when(new_item, |el| el.child(self.inline_editor(cx)))
+            .when(new_item, |el| el.child(self.prompt.as_ref().unwrap().clone()))
             .child(body)
             .when(
             self.open_remote.is_some(),
@@ -619,77 +591,35 @@ impl Workspace {
 
     /// Dim full-screen backdrop holding a centered `card`; clicking outside runs
     /// `dismiss`. The card supplies its own `stop_propagation`.
+    /// Dimmed full-screen backdrop with click-to-dismiss. `deferred_layer` draws
+    /// it on a top z-layer (simple modals); a non-deferred overlay keeps its
+    /// focusable controls in the tab-stop tree for native Tab (form modals).
     pub(crate) fn modal_overlay(
         &self,
+        deferred_layer: bool,
         dismiss: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         card: impl IntoElement,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        deferred(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .justify_center()
-                .items_center()
-                .bg(rgba(0x0000_0099))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _: &MouseDownEvent, _, cx| dismiss(this, cx)),
-                )
-                .child(card),
-        )
-        .priority(3)
-    }
-
-    /// Base for a centered modal card: elevated surface that swallows clicks.
-    pub(crate) fn modal_card(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
-        v_flex()
-            .id(id)
-            .p_5()
-            .rounded_lg()
-            .bg(rgb(ELEVATED))
-            .border_1()
-            .border_color(rgb(BORDER_MUTED))
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
-    }
-
-    pub(crate) fn render_confirm(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let c = self.confirm.as_ref().unwrap();
-        let (title, message, label, danger) =
-            (c.title.clone(), c.message.clone(), c.confirm_label.clone(), c.danger);
-        let accent = if danger { DANGER } else { ACCENT };
-        let card = self
-            .modal_card("confirm-card", cx)
-            .key_context("modal Confirm")
-            .track_focus(&self.dialog_focus)
-            .on_action(cx.listener(Self::confirm_accept))
-            .w(px(400.0))
-            .gap_4()
-            .child(div().text_lg().text_color(rgb(FG)).child(title))
-            .child(div().text_sm().text_color(rgb(FG_MUTED)).child(message))
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                        text_button("confirm-cancel", "Cancel")
-                            .text_color(rgb(FG))
-                            .hover(|s| s.bg(rgba(OVERLAY)))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.dismiss_confirm(cx))),
-                    )
-                    .child(
-                        text_button("confirm-accept", label)
-                            .bg(rgb(accent))
-                            .text_color(rgb(0xffffff))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.run_confirm(cx))),
-                    ),
-            );
-        self.modal_overlay(|this, cx| this.dismiss_confirm(cx), card, cx)
+    ) -> gpui::AnyElement {
+        let overlay = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .justify_center()
+            .items_center()
+            .bg(rgba(0x0000_0099))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| dismiss(this, cx)),
+            )
+            .child(card);
+        if deferred_layer {
+            deferred(overlay).priority(3).into_any_element()
+        } else {
+            overlay.occlude().into_any_element()
+        }
     }
 
 }

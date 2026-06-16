@@ -4828,6 +4828,7 @@ dependencies = [
  "gpui_platform",
  "rspace-core",
  "rspace-rclone-rc",
+ "serde_json",
  "tracing",
 ]
 

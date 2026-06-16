@@ -47,6 +47,60 @@ pub struct RemoteInfo {
     pub kind: String,
 }
 
+/// A configurable rclone backend (`config/providers`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Provider {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Description", default)]
+    pub description: String,
+    #[serde(rename = "Options", default)]
+    pub options: Vec<RemoteOption>,
+}
+
+/// One backend option, also the shape of an interactive config question
+/// (`ConfigOut.Option`). Field names match rclone's JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteOption {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Help", default)]
+    pub help: String,
+    #[serde(rename = "Type", default)]
+    pub kind: String,
+    #[serde(rename = "DefaultStr", default)]
+    pub default: String,
+    #[serde(rename = "Required", default)]
+    pub required: bool,
+    #[serde(rename = "IsPassword", default)]
+    pub is_password: bool,
+    #[serde(rename = "Advanced", default)]
+    pub advanced: bool,
+    #[serde(rename = "Examples", default)]
+    pub examples: Vec<OptionExample>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OptionExample {
+    #[serde(rename = "Value", default)]
+    pub value: String,
+    #[serde(rename = "Help", default)]
+    pub help: String,
+}
+
+/// One step of the interactive config flow (`config/create`/`config/update`).
+/// A non-empty `state` means `option` is the next question to ask; an empty
+/// `state` with no error means the remote is fully configured.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigStep {
+    #[serde(rename = "State", default)]
+    pub state: String,
+    #[serde(rename = "Option", default)]
+    pub option: Option<RemoteOption>,
+    #[serde(rename = "Error", default)]
+    pub error: String,
+}
+
 /// One entry from `operations/list`. Field names match rclone's JSON.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Entry {
@@ -195,6 +249,55 @@ impl RcClient {
             .collect();
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(out)
+    }
+
+    /// Delete a configured remote (`config/delete`).
+    pub async fn config_delete(&self, name: &str) -> Result<(), RcError> {
+        let _: Value = self.call("config/delete", &json!({ "name": name })).await?;
+        Ok(())
+    }
+
+    /// All configurable backends and their option schemas (`config/providers`).
+    pub async fn config_providers(&self) -> Result<Vec<Provider>, RcError> {
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: Vec<Provider>,
+        }
+        let r: Providers = self.call("config/providers", &json!({})).await?;
+        Ok(r.providers)
+    }
+
+    /// The stored parameters of a configured remote (`config/get`), for editing.
+    pub async fn config_get(&self, name: &str) -> Result<serde_json::Map<String, Value>, RcError> {
+        self.call("config/get", &json!({ "name": name })).await
+    }
+
+    /// One step of interactive remote creation (`config/create`). `parameters`
+    /// pre-fills known answers; `opt` drives the state machine
+    /// (`state`/`result`/`continue`/`obscure`/`nonInteractive`).
+    pub async fn config_create(
+        &self,
+        name: &str,
+        kind: &str,
+        parameters: Value,
+        opt: Value,
+    ) -> Result<ConfigStep, RcError> {
+        self.call(
+            "config/create",
+            &json!({ "name": name, "type": kind, "parameters": parameters, "opt": opt }),
+        )
+        .await
+    }
+
+    /// One step of interactive remote editing (`config/update`).
+    pub async fn config_update(
+        &self,
+        name: &str,
+        parameters: Value,
+        opt: Value,
+    ) -> Result<ConfigStep, RcError> {
+        self.call("config/update", &json!({ "name": name, "parameters": parameters, "opt": opt }))
+            .await
     }
 
     /// List one directory level. `fs` is the remote (e.g. `"drive:"`), `remote`

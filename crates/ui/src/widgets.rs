@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use gpui::{
     div, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView, App,
-    Context, Div, Pixels, Render, SharedString, Stateful, Transformation, Window,
+    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, MouseButton, MouseDownEvent,
+    Pixels, Render, SharedString, Stateful, Transformation, Window,
 };
 use rspace_core::{SortField, SortOrder};
 use rspace_rclone_rc::Entry;
@@ -127,9 +128,103 @@ pub fn icon_button(id: impl Into<gpui::ElementId>, icon: &'static str) -> Statef
         .child(svg().path(icon).size(px(14.0)).text_color(rgb(FG_MUTED)))
 }
 
+/// Base for a centered modal card: elevated surface that swallows clicks so they
+/// don't fall through to the dismiss-on-click backdrop.
+pub fn modal_card<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div> {
+    v_flex()
+        .id(id)
+        .p_5()
+        .rounded_lg()
+        .bg(rgb(ELEVATED))
+        .border_1()
+        .border_color(rgb(BORDER_MUTED))
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+}
+
 /// A text button base (padding, rounding, label); caller adds color/hover/click.
 pub fn text_button(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
     h_flex().id(id).flex_shrink_0().px_3().py_1().rounded_md().cursor_pointer().child(label.into())
+}
+
+/// Transparent border that turns accent on keyboard focus (Zed-style focus ring).
+pub fn focus_ring<E: Styled + InteractiveElement>(el: E) -> E {
+    el.border_1().border_color(rgba(0x0000_0000)).focus_visible(|s| s.border_color(rgb(ACCENT)))
+}
+
+pub enum ButtonStyle {
+    Primary,
+    Danger,
+    Secondary,
+}
+
+/// A modal action button (Cancel/Save/Delete…).
+pub fn modal_button<V: 'static>(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    style: ButtonStyle,
+    on_click: impl Fn(&mut V, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    let base = text_button(id, label)
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
+    match style {
+        ButtonStyle::Primary => base.bg(rgb(ACCENT)).text_color(rgb(0xffffff)).hover(|s| s.bg(rgb(ACCENT_HOVER))),
+        ButtonStyle::Danger => base.bg(rgb(DANGER)).text_color(rgb(0xffffff)),
+        ButtonStyle::Secondary => base.text_color(rgb(FG)).hover(|s| s.bg(rgba(OVERLAY))),
+    }
+}
+
+/// A small selectable pill (example values, segmented presets).
+pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
+    let base = h_flex()
+        .id(id)
+        .px_2()
+        .py(px(3.0))
+        .rounded_md()
+        .cursor_pointer()
+        .text_xs()
+        .border_1()
+        .child(label.into());
+    if selected {
+        base.bg(rgba(ACCENT_SOFT)).border_color(rgb(ACCENT)).text_color(rgb(FG))
+    } else {
+        base.bg(rgb(ELEVATED))
+            .border_color(rgb(BORDER_MUTED))
+            .text_color(rgb(FG_MUTED))
+            .hover(|s| s.border_color(rgb(FG_SUBTLE)).text_color(rgb(FG)))
+    }
+}
+
+/// A compact Zed-style switch; focusable (Tab-reachable) when given a handle,
+/// toggled by click or Enter/Space (gpui synthesizes the click on key press).
+pub fn switch<V: 'static>(
+    id: impl Into<ElementId>,
+    on: bool,
+    focus: Option<&FocusHandle>,
+    on_toggle: impl Fn(&mut V, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    let mut el = h_flex()
+        .id(id)
+        .w(px(30.0))
+        .h(px(18.0))
+        .px(px(2.0))
+        .items_center()
+        .rounded_full()
+        .cursor_pointer()
+        .bg(rgb(if on { ACCENT } else { INSET }))
+        .border_1()
+        .border_color(rgb(if on { ACCENT } else { BORDER_MUTED }))
+        .when(on, |el| el.justify_end())
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_toggle(this, cx)))
+        .child(div().size(px(12.0)).rounded_full().bg(rgb(if on { 0xffffff } else { FG_MUTED })));
+    if let Some(focus) = focus {
+        el = el.track_focus(focus).tab_index(0).focus_visible(|s| s.border_color(rgb(ACCENT)));
+    }
+    el
 }
 
 pub fn nav_button(id: &'static str, glyph: &'static str, enabled: bool) -> Stateful<Div> {
@@ -292,6 +387,23 @@ pub fn human_date(rfc3339: &str) -> String {
 /// A persisted layout width: the stored value or `default`, clamped to bounds.
 pub fn clamped_width(value: Option<f32>, default: f32, min: f32, max: f32) -> Pixels {
     px(value.unwrap_or(default).clamp(min, max))
+}
+
+/// A labeled form field: title (+ required marker), optional help, then the
+/// control. Reused by any form so fields render consistently.
+pub fn form_field(label: &str, help: &str, required: bool, control: impl IntoElement) -> impl IntoElement {
+    v_flex()
+        .gap_1()
+        .child(
+            h_flex()
+                .gap_1()
+                .child(div().text_sm().text_color(rgb(FG)).child(label.to_string()))
+                .when(required, |el| el.child(div().text_color(rgb(DANGER)).child("*"))),
+        )
+        .when(!help.is_empty(), |el| {
+            el.child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(help.to_string()))
+        })
+        .child(control)
 }
 
 /// Friendly type label for the preview info card, e.g. `PNG` / `RS` / `File`.

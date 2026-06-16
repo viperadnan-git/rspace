@@ -1,34 +1,44 @@
 //! gpui desktop shell: a two-pane remote browser.
 
+mod confirm;
 mod jobs;
 mod menus;
 mod panels;
 mod preview;
+mod prompt;
 mod query;
+mod remotes;
+mod text_input;
 mod theme;
+mod toast;
+mod transfers;
 mod views;
 mod widgets;
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::ops::Range;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
-    Div, DragMoveEvent, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent,
-    MouseUpEvent,
+    Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding, Menu, MenuItem, MouseButton,
+    MouseDownEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use rspace_core::{Paths, SettingsStore, SortField, SortOrder};
-use rspace_rclone_rc::{Entry, RemoteInfo, Service, ServiceError, TransferMode};
+use rspace_rclone_rc::{
+    Entry, Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
+};
 
 use preview::{Preview, PreviewState};
+use confirm::ConfirmModal;
+use prompt::PromptModal;
+use toast::Toast;
+use transfers::{Job, JobTarget, Jobs, JobsEvent};
+use remotes::RemoteConfigModal;
 use query::{Query, Status};
 use theme::*;
 use widgets::*;
@@ -61,6 +71,11 @@ actions!(
         NewFile,
         Rename,
         TogglePreview,
+        ConfigNext,
+        ConfigPrev,
+        ConfigConfirm,
+        FocusNext,
+        FocusPrev,
         PromptSubmit,
         PromptCancel
     ]
@@ -88,7 +103,8 @@ impl AssetSource for Assets {
             "lock", "image", "drive", "dropbox", "gcs", "b2", "box", "mega", "swift",
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
-            "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right"
+            "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
+            "plus"
         ))
     }
 
@@ -115,6 +131,7 @@ pub struct Startup {
 pub fn run(startup: Startup) {
     application().with_assets(Assets).run(move |cx: &mut App| {
         bind_keys(cx);
+        text_input::bind_keys(cx);
         cx.set_menus(vec![
             Menu::new("rspace").items([MenuItem::action("Quit rspace", Quit)]),
             Menu::new("Window").items([
@@ -196,6 +213,17 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("f2", Rename, Some("Workspace && !modal")),
         KeyBinding::new("space", TogglePreview, Some("Workspace && !modal")),
         KeyBinding::new("escape", CloseSettings, Some("Workspace")),
+        // Add/edit-remote dialog: arrows (or ctrl-n/p) navigate the picker,
+        // Enter advances. Bound to its own context so any focusable list can reuse.
+        KeyBinding::new("down", ConfigNext, Some("RemoteConfig")),
+        KeyBinding::new("ctrl-n", ConfigNext, Some("RemoteConfig")),
+        KeyBinding::new("up", ConfigPrev, Some("RemoteConfig")),
+        KeyBinding::new("ctrl-p", ConfigPrev, Some("RemoteConfig")),
+        // Enter confirms only when a text field is focused; focused buttons/toggles
+        // get gpui's native Enter/Space activation, so this would otherwise double-fire.
+        KeyBinding::new("enter", ConfigConfirm, Some("RemoteConfig > TextInput")),
+        KeyBinding::new("tab", FocusNext, Some("RemoteConfig")),
+        KeyBinding::new("shift-tab", FocusPrev, Some("RemoteConfig")),
         // Confirm dialog: Enter accepts (Escape dismisses via the line above).
         KeyBinding::new("enter", ConfirmAccept, Some("Confirm")),
         // Text-input dialog: Enter submits, Escape cancels.
@@ -259,83 +287,12 @@ struct Location {
     selected: Option<String>,
 }
 
-/// A navigable endpoint of a job (a source or destination): shown by name,
-/// clicked to reveal it in the explorer.
-#[derive(Clone)]
-struct JobTarget {
-    name: SharedString,
-    remote: String,
-    path: String,
-}
-
-impl JobTarget {
-    fn new(name: impl Into<SharedString>, remote: String, path: String) -> Self {
-        Self { name: name.into(), remote, path }
-    }
-}
-
-impl Job {
-    /// Plain-text summary for logs, e.g. `Copy report.pdf → archive`.
-    fn label(&self) -> String {
-        let names: Vec<&str> = self.targets.iter().map(|t| t.name.as_ref()).collect();
-        format!("{} {}", self.verb, names.join(" → "))
-    }
-}
-
-/// A re-runnable job submission: takes the stats group, returns the rclone job
-/// id. `Rc` so a finished/failed `Job` stays `Clone` and can be retried.
-type JobRun = Rc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<u64, ServiceError>>>>>;
-
-/// A tracked rclone job (download/copy/…). State mirrors rclone's job + stats.
-#[derive(Clone)]
-struct Job {
-    id: usize,
-    group: String,
-    jobid: Option<u64>,
-    verb: SharedString,
-    targets: Vec<JobTarget>,
-    done: bool,
-    error: Option<String>,
-    bytes: u64,
-    total: u64,
-    speed: f64,
-    transfers: u64,
-    total_transfers: u64,
-    /// Refresh the open listing when this job succeeds (paste changed a remote).
-    reload_on_done: bool,
-    /// Elapsed from rclone: live `core/stats.elapsedTime`, then `job/status.duration`.
-    elapsed_ms: u64,
-    /// Equivalent rclone CLI command, for the row's copy button.
-    command: String,
-    /// Re-runs the operation; used by the failed-row retry button.
-    run: JobRun,
-}
-
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
 #[derive(Clone)]
 struct Clipboard {
     remote: String,
     entries: Vec<Entry>,
     mode: TransferMode,
-}
-
-/// A pending confirmation dialog: its copy plus the action run once confirmed.
-struct Confirm {
-    title: SharedString,
-    message: SharedString,
-    confirm_label: SharedString,
-    danger: bool,
-    action: Box<dyn FnOnce(&mut Workspace, &mut Context<Workspace>)>,
-}
-
-/// An inline text edit in the explorer list (new folder / rename). `target` is
-/// the path of the entry being renamed, or `None` for a new item at the top.
-struct Prompt {
-    value: String,
-    placeholder: SharedString,
-    icon_dir: bool,
-    target: Option<String>,
-    action: Box<dyn FnOnce(&mut Workspace, String, &mut Context<Workspace>)>,
 }
 
 /// Which side pane a resize drag is adjusting.
@@ -408,13 +365,16 @@ struct Workspace {
     service: Service,
     version: String,
     focus: FocusHandle,
-    dialog_focus: FocusHandle,
     pane: Pane,
     remotes: Vec<RemoteInfo>,
     remote_sel: usize,
     remote_scroll: UniformListScrollHandle,
     /// Right-click menu on a remote: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
+    /// Open add/edit-remote modal (schema-driven, backend-agnostic).
+    remote_config: Option<Entity<RemoteConfigModal>>,
+    /// Subscription to the open modal's dismiss/saved events.
+    remote_config_sub: Option<gpui::Subscription>,
     sidebar_width: Pixels,
     preview_width: Pixels,
     col_date_width: Pixels,
@@ -447,12 +407,18 @@ struct Workspace {
     context: Option<(Entry, Point<Pixels>)>,
     /// Right-click on empty list space: the cursor position.
     bg_menu: Option<Point<Pixels>>,
-    /// Pending confirmation dialog (destructive or irreversible actions).
-    confirm: Option<Confirm>,
+    /// Pending confirmation modal (destructive or irreversible actions).
+    confirm: Option<Entity<ConfirmModal>>,
+    /// Subscription to the open confirm modal's accept/dismiss events.
+    confirm_sub: Option<gpui::Subscription>,
     /// Pending text-input dialog (new folder, rename, …).
-    prompt: Option<Prompt>,
-    jobs: Vec<Job>,
-    job_seq: usize,
+    prompt: Option<Entity<PromptModal>>,
+    /// Subscription to the open prompt's submit/cancel events.
+    prompt_sub: Option<gpui::Subscription>,
+    /// Transient corner notifications (background-operation errors).
+    toasts: Vec<Toast>,
+    toast_seq: usize,
+    jobs: Entity<Jobs>,
     jobs_open: bool,
     jobs_maximized: bool,
     /// Right-side file-preview pane.
@@ -485,16 +451,23 @@ impl Workspace {
         let col_size_width = clamped_width(s.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
         let jobs_maximized = s.transfers_maximized;
         let preview_open = s.preview_open;
+        let jobs = cx.new(|_| Jobs::new(service.clone()));
+        jobs.update(cx, |jobs, cx| jobs.start_polling(cx));
+        cx.subscribe(&jobs, |this, _, event, cx| match event {
+            JobsEvent::ReloadEntries => this.force_reload_entries(cx),
+        })
+        .detach();
         let this = Self {
             service,
             version,
             focus,
-            dialog_focus: cx.focus_handle(),
             pane: Pane::Sidebar,
             remotes: Vec::new(),
             remote_sel: 0,
             remote_scroll: UniformListScrollHandle::new(),
             remote_menu: None,
+            remote_config: None,
+            remote_config_sub: None,
             sidebar_width,
             preview_width,
             col_date_width,
@@ -518,9 +491,12 @@ impl Workspace {
             context: None,
             bg_menu: None,
             confirm: None,
+            confirm_sub: None,
             prompt: None,
-            jobs: Vec::new(),
-            job_seq: 0,
+            prompt_sub: None,
+            toasts: Vec::new(),
+            toast_seq: 0,
+            jobs,
             jobs_open: false,
             jobs_maximized,
             preview_open,
@@ -538,81 +514,7 @@ impl Workspace {
             |v: &Self| Duration::from_secs(v.store.get().refresh_secs.max(1)),
             Self::load_entries,
         );
-        Self::poll_jobs(window, cx);
         this
-    }
-
-    /// Poll rclone every second for the state and progress of active jobs.
-    fn poll_jobs(window: &Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let snapshot = cx.update(|_, app| {
-                    this.update(app, |v, _| {
-                        let active: Vec<(usize, String, u64)> = v
-                            .jobs
-                            .iter()
-                            .filter(|j| !j.done && j.jobid.is_some())
-                            .map(|j| (j.id, j.group.clone(), j.jobid.unwrap()))
-                            .collect();
-                        (v.service.clone(), active)
-                    })
-                    .ok()
-                });
-                let (service, active) = match snapshot {
-                    Ok(Some(s)) => s,
-                    _ => break,
-                };
-                for (id, group, jobid) in active {
-                    let status = service.job_status(jobid).await.ok();
-                    let stats = service.stats(group).await.ok();
-                    let alive = cx.update(|_, app| {
-                        this.update(app, |v, vcx| {
-                            let mut reload = false;
-                            if let Some(j) = v.jobs.iter_mut().find(|j| j.id == id) {
-                                if let Some(s) = &stats {
-                                    j.bytes = s.bytes;
-                                    j.total = s.total_bytes;
-                                    j.speed = s.speed;
-                                    j.transfers = s.transfers;
-                                    j.total_transfers = s.total_transfers;
-                                    j.elapsed_ms = (s.elapsed_time * 1000.0) as u64;
-                                }
-                                if let Some(st) = &status {
-                                    if st.finished && !j.done {
-                                        j.done = true;
-                                        if st.duration > 0.0 {
-                                            j.elapsed_ms = (st.duration * 1000.0) as u64;
-                                        }
-                                        if st.success {
-                                            reload = j.reload_on_done;
-                                            tracing::debug!(job = %j.label(), elapsed_ms = j.elapsed_ms, "job done");
-                                        } else {
-                                            let msg = if st.error.is_empty() {
-                                                "failed".to_string()
-                                            } else {
-                                                st.error.clone()
-                                            };
-                                            tracing::warn!(job = %j.label(), elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
-                                            j.error = Some(msg);
-                                        }
-                                    }
-                                }
-                            }
-                            if reload {
-                                v.force_reload_entries(vcx);
-                            }
-                            vcx.notify();
-                        })
-                        .is_ok()
-                    });
-                    if !matches!(alive, Ok(true)) {
-                        return;
-                    }
-                }
-            }
-        })
-        .detach();
     }
 
     /// Ping the rc daemon on an interval for the status-bar dot; runs unfocused.
@@ -650,8 +552,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = service.remotes().await;
             this.update(cx, |this, cx| {
-                if let Ok(remotes) = result {
-                    this.remotes = remotes;
+                match result {
+                    Ok(remotes) => this.remotes = remotes,
+                    Err(e) => this.toast(format!("Couldn't load remotes: {e}"), true, cx),
                 }
                 cx.notify();
             })
@@ -706,29 +609,19 @@ impl Workspace {
         action: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.confirm = Some(Confirm {
-            title: title.into(),
-            message: message.into(),
-            confirm_label: confirm_label.into(),
-            danger,
-            action: Box::new(action),
-        });
-        cx.notify();
-    }
-
-    fn confirm_accept(&mut self, _: &ConfirmAccept, _window: &mut Window, cx: &mut Context<Self>) {
-        self.run_confirm(cx);
-    }
-
-    fn run_confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(c) = self.confirm.take() {
-            (c.action)(self, cx);
-        }
-        cx.notify();
-    }
-
-    fn dismiss_confirm(&mut self, cx: &mut Context<Self>) {
-        self.confirm = None;
+        let modal =
+            cx.new(|cx| ConfirmModal::new(title, message, confirm_label, danger, cx));
+        let mut action = Some(action);
+        self.confirm_sub = Some(cx.subscribe(&modal, move |this, _, event, cx| {
+            this.confirm = None;
+            if let confirm::ConfirmEvent::Accepted = event {
+                if let Some(action) = action.take() {
+                    action(this, cx);
+                }
+            }
+            cx.notify();
+        }));
+        self.confirm = Some(modal);
         cx.notify();
     }
 
@@ -743,55 +636,23 @@ impl Workspace {
         action: impl FnOnce(&mut Self, String, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.prompt = Some(Prompt {
-            value: value.into(),
-            placeholder: placeholder.into(),
-            icon_dir,
-            target,
-            action: Box::new(action),
-        });
-        cx.notify();
-    }
-
-    fn prompt_submit(&mut self, _: &PromptSubmit, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(p) = self.prompt.take() {
-            let value = p.value.trim().to_string();
-            if value.is_empty() {
-                // Nothing entered: reopen unchanged rather than silently doing nothing.
-                self.prompt = Some(p);
-                return;
-            }
-            (p.action)(self, value, cx);
-        }
-        cx.notify();
-    }
-
-    fn prompt_cancel(&mut self, _: &PromptCancel, _window: &mut Window, cx: &mut Context<Self>) {
-        self.prompt = None;
-        cx.notify();
-    }
-
-    /// Feed a key into the open prompt's text field (printable chars + backspace).
-    fn prompt_key(&mut self, ev: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(p) = self.prompt.as_mut() else {
-            return;
-        };
-        match ev.keystroke.key.as_str() {
-            "backspace" => {
-                p.value.pop();
-                cx.notify();
-            }
-            _ => {
-                let m = ev.keystroke.modifiers;
-                if m.platform || m.control || m.function {
-                    return;
+        let modal =
+            cx.new(|cx| PromptModal::new(value, placeholder, icon_dir, target, cx));
+        let mut action = Some(action);
+        self.prompt_sub = Some(cx.subscribe(&modal, move |this, _, event, cx| {
+            match event {
+                prompt::PromptEvent::Submitted(value) => {
+                    this.prompt = None;
+                    if let Some(action) = action.take() {
+                        action(this, value.clone(), cx);
+                    }
                 }
-                if let Some(ch) = &ev.keystroke.key_char {
-                    p.value.push_str(ch);
-                    cx.notify();
-                }
+                prompt::PromptEvent::Cancelled => this.prompt = None,
             }
-        }
+            cx.notify();
+        }));
+        self.prompt = Some(modal);
+        cx.notify();
     }
 
     fn choose_sort(&mut self, field: SortField, cx: &mut Context<Self>) {
@@ -821,6 +682,44 @@ impl Workspace {
 
     fn is_pinned(&self, name: &str) -> bool {
         self.store.get().pinned.iter().any(|n| n == name)
+    }
+
+    /// Confirm, then remove a remote from the rclone config (files untouched).
+    pub(crate) fn request_delete_remote(&mut self, name: String, cx: &mut Context<Self>) {
+        let shown = name.clone();
+        self.ask_confirm(
+            "Delete remote?",
+            format!(
+                "Remove \u{201c}{shown}\u{201d} from the rclone config. Files on the remote are not deleted."
+            ),
+            "Delete",
+            true,
+            move |this, cx| this.delete_remote(name, cx),
+            cx,
+        );
+    }
+
+    fn delete_remote(&mut self, name: String, cx: &mut Context<Self>) {
+        let service = self.service.clone();
+        cx.spawn(async move |this, cx| {
+            let result = service.config_delete(name.clone()).await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        if this.open_remote.as_deref() == Some(name.as_str()) {
+                            this.open_remote = None;
+                            this.path = String::new();
+                        }
+                        this.store.update(|s| s.pinned.retain(|n| n != &name));
+                        this.load_remotes(cx);
+                    }
+                    Err(e) => this.toast(format!("Couldn't delete \"{name}\": {e}"), true, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Pinned remotes (in pinned order), then the rest in their existing sort.
@@ -1079,12 +978,14 @@ impl Workspace {
             || self.bg_menu.is_some()
             || self.confirm.is_some()
             || self.prompt.is_some()
+            || self.remote_config.is_some()
             || self.jobs_open
         {
             self.settings_open = false;
             self.jobs_open = false;
             self.confirm = None;
             self.prompt = None;
+            self.remote_config = None;
             self.close_menus();
             cx.notify();
         } else if self.pane == Pane::Explorer && self.selected.len() > 1 {
@@ -1371,14 +1272,12 @@ impl Render for Workspace {
         self.resolve_selection();
         self.refresh_preview(cx);
         // Keep focus on the open dialog, else on the workspace — so each owns the
-        // keyboard while shown, and focus returns here when it closes.
-        let want = if self.confirm.is_some() || self.prompt.is_some() {
-            &self.dialog_focus
-        } else {
-            &self.focus
-        };
-        if !want.is_focused(window) {
-            want.focus(window, cx);
+        // keyboard while shown, and focus returns here when it closes. The modal
+        // entities (remote config, confirm) steer their own focus.
+        if self.remote_config.is_some() || self.confirm.is_some() || self.prompt.is_some() {
+            // modal entities own their focus
+        } else if !self.focus.is_focused(window) {
+            self.focus.focus(window, cx);
         }
         v_flex()
             .key_context("Workspace")
@@ -1457,8 +1356,30 @@ impl Render for Workspace {
             .when(self.context.is_some(), |el| el.child(self.render_context_menu(cx)))
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
-            .when(self.confirm.is_some(), |el| el.child(self.render_confirm(cx)))
+            .when_some(self.confirm.clone(), |el, modal| {
+                el.child(self.modal_overlay(
+                    true,
+                    |this, cx| {
+                        this.confirm = None;
+                        cx.notify();
+                    },
+                    modal,
+                    cx,
+                ))
+            })
+            .when_some(self.remote_config.clone(), |el, modal| {
+                el.child(self.modal_overlay(
+                    false,
+                    |this, cx| {
+                        this.remote_config = None;
+                        cx.notify();
+                    },
+                    modal,
+                    cx,
+                ))
+            })
             .when(self.settings_open, |el| el.child(self.render_settings(cx)))
+            .when(!self.toasts.is_empty(), |el| el.child(self.render_toasts(cx)))
     }
 }
 

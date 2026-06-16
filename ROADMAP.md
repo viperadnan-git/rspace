@@ -4,6 +4,23 @@ A fast, keyboard-first GUI for rclone: browse remotes like a file manager and
 mount them through native OS sync-provider APIs (no FUSE hacks where the OS
 offers a real API).
 
+## Status (2026-06-15)
+Phase 0 and Phase 1 are done; Phase 3's browser-side write ops shipped early
+(the browser is now a full read/write file manager). **Not yet started:** the
+File Provider mount (Phase 2 — the headline differentiator), remote management
+UI, the command palette, and the Settings storage page.
+
+Deferred deliberately: the **teardown manifest** and **storage-accounting** APIs
+were scaffolded then removed — speculative with no caller (we don't yet create
+any OS-managed artifacts to track). They return with Phase 2 (FP creates the
+first external artifacts) and the Phase 3 Settings page. Cache/blobs dirs were
+dropped too; only `config`/`logs`/`state` exist now.
+
+Shipped beyond the original plan: file preview pane (image/text/info over
+`--rc-serve`), drag-and-drop move/copy, multi-select, per-provider icons,
+pinned remotes, resizable + persisted layout (sidebar/preview/columns),
+transfer retry.
+
 ## Principles
 - **Speed is non-negotiable.** No design that trades it away. Async I/O, no
   blocking the UI thread, stream rather than buffer.
@@ -85,25 +102,27 @@ rspace/
 ## Phases
 
 ### Phase 0 — Foundations
-- [ ] Cargo workspace scaffold + lint config (clippy, rustfmt).
-- [ ] `storage`: single app-root resolver per OS convention (App Support /
-      LOCALAPPDATA / XDG); subdirs for config, cache, blobs, logs.
-- [ ] Teardown manifest: append-only record of external artifacts + replay API.
-- [ ] Storage accounting API: per-category sizes (config/cache/blobs/logs/state +
-      OS-managed), computed async and cached — backs the Settings view.
-- [ ] rclone detection: PATH + common install locations (Homebrew, etc.);
+- [x] Cargo workspace scaffold + lint config (clippy, rustfmt).
+- [x] `storage`: single app-root resolver per OS convention (App Support /
+      LOCALAPPDATA / XDG); subdirs for config, logs, state.
+- [ ] ~~Teardown manifest~~ — deferred to Phase 2 (no external artifacts yet).
+- [ ] ~~Storage accounting API~~ — deferred to Phase 3 Settings page.
+- [x] rclone detection: PATH + common install locations (Homebrew, etc.);
       if missing, redirect to rclone install docs.
-- [ ] rcd daemon lifecycle: spawn on loopback, random auth token, health check,
-      graceful shutdown.
-- [ ] gpui app shell + keybinding system foundation.
-- [ ] macOS code-signing / dev-cert setup (needed by Phase 2; stand up early).
+- [x] rcd daemon lifecycle: spawn on loopback, random auth token, health check,
+      graceful shutdown + signal cleanup; `--rc-serve` for object previews.
+- [x] gpui app shell + keybinding system foundation.
+- [ ] macOS code-signing / dev-cert setup (have `.app` bundle + icon; signing
+      and notarization still pending — needed by Phase 2).
 
 ### Phase 1 — Browser MVP (macOS)
-- [ ] RC client: list remotes (`config/dump`), list dir (`operations/list`),
+- [x] RC client: list remotes (`config/dump`), list dir (`operations/list`),
       item metadata.
-- [ ] File-browser UI: remote list, directory navigation, breadcrumb, columns.
-- [ ] First-class keyboard nav (arrows + vim-style) and command palette.
-- [ ] Read-only actions: preview/open, copy path, single-file download.
+- [x] File-browser UI: remote list, directory navigation, breadcrumb, resizable
+      columns, pinned remotes, per-provider icons.
+- [x] First-class keyboard nav (arrows + vim-style); multi-select.
+- [ ] Command palette (keyboard-first promise — still missing).
+- [x] Read-only actions: preview pane (image/text/info), copy path, download.
 
 ### Phase 2 — File Provider mount (macOS)
 - [ ] File Provider replicated extension (Swift) bundled in the app.
@@ -113,9 +132,10 @@ rspace/
 - [ ] Item enumeration + on-demand content fetch through rclone.
 - [ ] **Spike:** verify exactly what FP persists and prove full removal.
 
-### Phase 3 — Write ops & polish
-- [ ] Upload / copy / move / delete / mkdir via RC, in browser and through FP.
-- [ ] Transfer queue + progress (RC `core/stats`), robust error surfacing.
+### Phase 3 — Write ops & polish (browser-side shipped early)
+- [x] Upload / copy / move / delete / mkdir / rename via RC in the browser
+      (incl. cross-remote copy/move, drag-and-drop). Through FP: pending Phase 2.
+- [x] Transfer queue + progress (RC `core/stats`), error surfacing, retry.
 - [ ] Remote management UI (add/edit/remove via rclone config over RC).
 - [ ] Settings — storage & config page: footprint breakdown, per-category clear
       (incl. API-driven OS-managed eviction), config inspection + manifest view.

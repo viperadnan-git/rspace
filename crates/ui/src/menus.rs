@@ -192,6 +192,22 @@ impl Workspace {
             );
         }
 
+        let edit_name = name.clone();
+        items.push(
+            self.menu_item("Edit remote", "icons/edit.svg", cx, move |this, cx| {
+                this.begin_edit_remote(edit_name.clone(), cx)
+            })
+            .into_any_element(),
+        );
+
+        let del_name = name.clone();
+        items.push(
+            self.menu_item_danger("Delete remote", "icons/trash.svg", cx, move |this, cx| {
+                this.request_delete_remote(del_name.clone(), cx)
+            })
+            .into_any_element(),
+        );
+
         self.popover("remote-menu", pos, items, cx)
     }
 

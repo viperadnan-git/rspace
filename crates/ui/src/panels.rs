@@ -4,8 +4,8 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn render_transfers(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_done = self.jobs.iter().any(|j| j.done);
-        let count = self.jobs.len();
+        let has_done = self.jobs.read(cx).has_finished();
+        let count = self.jobs.read(cx).items().len();
         let body = if count == 0 {
             centered("No transfers", FG_SUBTLE).into_any_element()
         } else {
@@ -13,11 +13,12 @@ impl Workspace {
                 "transfers",
                 count,
                 cx.processor(|this, range: Range<usize>, _window, cx| {
-                    let n = this.jobs.len();
+                    let items = this.jobs.read(cx).items().to_vec();
+                    let n = items.len();
                     range
                         // Newest first.
                         .filter_map(|i| {
-                            n.checked_sub(1 + i).and_then(|idx| this.jobs.get(idx).cloned()).map(|j| (i, j))
+                            n.checked_sub(1 + i).and_then(|idx| items.get(idx).cloned()).map(|j| (i, j))
                         })
                         .map(|(i, job)| {
                             div()
@@ -279,8 +280,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let card = self
-            .modal_card("settings-card", cx)
+        let card = modal_card("settings-card", cx)
             .w(px(460.0))
             .gap_5()
             .child(
@@ -302,6 +302,7 @@ impl Workspace {
             .child(self.download_setting(cx))
             .child(self.settings_info());
         self.modal_overlay(
+            true,
             |this, cx| {
                 this.settings_open = false;
                 cx.notify();
@@ -362,20 +363,8 @@ impl Workspace {
 
     fn refresh_preset(&self, secs: u64, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.store.get().refresh_secs == secs;
-        let base = h_flex()
-            .id(SharedString::from(format!("preset-{secs}")))
-            .px_3()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .text_color(if active { rgb(FG) } else { rgb(FG_MUTED) })
+        chip(SharedString::from(format!("preset-{secs}")), format!("{secs}s"), active)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_refresh(secs, cx)))
-            .child(format!("{secs}s"));
-        if active {
-            base.bg(rgba(SELECT))
-        } else {
-            base.hover(|s| s.bg(rgba(OVERLAY)))
-        }
     }
 
     fn settings_info(&self) -> impl IntoElement {
@@ -421,7 +410,7 @@ impl Workspace {
             .child(
                 h_flex()
                     .gap_3()
-                    .when(!self.jobs.is_empty(), |el| el.child(self.jobs_indicator(cx)))
+                    .when(!self.jobs.read(cx).is_empty(), |el| el.child(self.jobs_indicator(cx)))
                     .child(info)
                     .child(self.version.clone()),
             )
@@ -442,9 +431,10 @@ impl Workspace {
 
     fn jobs_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Separate counts so a mixed run reads e.g. "↻2  ✓3  ⚠1".
-        let active = self.jobs.iter().filter(|j| !j.done).count();
-        let failed = self.jobs.iter().filter(|j| j.done && j.error.is_some()).count();
-        let succeeded = self.jobs.iter().filter(|j| j.done && j.error.is_none()).count();
+        let jobs = self.jobs.read(cx);
+        let active = jobs.items().iter().filter(|j| !j.done).count();
+        let failed = jobs.items().iter().filter(|j| j.done && j.error.is_some()).count();
+        let succeeded = jobs.items().iter().filter(|j| j.done && j.error.is_none()).count();
         h_flex()
             .id("jobs-indicator")
             .gap_2()

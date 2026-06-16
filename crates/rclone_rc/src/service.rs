@@ -2,8 +2,18 @@ use thiserror::Error;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
-use crate::client::{Entry, JobStatus, RcClient, RemoteInfo, Stats};
+use crate::client::{ConfigStep, Entry, JobStatus, Provider, RcClient, RemoteInfo, Stats};
 use crate::RcError;
+
+/// Aborts a spawned task when dropped — used so an unfinished interactive
+/// config request is cancelled if the caller drops the future.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -80,32 +90,92 @@ impl Service {
         Self { handle, client }
     }
 
-    /// Liveness check against the rc daemon (`rc/noop`).
-    pub async fn ping(&self) -> Result<(), ServiceError> {
+    /// Run an RC call on the tokio runtime, awaiting its result over a oneshot.
+    async fn run<T, Fut>(
+        &self,
+        call: impl FnOnce(RcClient) -> Fut + Send + 'static,
+    ) -> Result<T, ServiceError>
+    where
+        T: Send + 'static,
+        Fut: std::future::Future<Output = Result<T, RcError>> + Send,
+    {
         let (tx, rx) = oneshot::channel();
         let client = self.client.clone();
         self.handle.spawn(async move {
-            let _ = tx.send(client.noop().await);
+            let _ = tx.send(call(client).await);
         });
         rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+    }
+
+    /// Like [`run`], but dropping the returned future aborts the request — which
+    /// disconnects the client so rclone tears down any pending OAuth callback server.
+    async fn run_cancellable<T, Fut>(
+        &self,
+        call: impl FnOnce(RcClient) -> Fut + Send + 'static,
+    ) -> Result<T, ServiceError>
+    where
+        T: Send + 'static,
+        Fut: std::future::Future<Output = Result<T, RcError>> + Send,
+    {
+        let (tx, rx) = oneshot::channel();
+        let client = self.client.clone();
+        let task = self.handle.spawn(async move {
+            let _ = tx.send(call(client).await);
+        });
+        let _abort = AbortOnDrop(task.abort_handle());
+        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+    }
+
+    /// Liveness check against the rc daemon (`rc/noop`).
+    pub async fn ping(&self) -> Result<(), ServiceError> {
+        self.run(|c| async move { c.noop().await }).await
     }
 
     pub async fn list_remotes(&self) -> Result<Vec<String>, ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.list_remotes().await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(|c| async move { c.list_remotes().await }).await
     }
 
     pub async fn remotes(&self) -> Result<Vec<RemoteInfo>, ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.remotes().await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(|c| async move { c.remotes().await }).await
+    }
+
+    /// Delete a configured remote.
+    pub async fn config_delete(&self, name: String) -> Result<(), ServiceError> {
+        self.run(move |c| async move { c.config_delete(&name).await }).await
+    }
+
+    /// Configurable backends and their option schemas.
+    pub async fn config_providers(&self) -> Result<Vec<Provider>, ServiceError> {
+        self.run(|c| async move { c.config_providers().await }).await
+    }
+
+    /// Stored parameters of a remote, for editing.
+    pub async fn config_get(
+        &self,
+        name: String,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, ServiceError> {
+        self.run(move |c| async move { c.config_get(&name).await }).await
+    }
+
+    /// One step of interactive remote creation.
+    pub async fn config_create(
+        &self,
+        name: String,
+        kind: String,
+        parameters: serde_json::Value,
+        opt: serde_json::Value,
+    ) -> Result<ConfigStep, ServiceError> {
+        self.run_cancellable(move |c| async move { c.config_create(&name, &kind, parameters, opt).await }).await
+    }
+
+    /// One step of interactive remote editing.
+    pub async fn config_update(
+        &self,
+        name: String,
+        parameters: serde_json::Value,
+        opt: serde_json::Value,
+    ) -> Result<ConfigStep, ServiceError> {
+        self.run_cancellable(move |c| async move { c.config_update(&name, parameters, opt).await }).await
     }
 
     /// Download `remote:path` into the local `dest` dir as an async job.
@@ -245,12 +315,7 @@ impl Service {
         path: String,
         max_bytes: u64,
     ) -> Result<Vec<u8>, ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.fetch_object(&remote, &path, max_bytes).await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(move |c| async move { c.fetch_object(&remote, &path, max_bytes).await }).await
     }
 
     /// Submit an async job in stats group `group`, returning the job id.
@@ -261,12 +326,7 @@ impl Service {
         group: String,
     ) -> Result<u64, ServiceError> {
         tracing::debug!(method, ?params, "submit job");
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.call_async(method, params, &group).await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(move |c| async move { c.call_async(method, params, &group).await }).await
     }
 
     /// Permanently delete `remote:path` as an async job. `is_dir` (from rclone's
@@ -283,45 +343,23 @@ impl Service {
     }
 
     pub async fn job_status(&self, jobid: u64) -> Result<JobStatus, ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.job_status(jobid).await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(move |c| async move { c.job_status(jobid).await }).await
     }
 
     pub async fn stats(&self, group: String) -> Result<Stats, ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.stats(&group).await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(move |c| async move { c.stats(&group).await }).await
     }
 
     pub async fn job_stop(&self, jobid: u64) -> Result<(), ServiceError> {
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.job_stop(jobid).await);
-        });
-        rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
+        self.run(move |c| async move { c.job_stop(jobid).await }).await
     }
 
     pub async fn list_dir(&self, remote: &str, path: &str) -> Result<Vec<Entry>, ServiceError> {
         // "start" with no matching "done"/"failed" marks a listing still in flight.
         tracing::debug!(remote, path, "list dir start");
         let start = std::time::Instant::now();
-        let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
-        let fs = format!("{remote}:");
-        let owned_path = path.to_string();
-        self.handle.spawn(async move {
-            let _ = tx.send(client.list(&fs, &owned_path).await);
-        });
-        let result: Result<Vec<Entry>, ServiceError> =
-            rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into);
+        let (fs, owned_path) = (format!("{remote}:"), path.to_string());
+        let result = self.run(move |c| async move { c.list(&fs, &owned_path).await }).await;
         let ms = start.elapsed().as_millis() as u64;
         match &result {
             Ok(entries) => tracing::debug!(remote, path, count = entries.len(), elapsed_ms = ms, "list dir done"),
