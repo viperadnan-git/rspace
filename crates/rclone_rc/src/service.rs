@@ -1,8 +1,11 @@
+use std::sync::{Arc, RwLock};
+
 use thiserror::Error;
 use tokio::runtime::Handle;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 
 use crate::client::{ConfigStep, Entry, JobStatus, Provider, RcClient, RemoteInfo, Stats};
+use crate::daemon::{Daemon, SharedDaemon};
 use crate::RcError;
 
 /// Aborts a spawned task when dropped — used so an unfinished interactive
@@ -21,6 +24,8 @@ pub enum ServiceError {
     Rc(#[from] RcError),
     #[error("backend task cancelled")]
     Cancelled,
+    #[error("daemon restart: {0}")]
+    Daemon(String),
 }
 
 /// Whether a paste keeps the source (copy) or removes it (move/cut).
@@ -79,15 +84,59 @@ fn join(dir: &str, name: &str) -> String {
 
 /// Bridge between the UI executor and the rclone daemon: RC calls run on the
 /// tokio runtime, results return over a oneshot the UI awaits. Cloneable.
+///
+/// Owns the daemon so it can be restarted: the client lives behind a swap-able
+/// handle, so when [`restart_daemon`] spawns a fresh `rcd` on a new port every
+/// clone of the service picks up the new endpoint automatically.
+///
+/// [`restart_daemon`]: Service::restart_daemon
 #[derive(Clone)]
 pub struct Service {
     handle: Handle,
-    client: RcClient,
+    client: Arc<RwLock<RcClient>>,
+    daemon: SharedDaemon,
 }
 
 impl Service {
-    pub fn new(handle: Handle, client: RcClient) -> Self {
-        Self { handle, client }
+    /// Take ownership of a started [`Daemon`], exposing it as a restartable service.
+    pub fn from_daemon(handle: Handle, daemon: Daemon) -> Self {
+        let client = Arc::new(RwLock::new(daemon.client().clone()));
+        Self { handle, client, daemon: Arc::new(Mutex::new(daemon)) }
+    }
+
+    /// Install termination-signal cleanup for the (current) daemon.
+    pub fn install_signal_cleanup(&self) {
+        #[cfg(any(unix, windows))]
+        crate::daemon::install_signal_cleanup(&self.handle, self.daemon.clone());
+    }
+
+    /// Snapshot the current RC client (cheap clone; changes after a restart).
+    fn client(&self) -> RcClient {
+        self.client.read().unwrap().clone()
+    }
+
+    /// Restart the daemon: stop `rcd`, spawn a fresh one, and swap in the new
+    /// client so all service clones use the new endpoint.
+    pub async fn restart_daemon(&self) -> Result<(), ServiceError> {
+        let (daemon, client) = (self.daemon.clone(), self.client.clone());
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn(async move {
+            let result = daemon.lock().await.restart().await;
+            let sent = match result {
+                Ok(new_client) => {
+                    *client.write().unwrap() = new_client;
+                    Ok(())
+                }
+                Err(e) => Err(ServiceError::Daemon(e.to_string())),
+            };
+            let _ = tx.send(sent);
+        });
+        rx.await.map_err(|_| ServiceError::Cancelled)?
+    }
+
+    /// Gracefully stop the daemon (on app exit).
+    pub async fn shutdown(&self) {
+        self.daemon.lock().await.shutdown().await;
     }
 
     /// Run an RC call on the tokio runtime, awaiting its result over a oneshot.
@@ -100,7 +149,7 @@ impl Service {
         Fut: std::future::Future<Output = Result<T, RcError>> + Send,
     {
         let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
+        let client = self.client();
         self.handle.spawn(async move {
             let _ = tx.send(call(client).await);
         });
@@ -118,7 +167,7 @@ impl Service {
         Fut: std::future::Future<Output = Result<T, RcError>> + Send,
     {
         let (tx, rx) = oneshot::channel();
-        let client = self.client.clone();
+        let client = self.client();
         let task = self.handle.spawn(async move {
             let _ = tx.send(call(client).await);
         });

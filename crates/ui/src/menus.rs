@@ -3,7 +3,7 @@
 use super::*;
 
 impl Workspace {
-    fn menu_item(
+    pub(crate) fn menu_item(
         &self,
         label: &'static str,
         icon: &'static str,
@@ -57,18 +57,19 @@ impl Workspace {
         self.context = None;
         self.remote_menu = None;
         self.bg_menu = None;
+        self.rc_popover_open = false;
     }
 
-    /// Popover anchored at `pos`, dismissed on outside mouse-down. `occlude`
-    /// stops hover/click reaching content behind it.
-    fn popover(
+    /// The elevated popover card: occludes content behind it and dismisses on an
+    /// outside mouse-down. Used both free-anchored (menus) and attached to a
+    /// trigger element (the status-bar daemon button).
+    pub(crate) fn popover_surface(
         &self,
         id: &'static str,
-        pos: Point<Pixels>,
         items: Vec<AnyElement>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let menu = v_flex()
+    ) -> Stateful<Div> {
+        v_flex()
             .id(id)
             .occlude()
             .min_w(px(180.0))
@@ -83,8 +84,22 @@ impl Workspace {
                 this.close_menus();
                 cx.notify();
             }))
-            .children(items);
-        deferred(anchored().position(pos).snap_to_window_with_margin(px(8.0)).child(menu)).priority(2)
+            .children(items)
+    }
+
+    /// A [`popover_surface`] free-anchored at `pos` (whose `anchor` corner sits
+    /// there), for the right-click menus.
+    pub(crate) fn popover(
+        &self,
+        id: &'static str,
+        pos: Point<Pixels>,
+        anchor: gpui::Anchor,
+        items: Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let surface = self.popover_surface(id, items, cx);
+        deferred(anchored().position(pos).anchor(anchor).snap_to_window_with_margin(px(8.0)).child(surface))
+            .priority(2)
     }
 
     pub(crate) fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -148,7 +163,7 @@ impl Workspace {
             .into_any_element(),
         );
 
-        self.popover("context-menu", pos, items, cx)
+        self.popover("context-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 
     pub(crate) fn render_remote_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -208,7 +223,7 @@ impl Workspace {
             .into_any_element(),
         );
 
-        self.popover("remote-menu", pos, items, cx)
+        self.popover("remote-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 
     pub(crate) fn render_bg_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -239,6 +254,6 @@ impl Workspace {
             })
             .into_any_element(),
         );
-        self.popover("bg-menu", pos, items, cx)
+        self.popover("bg-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 }

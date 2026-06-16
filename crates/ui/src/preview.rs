@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use gpui::{img, Image, ImageFormat, ObjectFit};
+use gpui::{Image, ImageFormat};
 
 use super::*;
 
@@ -174,20 +174,9 @@ impl Workspace {
         let entry = self.entries().get(self.entry_sel).cloned();
         let content = match (&entry, self.preview.as_ref().map(|p| &p.state)) {
             (None, _) => centered("Select a file to preview", FG_SUBTLE).into_any_element(),
-            (Some(_), Some(PreviewState::Image(image))) => div()
-                .flex_1()
-                .min_h(px(0.0))
-                .p_3()
-                .child(
-                    img(image.clone())
-                        .id("preview-image")
-                        .size_full()
-                        .object_fit(ObjectFit::Contain)
-                        .with_fallback(|| {
-                            centered("Can't preview this image", FG_SUBTLE).into_any_element()
-                        }),
-                )
-                .into_any_element(),
+            (Some(_), Some(PreviewState::Image(image))) => {
+                image_view(image.clone()).into_any_element()
+            }
             (Some(_), Some(PreviewState::Text(text))) => div()
                 .id("preview-text")
                 .flex_1()
@@ -213,7 +202,9 @@ impl Workspace {
         v_flex()
             .relative()
             .w(self.preview_width)
+            .min_h(px(0.0))
             .flex_shrink_0()
+            .overflow_hidden()
             .bg(rgb(INSET))
             .border_l_1()
             .border_color(rgb(BORDER_MUTED))

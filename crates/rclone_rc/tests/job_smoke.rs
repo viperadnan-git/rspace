@@ -10,7 +10,7 @@ use rspace_rclone_rc::{detect, Daemon};
 async fn async_copy_job_reports_status_and_stats() {
     let rclone = detect().expect("rclone installed");
     let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(&rclone.path, dir.path().join("rcd.pid")).await.expect("daemon");
+    let mut daemon = Daemon::start(rclone.path.clone(), dir.path().join("rcd.pid")).await.expect("daemon");
     let client = daemon.client();
 
     // A source file and a destination dir, both local.

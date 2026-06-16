@@ -1,11 +1,12 @@
 //! Stateless presentation helpers shared across the views.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView, App,
-    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, MouseButton, MouseDownEvent,
-    Pixels, Render, SharedString, Stateful, Transformation, Window,
+    div, img, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView,
+    App, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Image, MouseButton,
+    MouseDownEvent, ObjectFit, Pixels, Render, SharedString, Stateful, Transformation, Window,
 };
 use rspace_core::{SortField, SortOrder};
 use rspace_rclone_rc::Entry;
@@ -112,6 +113,28 @@ pub fn list_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     } else {
         base.hover(|s| s.bg(rgba(OVERLAY)))
     }
+}
+
+/// A centered image scaled to fit its box: shown at natural size, scaled *down*
+/// (never up) to fit, preserving aspect, and clipped so it can't overflow. The
+/// box must be size-bounded by the caller (e.g. `flex_1().min_h_0()`).
+pub fn image_view(image: Arc<Image>) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .overflow_hidden()
+        .flex()
+        .justify_center()
+        .items_center()
+        .child(
+            img(image)
+                .id("preview-image")
+                .max_w_full()
+                .max_h_full()
+                .object_fit(ObjectFit::Contain)
+                .with_fallback(|| centered("Can't preview this image", FG_SUBTLE).into_any_element()),
+        )
 }
 
 /// A square icon button: muted svg glyph, rounded hover background.
@@ -276,7 +299,8 @@ pub fn centered(text: &'static str, color: u32) -> Div {
 
 pub fn spinner(id: impl Into<gpui::ElementId>, size: Pixels, color: u32) -> impl IntoElement {
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    div().text_size(size).text_color(rgb(color)).with_animation(
+    // Tight line height + no shrink: an inline indicator that never grows its row.
+    div().text_size(size).line_height(size).flex_shrink_0().text_color(rgb(color)).with_animation(
         id,
         Animation::new(Duration::from_millis(800)).repeat(),
         |el, delta| {

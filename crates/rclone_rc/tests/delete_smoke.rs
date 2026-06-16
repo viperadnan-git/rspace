@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 async fn delete_removes_file_and_dir() {
     let rclone = detect().expect("rclone");
     let tmp = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(&rclone.path, tmp.path().join("rcd.pid")).await.expect("daemon");
+    let mut daemon = Daemon::start(rclone.path.clone(), tmp.path().join("rcd.pid")).await.expect("daemon");
     let client = daemon.client();
 
     let root = tmp.path().join("root");

@@ -11,7 +11,7 @@ async fn daemon_starts_lists_and_cleans_up() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("rcd.pid");
 
-    let daemon = Daemon::start(&rclone.path, pidfile.clone()).await.expect("daemon starts");
+    let mut daemon = Daemon::start(rclone.path.clone(), pidfile.clone()).await.expect("daemon starts");
     assert!(pidfile.exists(), "pid file written on start");
 
     // Health + a real RC call over the loopback API.

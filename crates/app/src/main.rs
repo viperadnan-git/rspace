@@ -30,21 +30,20 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let pidfile = paths.state_dir().join("rcd.pid");
 
-    match runtime.block_on(Daemon::start(&found.path, pidfile)) {
+    match runtime.block_on(Daemon::start(found.path.clone(), pidfile)) {
         Ok(daemon) => {
-            #[cfg(any(unix, windows))]
-            daemon.install_signal_cleanup(runtime.handle());
-            let service = Service::new(runtime.handle().clone(), daemon.client().clone());
+            let service = Service::from_daemon(runtime.handle().clone(), daemon);
+            service.install_signal_cleanup();
             run(Startup {
                 rclone: RcloneStatus::Found {
                     path: found.path.display().to_string(),
                     version: found.version,
                 },
-                service: Some(service),
+                service: Some(service.clone()),
                 paths: paths.clone(),
                 store,
             });
-            runtime.block_on(daemon.shutdown());
+            runtime.block_on(service.shutdown());
         }
         Err(e) => {
             tracing::error!(error = %e, "rcd failed to start");

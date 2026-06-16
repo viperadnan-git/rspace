@@ -1,14 +1,22 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
 use thiserror::Error;
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
 use crate::client::RcClient;
+
+/// Shared, restartable handle to the daemon (held by the [`Service`] and the
+/// signal handler so both always act on the current child).
+///
+/// [`Service`]: crate::Service
+pub type SharedDaemon = Arc<Mutex<Daemon>>;
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -31,6 +39,7 @@ pub struct Daemon {
     child: Child,
     client: RcClient,
     pidfile: PathBuf,
+    rclone: PathBuf,
 }
 
 impl Daemon {
@@ -38,125 +47,138 @@ impl Daemon {
     ///
     /// Reaps any orphan recorded in `pidfile` first, then writes this daemon's
     /// pid there and waits until it answers `rc/noop`.
-    pub async fn start(rclone: &Path, pidfile: PathBuf) -> Result<Self, DaemonError> {
+    pub async fn start(rclone: PathBuf, pidfile: PathBuf) -> Result<Self, DaemonError> {
         reap_orphan(&pidfile);
-
-        let port = free_loopback_port().map_err(DaemonError::Port)?;
-        let addr = format!("127.0.0.1:{port}");
-        let user = token(16);
-        let pass = token(32);
-
-        let child = Command::new(rclone)
-            .arg("rcd")
-            .arg("--rc-addr")
-            .arg(&addr)
-            .arg("--rc-user")
-            .arg(&user)
-            .arg("--rc-pass")
-            .arg(&pass)
-            // Serve remote objects over the same HTTP endpoint for file previews.
-            .arg("--rc-serve")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(DaemonError::Spawn)?;
-
-        if let Some(pid) = child.id() {
-            write_pidfile(&pidfile, pid).map_err(DaemonError::PidFile)?;
-        }
-
-        let client = RcClient::new(format!("http://{addr}"), user, pass);
-        let daemon = Self { child, client, pidfile };
-        daemon.await_healthy(Duration::from_secs(10)).await?;
-        Ok(daemon)
+        let (child, client) = spawn_healthy(&rclone, &pidfile).await?;
+        Ok(Self { child, client, pidfile, rclone })
     }
 
     pub fn client(&self) -> &RcClient {
         &self.client
     }
 
-    async fn await_healthy(&self, timeout: Duration) -> Result<(), DaemonError> {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            if self.client.noop().await.is_ok() {
-                return Ok(());
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-        Err(DaemonError::Unhealthy(timeout))
+    /// Stop the current daemon and spawn a fresh one on a new port, returning the
+    /// new client. The new endpoint differs, so callers must adopt the returned
+    /// client (the [`Service`] swaps it for all clones).
+    ///
+    /// [`Service`]: crate::Service
+    pub async fn restart(&mut self) -> Result<RcClient, DaemonError> {
+        let _ = self.client.quit().await;
+        let _ = self.child.kill().await;
+        let (child, client) = spawn_healthy(&self.rclone, &self.pidfile).await?;
+        self.child = child;
+        self.client = client.clone();
+        Ok(client)
     }
 
     /// Gracefully quit the daemon, falling back to a kill, then clear the pid
-    /// file so the next launch has nothing to reap.
-    pub async fn shutdown(mut self) {
-        let _ = self.client.quit().await;
+    /// file so the next launch has nothing to reap. Takes `&mut self` so it can
+    /// run while the daemon is held behind a [`SharedDaemon`].
+    pub async fn shutdown(&mut self) {
+        let _ = tokio::time::timeout(Duration::from_secs(2), self.client.quit()).await;
         let _ = self.child.kill().await;
         let _ = std::fs::remove_file(&self.pidfile);
     }
-
-    /// Run [`shutdown`]-equivalent cleanup on a termination signal, then exit —
-    /// `kill_on_drop` doesn't run when a signal kills the process.
-    /// Unix: SIGINT/SIGTERM. Windows: Ctrl-C/Break/Close/Shutdown/Logoff.
-    #[cfg(unix)]
-    pub fn install_signal_cleanup(&self, handle: &tokio::runtime::Handle) {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let client = self.client.clone();
-        let pid = self.child.id();
-        let pidfile = self.pidfile.clone();
-        handle.spawn(async move {
-            let (Ok(mut term), Ok(mut int)) =
-                (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
-            else {
-                return;
-            };
-            tokio::select! {
-                _ = term.recv() => {}
-                _ = int.recv() => {}
-            }
-            cleanup_and_exit(client, pid, pidfile).await;
-        });
-    }
-
-    #[cfg(windows)]
-    pub fn install_signal_cleanup(&self, handle: &tokio::runtime::Handle) {
-        use tokio::signal::windows;
-
-        let client = self.client.clone();
-        let pid = self.child.id();
-        let pidfile = self.pidfile.clone();
-        handle.spawn(async move {
-            let (Ok(mut cc), Ok(mut brk), Ok(mut close), Ok(mut shutdown), Ok(mut logoff)) = (
-                windows::ctrl_c(),
-                windows::ctrl_break(),
-                windows::ctrl_close(),
-                windows::ctrl_shutdown(),
-                windows::ctrl_logoff(),
-            ) else {
-                return;
-            };
-            tokio::select! {
-                _ = cc.recv() => {}
-                _ = brk.recv() => {}
-                _ = close.recv() => {}
-                _ = shutdown.recv() => {}
-                _ = logoff.recv() => {}
-            }
-            cleanup_and_exit(client, pid, pidfile).await;
-        });
-    }
 }
 
-/// Graceful quit (bounded), then ensure the daemon is dead and the pid file is
-/// gone, then exit. Shared by the per-platform signal handlers.
-#[cfg(any(unix, windows))]
-async fn cleanup_and_exit(client: RcClient, pid: Option<u32>, pidfile: PathBuf) -> ! {
-    let _ = tokio::time::timeout(Duration::from_secs(2), client.quit()).await;
-    if let Some(pid) = pid {
-        terminate(pid);
+/// Spawn `rclone rcd` on a fresh free port with random credentials, record its
+/// pid, and wait until it answers `rc/noop`. Shared by `start` and `restart`.
+async fn spawn_healthy(rclone: &Path, pidfile: &Path) -> Result<(Child, RcClient), DaemonError> {
+    let port = free_loopback_port().map_err(DaemonError::Port)?;
+    let addr = format!("127.0.0.1:{port}");
+    let user = token(16);
+    let pass = token(32);
+
+    let child = Command::new(rclone)
+        .arg("rcd")
+        .arg("--rc-addr")
+        .arg(&addr)
+        .arg("--rc-user")
+        .arg(&user)
+        .arg("--rc-pass")
+        .arg(&pass)
+        // Serve remote objects over the same HTTP endpoint for file previews.
+        .arg("--rc-serve")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(DaemonError::Spawn)?;
+
+    if let Some(pid) = child.id() {
+        write_pidfile(pidfile, pid).map_err(DaemonError::PidFile)?;
     }
-    let _ = std::fs::remove_file(&pidfile);
+
+    let client = RcClient::new(format!("http://{addr}"), user, pass);
+    await_healthy(&client, Duration::from_secs(10)).await?;
+    Ok((child, client))
+}
+
+async fn await_healthy(client: &RcClient, timeout: Duration) -> Result<(), DaemonError> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if client.noop().await.is_ok() {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Err(DaemonError::Unhealthy(timeout))
+}
+
+/// Shut down the current daemon on a termination signal, then exit —
+/// `kill_on_drop` doesn't run when a signal kills the process. Acts on the
+/// shared (restart-safe) daemon. Unix: SIGINT/SIGTERM. Windows: Ctrl-* events.
+#[cfg(unix)]
+pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDaemon) {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    handle.spawn(async move {
+        let (Ok(mut term), Ok(mut int)) =
+            (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
+        else {
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+        signal_shutdown(daemon).await;
+    });
+}
+
+#[cfg(windows)]
+pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDaemon) {
+    use tokio::signal::windows;
+
+    handle.spawn(async move {
+        let (Ok(mut cc), Ok(mut brk), Ok(mut close), Ok(mut shutdown), Ok(mut logoff)) = (
+            windows::ctrl_c(),
+            windows::ctrl_break(),
+            windows::ctrl_close(),
+            windows::ctrl_shutdown(),
+            windows::ctrl_logoff(),
+        ) else {
+            return;
+        };
+        tokio::select! {
+            _ = cc.recv() => {}
+            _ = brk.recv() => {}
+            _ = close.recv() => {}
+            _ = shutdown.recv() => {}
+            _ = logoff.recv() => {}
+        }
+        signal_shutdown(daemon).await;
+    });
+}
+
+/// Lock the shared daemon, shut it down (bounded), then exit. A stuck lock (mid
+/// restart) is bounded too — the pid file is the backstop for any survivor.
+#[cfg(any(unix, windows))]
+async fn signal_shutdown(daemon: SharedDaemon) -> ! {
+    let _ = tokio::time::timeout(Duration::from_secs(4), async {
+        daemon.lock().await.shutdown().await;
+    })
+    .await;
     std::process::exit(130);
 }
 

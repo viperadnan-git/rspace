@@ -26,7 +26,7 @@ async fn run_job(client: &RcClient, method: &str, params: Value) {
 async fn copyfile_handles_glob_metachar_name() {
     let rclone = detect().expect("rclone");
     let tmp = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(&rclone.path, tmp.path().join("rcd.pid")).await.expect("daemon");
+    let mut daemon = Daemon::start(rclone.path.clone(), tmp.path().join("rcd.pid")).await.expect("daemon");
     let client = daemon.client();
 
     // A filename with brackets — a glob character class if treated as a pattern.
@@ -55,7 +55,7 @@ async fn copyfile_handles_glob_metachar_name() {
 async fn sync_copy_handles_dir_and_move_relocates() {
     let rclone = detect().expect("rclone");
     let tmp = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(&rclone.path, tmp.path().join("rcd.pid")).await.expect("daemon");
+    let mut daemon = Daemon::start(rclone.path.clone(), tmp.path().join("rcd.pid")).await.expect("daemon");
     let client = daemon.client();
 
     let src = tmp.path().join("src");

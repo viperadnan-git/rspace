@@ -104,7 +104,7 @@ impl AssetSource for Assets {
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
-            "plus"
+            "plus", "server_network", "server_network_off"
         ))
     }
 
@@ -271,12 +271,24 @@ enum CopySource {
     JobCommand(usize),
 }
 
-/// Reachability of the rclone rc daemon, surfaced by the status-bar dot.
+/// Reachability of the rclone rc daemon, surfaced by the status-bar button.
 #[derive(Clone)]
 enum RcHealth {
     Unknown,
     Up,
     Down(String),
+    /// Daemon is being restarted (a fresh `rcd` is spawning).
+    Restarting,
+}
+
+impl RcHealth {
+    /// Status icon: a slashed server when unreachable, a plain one otherwise.
+    fn icon(&self) -> &'static str {
+        match self {
+            RcHealth::Down(_) => "icons/server_network_off.svg",
+            _ => "icons/server_network.svg",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -407,6 +419,8 @@ struct Workspace {
     context: Option<(Entry, Point<Pixels>)>,
     /// Right-click on empty list space: the cursor position.
     bg_menu: Option<Point<Pixels>>,
+    /// Whether the rcd status popover (status-bar daemon button) is open.
+    rc_popover_open: bool,
     /// Pending confirmation modal (destructive or irreversible actions).
     confirm: Option<Entity<ConfirmModal>>,
     /// Subscription to the open confirm modal's accept/dismiss events.
@@ -490,6 +504,7 @@ impl Workspace {
             settings_open: false,
             context: None,
             bg_menu: None,
+            rc_popover_open: false,
             confirm: None,
             confirm_sub: None,
             prompt: None,
@@ -532,8 +547,11 @@ impl Workspace {
                 let alive = cx
                     .update(|_, app| {
                         this.update(app, |v, vcx| {
-                            v.rc_health = health;
-                            vcx.notify();
+                            // Don't fight an in-flight restart (it pings the old, dead port).
+                            if !matches!(v.rc_health, RcHealth::Restarting) {
+                                v.rc_health = health;
+                                vcx.notify();
+                            }
                         })
                         .is_ok()
                     })
@@ -1356,6 +1374,7 @@ impl Render for Workspace {
             .when(self.context.is_some(), |el| el.child(self.render_context_menu(cx)))
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
+            .when(self.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
             .when_some(self.confirm.clone(), |el, modal| {
                 el.child(self.modal_overlay(
                     true,
