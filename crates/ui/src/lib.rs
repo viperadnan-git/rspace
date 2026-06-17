@@ -31,7 +31,7 @@ use gpui::{
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use rspace_core::{Paths, SettingsStore, SortField, SortOrder};
+use rspace_core::{dir_size, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState};
 use rspace_rclone_rc::{
     ArgKind, ArgSpec, ArgValue, Entry, InfoOp, InfoResult, Operation, Provider, RemoteInfo,
     RemoteOption, Service, ServiceError, TransferMode,
@@ -48,6 +48,15 @@ use remotes::RemoteConfigModal;
 use query::{Query, Status};
 use theme::*;
 use widgets::*;
+
+/// Rows shown in the transfers history view.
+const JOB_HISTORY_LIMIT: usize = 50;
+/// Recent remotes fetched into the cache; the welcome screen filters these
+/// against the live config and shows the first few, so over-fetch to survive
+/// remotes that were since deleted.
+const RECENT_REMOTES_FETCH: usize = 20;
+/// Recent remotes shown on the welcome screen.
+const RECENT_REMOTES_SHOWN: usize = 5;
 
 actions!(
     rspace,
@@ -96,6 +105,13 @@ struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        // Brand mark (transparent; tinted by svg()). app-icon.png/.icns derive
+        // from it via scripts/make_icns.sh.
+        if path == "logo.svg" {
+            return Ok(Some(std::borrow::Cow::Borrowed(
+                include_bytes!("../../app/resources/logo.svg").as_slice(),
+            )));
+        }
         // Each name maps `icons/<name>.svg` to the embedded bytes; add one word here.
         macro_rules! icons {
             ($($name:literal),* $(,)?) => {
@@ -136,6 +152,7 @@ pub struct Startup {
     pub service: Option<Service>,
     pub paths: Paths,
     pub store: SettingsStore,
+    pub db: Db,
 }
 
 /// Launch the desktop shell. Blocks until the app exits.
@@ -171,7 +188,7 @@ pub fn run(startup: Startup) {
             ..Default::default()
         };
 
-        let Startup { rclone, service, paths, store } = startup;
+        let Startup { rclone, service, paths, store, db } = startup;
         match service {
             Some(service) => {
                 let version = match &rclone {
@@ -179,7 +196,7 @@ pub fn run(startup: Startup) {
                     _ => String::new(),
                 };
                 cx.open_window(options, |window, cx| {
-                    cx.new(|cx| Workspace::new(service, version, paths, store, window, cx))
+                    cx.new(|cx| Workspace::new(service, version, paths, store, db, window, cx))
                 })
                 .unwrap();
             }
@@ -433,7 +450,21 @@ struct Workspace {
     sort_field: SortField,
     sort_order: SortOrder,
     paths: Paths,
+    /// User preferences (settings.json).
     store: SettingsStore,
+    /// App-managed state + history (state/rspace.db).
+    db: Db,
+    /// Cached layout state, mirrored to `db` on change via [`Self::save_ui`].
+    ui: UiState,
+    /// Pinned remote names (display order); persisted to `db`'s pinned table.
+    pinned: Vec<String>,
+    /// Recently-opened remote names (newest first); refreshed on navigate, read
+    /// by the welcome screen — kept out of the render path.
+    recent_remotes: Vec<String>,
+    /// Cached job log for the transfers history view; refreshed on `Logged`.
+    job_history: Vec<JobRecord>,
+    /// (total, clearable) storage bytes, computed when Settings opens.
+    storage_size: Option<(u64, u64)>,
     settings_open: bool,
     /// Right-click context menu: the targeted entry and the cursor position.
     context: Option<(Entry, Point<Pixels>)>,
@@ -474,6 +505,7 @@ impl Workspace {
         version: String,
         paths: Paths,
         store: SettingsStore,
+        db: Db,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -481,17 +513,24 @@ impl Workspace {
         focus.focus(window, cx);
         let stale = Duration::from_secs(store.get().refresh_secs.max(1));
         let (sort_field, sort_order) = (store.get().sort_field, store.get().sort_order);
-        let s = store.get();
-        let sidebar_width = clamped_width(s.sidebar_width, SIDEBAR_W, SIDEBAR_MIN, SIDEBAR_MAX);
-        let preview_width = clamped_width(s.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
-        let col_date_width = clamped_width(s.col_date_width, COL_DATE, COL_MIN, COL_MAX);
-        let col_size_width = clamped_width(s.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
-        let jobs_maximized = s.transfers_maximized;
-        let preview_open = s.preview_open;
-        let jobs = cx.new(|_| Jobs::new(service.clone()));
+        let ui = db.load_ui();
+        let pinned = db.load_pinned();
+        let recent_remotes = db.recent_remotes(RECENT_REMOTES_FETCH);
+        let job_history = db.recent_jobs(JOB_HISTORY_LIMIT);
+        let sidebar_width = clamped_width(ui.sidebar_width, SIDEBAR_W, SIDEBAR_MIN, SIDEBAR_MAX);
+        let preview_width = clamped_width(ui.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
+        let col_date_width = clamped_width(ui.col_date_width, COL_DATE, COL_MIN, COL_MAX);
+        let col_size_width = clamped_width(ui.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
+        let jobs_maximized = ui.transfers_maximized;
+        let preview_open = ui.preview_open;
+        let jobs = cx.new(|_| Jobs::new(service.clone(), db.clone()));
         jobs.update(cx, |jobs, cx| jobs.start_polling(cx));
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
+            JobsEvent::Logged => {
+                this.job_history = this.db.recent_jobs(JOB_HISTORY_LIMIT);
+                cx.notify();
+            }
         })
         .detach();
         let this = Self {
@@ -524,6 +563,12 @@ impl Workspace {
             sort_order,
             paths,
             store,
+            db,
+            ui,
+            pinned,
+            recent_remotes,
+            job_history,
+            storage_size: None,
             settings_open: false,
             context: None,
             bg_menu: None,
@@ -656,6 +701,7 @@ impl Workspace {
         let previous_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
         let workspace = cx.entity().downgrade();
         let service = self.service.clone();
+        let db = self.db.clone();
         // Pinned-first (pin order preserved), matching the sidebar; the palette's
         // stable fuzzy sort keeps this order on empty query and score ties.
         let remotes = self.ordered_remotes();
@@ -665,6 +711,7 @@ impl Workspace {
                 previous_focus,
                 workspace,
                 service,
+                db,
                 remotes,
                 current_remote,
                 window,
@@ -684,8 +731,19 @@ impl Workspace {
     }
 
     fn action_open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+    }
+
+    /// Open Settings, computing the storage figures once (off the render path).
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = true;
+        self.refresh_storage_size();
         cx.notify();
+    }
+
+    /// (total, clearable) bytes on disk: the whole app dir, and just the cache.
+    fn refresh_storage_size(&mut self) {
+        self.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
     }
 
     fn action_restart_daemon(&mut self, _: &RestartDaemon, _: &mut Window, cx: &mut Context<Self>) {
@@ -778,7 +836,7 @@ impl Workspace {
     }
 
     fn is_pinned(&self, name: &str) -> bool {
-        self.store.get().pinned.iter().any(|n| n == name)
+        self.pinned.iter().any(|n| n == name)
     }
 
     /// Confirm, then remove a remote from the rclone config (files untouched).
@@ -807,7 +865,8 @@ impl Workspace {
                             this.open_remote = None;
                             this.path = String::new();
                         }
-                        this.store.update(|s| s.pinned.retain(|n| n != &name));
+                        this.pinned.retain(|n| n != &name);
+                        this.db.save_pinned(&this.pinned);
                         this.load_remotes(cx);
                     }
                     Err(e) => this.toast(format!("Couldn't delete \"{name}\": {e}"), true, cx),
@@ -821,9 +880,7 @@ impl Workspace {
 
     /// Pinned remotes (in pinned order), then the rest in their existing sort.
     fn pinned_remotes(&self) -> Vec<RemoteInfo> {
-        self.store
-            .get()
-            .pinned
+        self.pinned
             .iter()
             .filter_map(|n| self.remotes.iter().find(|r| &r.name == n).cloned())
             .collect()
@@ -842,12 +899,13 @@ impl Workspace {
     /// Pin or unpin `name`, keeping the keyboard selection on the same remote.
     fn toggle_pin(&mut self, name: String, cx: &mut Context<Self>) {
         let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
-        self.store.update(|s| match s.pinned.iter().position(|n| n == &name) {
+        match self.pinned.iter().position(|n| n == &name) {
             Some(pos) => {
-                s.pinned.remove(pos);
+                self.pinned.remove(pos);
             }
-            None => s.pinned.push(name.clone()),
-        });
+            None => self.pinned.push(name.clone()),
+        }
+        self.db.save_pinned(&self.pinned);
         self.restore_remote_sel(selected);
         cx.notify();
     }
@@ -858,14 +916,12 @@ impl Workspace {
             return;
         }
         let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
-        self.store.update(|s| {
-            let Some(fp) = s.pinned.iter().position(|n| n == from) else {
-                return;
-            };
-            let name = s.pinned.remove(fp);
-            let ip = s.pinned.iter().position(|n| n == before).unwrap_or(s.pinned.len());
-            s.pinned.insert(ip, name);
-        });
+        if let Some(fp) = self.pinned.iter().position(|n| n == from) {
+            let name = self.pinned.remove(fp);
+            let ip = self.pinned.iter().position(|n| n == before).unwrap_or(self.pinned.len());
+            self.pinned.insert(ip, name);
+            self.db.save_pinned(&self.pinned);
+        }
         self.restore_remote_sel(selected);
         cx.notify();
     }
@@ -873,19 +929,13 @@ impl Workspace {
     /// Shift a pinned remote one slot up or down within the pinned group.
     fn move_pinned(&mut self, name: &str, up: bool, cx: &mut Context<Self>) {
         let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
-        self.store.update(|s| {
-            let Some(i) = s.pinned.iter().position(|n| n == name) else {
-                return;
-            };
-            let j = if up {
-                i.checked_sub(1)
-            } else {
-                (i + 1 < s.pinned.len()).then_some(i + 1)
-            };
+        if let Some(i) = self.pinned.iter().position(|n| n == name) {
+            let j = if up { i.checked_sub(1) } else { (i + 1 < self.pinned.len()).then_some(i + 1) };
             if let Some(j) = j {
-                s.pinned.swap(i, j);
+                self.pinned.swap(i, j);
+                self.db.save_pinned(&self.pinned);
             }
-        });
+        }
         self.restore_remote_sel(selected);
         cx.notify();
     }
@@ -912,6 +962,11 @@ impl Workspace {
     /// Push a new location onto history, selecting `want` (by name) on arrival.
     /// Saves the current row first so going back restores it.
     fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
+        // Record as recently-opened only when switching remotes, not per folder.
+        if self.open_remote.as_deref() != Some(remote.as_str()) {
+            self.db.record_remote(&remote);
+            self.recent_remotes = self.db.recent_remotes(RECENT_REMOTES_FETCH);
+        }
         self.remember_sel();
         self.open_remote = Some(remote.clone());
         self.path = path.clone();
@@ -972,17 +1027,20 @@ impl Workspace {
             f32::from(self.col_date_width),
             f32::from(self.col_size_width),
         );
-        let s = self.store.get();
-        let unchanged = (s.sidebar_width, s.preview_width, s.col_date_width, s.col_size_width)
+        let unchanged = (self.ui.sidebar_width, self.ui.preview_width, self.ui.col_date_width, self.ui.col_size_width)
             == (Some(sidebar), Some(preview), Some(date), Some(size));
         if !unchanged {
-            self.store.update(|s| {
-                s.sidebar_width = Some(sidebar);
-                s.preview_width = Some(preview);
-                s.col_date_width = Some(date);
-                s.col_size_width = Some(size);
-            });
+            self.ui.sidebar_width = Some(sidebar);
+            self.ui.preview_width = Some(preview);
+            self.ui.col_date_width = Some(date);
+            self.ui.col_size_width = Some(size);
+            self.save_ui();
         }
+    }
+
+    /// Persist the cached [`UiState`] to the database (best-effort).
+    fn save_ui(&self) {
+        self.db.save_ui(&self.ui);
     }
 
     fn remember_sel(&mut self) {

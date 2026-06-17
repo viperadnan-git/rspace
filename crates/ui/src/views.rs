@@ -350,7 +350,7 @@ impl Workspace {
 
         let making_new = self.prompt.as_ref().is_some_and(|p| p.read(cx).target.is_none());
         let body = if self.open_remote.is_none() {
-            centered("Select a remote to browse", FG_SUBTLE).into_any_element()
+            self.render_welcome(cx).into_any_element()
         } else if matches!(self.dir_query.status(), Status::Loading) {
             loading_view().into_any_element()
         } else if let Status::Error(message) = self.dir_query.status() {
@@ -557,9 +557,96 @@ impl Workspace {
             .child(body_area)
     }
 
-    /// The "rspace" wordmark: bold foreground text.
+    /// Start screen before a remote is open: brand mark, a one-line prompt, and
+    /// the command-palette hint (plus a first-run Add-remote button). Minimal,
+    /// Zed-style — the remotes themselves live in the sidebar.
+    fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette_key: &str = if cfg!(target_os = "macos") { "\u{2318}K" } else { "Ctrl K" };
+        let has_remotes = !self.remotes.is_empty();
+        let prompt = if has_remotes {
+            "Select a remote from the sidebar to start."
+        } else {
+            "Add a remote to start browsing your cloud."
+        };
+
+        let brand = v_flex()
+            .items_center()
+            .gap_2()
+            .child(svg().path("logo.svg").size(px(56.0)).text_color(rgb(FG)))
+            .child(div().text_size(px(20.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgb(FG)).child("rspace"));
+
+        // Recently-opened remotes still present in the config, newest first.
+        // Filter the cached recents against the live config, then cap — so
+        // since-deleted remotes don't shrink the list below what's available.
+        let recent: Vec<RemoteInfo> = self
+            .recent_remotes
+            .iter()
+            .filter_map(|n| self.remotes.iter().find(|r| &r.name == n).cloned())
+            .take(RECENT_REMOTES_SHOWN)
+            .collect();
+
+        v_flex()
+            .flex_1()
+            .min_h(px(0.0))
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .p_8()
+            .child(brand)
+            .when(recent.is_empty(), |el| {
+                el.child(div().text_sm().text_color(rgb(FG_MUTED)).child(prompt))
+            })
+            .when(!recent.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(section_header("RECENT"))
+                        .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(key_binding(palette_key))
+                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Run a command")),
+            )
+            .when(!has_remotes, |el| {
+                el.child(modal_button(
+                    "welcome-add",
+                    "Add remote",
+                    ButtonStyle::Secondary,
+                    |this, cx| this.begin_add_remote(cx),
+                    cx,
+                ))
+            })
+    }
+
+    /// A recent-remote quick-open row on the start screen.
+    fn recent_remote_row(&self, ix: usize, remote: RemoteInfo, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let name = remote.name.clone();
+        h_flex()
+            .id(("recent-remote", ix))
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(OVERLAY)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.navigate(name.clone(), String::new(), None, cx)
+            }))
+            .child(svg().path(remote_icon(&remote.kind)).size(px(14.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
+            .child(div().text_sm().text_color(rgb(FG)).child(remote.name.clone()))
+    }
+
+    /// The brand mark plus the "rspace" wordmark.
     fn render_brand(&self) -> impl IntoElement {
-        div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace")
+        h_flex()
+            .gap_1p5()
+            .child(svg().path("logo.svg").size(px(15.0)).text_color(rgb(FG)))
+            .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace"))
     }
 
     pub(crate) fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -583,10 +670,7 @@ impl Workspace {
                     .rounded_md()
                     .cursor_pointer()
                     .hover(|s| s.bg(rgba(OVERLAY)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.settings_open = true;
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings(cx)))
                     .child(svg().path("icons/settings.svg").size(px(16.0)).text_color(rgb(FG_MUTED))),
             )
     }

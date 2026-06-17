@@ -64,13 +64,16 @@ impl Job {
     }
 }
 
-/// A successful job that should refresh the open listing.
 pub(crate) enum JobsEvent {
+    /// A successful job that should refresh the open listing.
     ReloadEntries,
+    /// A finished job was appended to the log; the history view should refresh.
+    Logged,
 }
 
 pub(crate) struct Jobs {
     service: Service,
+    db: Db,
     items: Vec<Job>,
     seq: usize,
 }
@@ -78,8 +81,8 @@ pub(crate) struct Jobs {
 impl EventEmitter<JobsEvent> for Jobs {}
 
 impl Jobs {
-    pub(crate) fn new(service: Service) -> Self {
-        Self { service, items: Vec::new(), seq: 0 }
+    pub(crate) fn new(service: Service, db: Db) -> Self {
+        Self { service, db, items: Vec::new(), seq: 0 }
     }
 
     pub(crate) fn items(&self) -> &[Job] {
@@ -123,6 +126,8 @@ impl Jobs {
                     let stats = service.stats(group).await.ok();
                     let alive = this.update(cx, |this, cx| {
                         let mut reload = false;
+                        // Set when the job finishes this tick, to log after the borrow.
+                        let mut finished: Option<(String, Option<String>, Option<String>, bool, i64)> = None;
                         if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
                             if let Some(s) = &stats {
                                 j.bytes = s.bytes;
@@ -150,8 +155,16 @@ impl Jobs {
                                         tracing::warn!(job = %j.label(), elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
                                         j.error = Some(msg);
                                     }
+                                    let endpoint = |i: usize| {
+                                        j.targets.get(i).map(|t| format!("{}:{}", t.remote, t.path))
+                                    };
+                                    finished = Some((j.verb.to_string(), endpoint(0), endpoint(1), st.success, j.bytes as i64));
                                 }
                             }
+                        }
+                        if let Some((op, src, dst, ok, bytes)) = finished {
+                            this.db.record_job(&op, src.as_deref(), dst.as_deref(), ok, bytes);
+                            cx.emit(JobsEvent::Logged);
                         }
                         if reload {
                             cx.emit(JobsEvent::ReloadEntries);

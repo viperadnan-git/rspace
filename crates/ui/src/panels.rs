@@ -7,7 +7,8 @@ impl Workspace {
         let has_done = self.jobs.read(cx).has_finished();
         let count = self.jobs.read(cx).items().len();
         let body = if count == 0 {
-            centered("No transfers", FG_SUBTLE).into_any_element()
+            // No live transfers: show the persisted history (read-only).
+            self.render_job_history(cx)
         } else {
             uniform_list(
                 "transfers",
@@ -72,7 +73,8 @@ impl Workspace {
                                 )
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.jobs_maximized = !this.jobs_maximized;
-                                    this.store.update(|s| s.transfers_maximized = this.jobs_maximized);
+                                    this.ui.transfers_maximized = this.jobs_maximized;
+                                    this.save_ui();
                                     cx.notify();
                                 })),
                             )
@@ -94,6 +96,29 @@ impl Workspace {
                     ),
             )
             .child(body)
+    }
+
+    /// Read-only history of finished jobs (from the db), shown when no transfers
+    /// are live. Empty → the idle placeholder.
+    fn render_job_history(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.job_history.is_empty() {
+            return centered("No transfers", FG_SUBTLE).into_any_element();
+        }
+        v_flex()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(section_header("RECENT"))
+            .child(
+                uniform_list(
+                    "transfer-history",
+                    self.job_history.len(),
+                    cx.processor(|this, range: Range<usize>, _window, _cx| {
+                        range.filter_map(|i| this.job_history.get(i).map(job_history_row)).collect::<Vec<_>>()
+                    }),
+                )
+                .flex_1(),
+            )
+            .into_any_element()
     }
 
     /// A clickable job endpoint, styled like a breadcrumb crumb: shows the name,
@@ -300,7 +325,8 @@ impl Workspace {
             )
             .child(self.refresh_setting(cx))
             .child(self.download_setting(cx))
-            .child(self.settings_info());
+            .child(self.storage_setting(cx))
+            .child(self.settings_info(cx));
         self.modal_overlay(
             true,
             false,
@@ -368,15 +394,85 @@ impl Workspace {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_refresh(secs, cx)))
     }
 
-    fn settings_info(&self) -> impl IntoElement {
+    fn storage_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (total, clearable) = self.storage_size.unwrap_or_default();
+        let summary = format!("{} · {} clearable", human_size(total as i64), human_size(clearable as i64));
+        setting_block(
+            "Storage",
+            "History and logs the app keeps on disk. Clean up clears these; your preferences and pinned remotes are kept.",
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().flex_grow(1.0).min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
+                .child(
+                    h_flex()
+                        .id("clean-up")
+                        .flex_shrink_0()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(rgba(OVERLAY))
+                        .text_color(rgb(FG))
+                        .hover(|s| s.bg(rgba(SELECT_MUTED)))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.request_cleanup(cx)))
+                        .child("Clean up"),
+                ),
+        )
+    }
+
+    /// Confirm, then clear disposable history + logs (keeps preferences + pins).
+    fn request_cleanup(&mut self, cx: &mut Context<Self>) {
+        self.ask_confirm(
+            "Clean up data?",
+            "Clears recent remotes, command history, the job log, and old logs. Your preferences and pinned remotes are kept.",
+            "Clean up",
+            false,
+            |this, cx| this.cleanup_storage(cx),
+            cx,
+        );
+    }
+
+    fn cleanup_storage(&mut self, cx: &mut Context<Self>) {
+        self.db.clear_history();
+        delete_rotated_logs(&self.paths.logs_dir());
+        self.recent_remotes.clear();
+        self.job_history.clear();
+        self.refresh_storage_size();
+        self.toast("Cleaned up", false, cx);
+        cx.notify();
+    }
+
+    fn settings_info(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let root = self.paths.root().display().to_string();
         v_flex()
             .gap_2()
             .pt_3()
             .border_t_1()
             .border_color(rgb(BORDER_MUTED))
             .child(info_row("rclone", &self.version))
-            .child(info_row("Data", &self.paths.root().display().to_string()))
-            .child(info_row("Config", &self.paths.config_dir().display().to_string()))
+            .child(
+                h_flex()
+                    .id("open-data-dir")
+                    .w_full()
+                    .justify_between()
+                    .gap_4()
+                    .text_xs()
+                    .cursor_pointer()
+                    .tooltip(tooltip_text("Open in file manager"))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        cx.open_with_system(this.paths.root());
+                    }))
+                    .child(div().flex_shrink_0().text_color(rgb(FG_MUTED)).child("Data folder"))
+                    .child(
+                        h_flex()
+                            .min_w(px(0.0))
+                            .gap_1()
+                            .items_center()
+                            .child(div().min_w(px(0.0)).truncate().text_color(rgb(ACCENT)).child(root))
+                            .child(svg().path("icons/folder_open.svg").size(px(12.0)).flex_shrink_0().text_color(rgb(ACCENT))),
+                    ),
+            )
     }
 
     pub(crate) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -612,5 +708,65 @@ impl Workspace {
             })
             .when(succeeded > 0, |el| el.child(count_badge("icons/check.svg", SUCCESS, succeeded)))
             .when(failed > 0, |el| el.child(count_badge("icons/alert.svg", DANGER, failed)))
+    }
+}
+
+/// A read-only finished-job row for the transfers history list.
+fn job_history_row(job: &JobRecord) -> Div {
+    let path = match (&job.source, &job.dest) {
+        (Some(s), Some(d)) => format!("{s} \u{2192} {d}"),
+        (Some(s), _) => s.clone(),
+        _ => String::new(),
+    };
+    let meta = if job.bytes > 0 {
+        format!("{} · {}", human_size(job.bytes), relative_time(job.finished_at))
+    } else {
+        relative_time(job.finished_at)
+    };
+    let ok = job.ok;
+    h_flex()
+        .w_full()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .items_center()
+        .border_t_1()
+        .border_color(rgb(SEPARATOR))
+        .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(rgb(if ok { SUCCESS } else { DANGER })))
+        .child(div().flex_shrink_0().text_color(rgb(FG)).child(job.op.clone()))
+        .child(div().flex_1().min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(path))
+        .child(div().flex_shrink_0().text_xs().text_color(rgb(FG_SUBTLE)).child(meta))
+}
+
+/// Coarse "time ago" label for a unix-epoch-seconds timestamp.
+fn relative_time(epoch_secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(epoch_secs);
+    match (now - epoch_secs).max(0) {
+        0..=59 => "just now".into(),
+        s @ 60..=3599 => format!("{}m ago", s / 60),
+        s @ 3600..=86_399 => format!("{}h ago", s / 3600),
+        s => format!("{}d ago", s / 86_400),
+    }
+}
+
+/// Delete rotated log files, keeping the active (most-recently-modified) one:
+/// unlinking the open file would lose writes to its now-detached inode.
+fn delete_rotated_logs(logs_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(logs_dir) else {
+        return;
+    };
+    let files: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    let active = files
+        .iter()
+        .filter_map(|p| p.metadata().ok()?.modified().ok().map(|t| (p, t)))
+        .max_by_key(|&(_, t)| t)
+        .map(|(p, _)| p.clone());
+    for p in &files {
+        if Some(p) != active.as_ref() {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }

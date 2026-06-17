@@ -8,6 +8,8 @@
 //! Operations and their requirements come from the single registry
 //! ([`Operation`]); execution goes through `Workspace::run_operation`.
 
+use std::collections::HashMap;
+
 use gpui::{Action, FocusHandle, WeakEntity, Window};
 use rspace_rclone_rc::split_parent;
 
@@ -105,10 +107,14 @@ enum Mode {
 pub(crate) struct CommandPaletteDelegate {
     workspace: WeakEntity<Workspace>,
     service: Service,
+    db: Db,
     remotes: Vec<RemoteInfo>,
     /// The remote currently open in the explorer, for `/`-prefixed path jumps.
     current_remote: Option<String>,
     items: Vec<Item>,
+    /// Command label → usage rank (0 = most-used); from `db` at open. Used
+    /// commands sort first.
+    usage_rank: HashMap<String, usize>,
     mode: Mode,
     rows: Vec<Row>,
     selected: usize,
@@ -124,6 +130,7 @@ impl CommandPaletteDelegate {
         previous_focus: FocusHandle,
         workspace: WeakEntity<Workspace>,
         service: Service,
+        db: Db,
         remotes: Vec<RemoteInfo>,
         current_remote: Option<String>,
         window: &mut Window,
@@ -141,12 +148,15 @@ impl CommandPaletteDelegate {
         items.extend(OPERATIONS.iter().map(|op| Item::Task(Task::Job(*op))));
         items.extend(INFO_OPS.iter().map(|op| Item::Task(Task::Info(*op))));
         items.sort_by_key(|i| i.label());
+        let usage_rank = db.command_rank().into_iter().enumerate().map(|(i, c)| (c, i)).collect();
         Self {
             workspace,
             service,
+            db,
             remotes,
             current_remote,
             items,
+            usage_rank,
             mode: Mode::Commands,
             rows: Vec::new(),
             selected: 0,
@@ -172,7 +182,17 @@ impl CommandPaletteDelegate {
             .enumerate()
             .filter_map(|(i, item)| fuzzy_match(query, item.label()).map(|m| (m.score, i, m.positions)))
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| self.items[a.1].label().cmp(self.items[b.1].label())));
+        // Most-used first (rank 0 = top); within a tier, fuzzy score then label.
+        // On an empty query, ranking is purely usage → label.
+        let rank = |i: usize| self.usage_rank.get(self.items[i].label()).copied().unwrap_or(usize::MAX);
+        scored.sort_by(|a, b| {
+            if query.is_empty() {
+                rank(a.1).cmp(&rank(b.1))
+            } else {
+                b.0.cmp(&a.0).then_with(|| rank(a.1).cmp(&rank(b.1)))
+            }
+            .then_with(|| self.items[a.1].label().cmp(self.items[b.1].label()))
+        });
         self.rows =
             scored.into_iter().map(|(_, i, positions)| Row { candidate: Candidate::Item(i), positions }).collect();
     }
@@ -301,6 +321,7 @@ impl CommandPaletteDelegate {
             return Confirmed::Continue;
         }
         let args = std::mem::take(collected);
+        self.db.record_command(task.label());
         if let Some(ws) = self.workspace.upgrade() {
             ws.update(cx, |ws, cx| match task {
                 Task::Job(op) => ws.run_operation(op, args, cx),
@@ -501,11 +522,15 @@ impl PickerDelegate for CommandPaletteDelegate {
         match candidate {
             Candidate::Item(i) => match &self.items[i] {
                 Item::Action { action, .. } => {
+                    // Actions run now, so count them now.
+                    self.db.record_command(self.items[i].label());
                     let action = action.boxed_clone();
                     window.focus(&self.previous_focus, cx);
                     window.dispatch_action(action, cx);
                     Confirmed::Dismiss
                 }
+                // Tasks are counted on execution (push_arg), not on selection, so
+                // an abandoned arg flow doesn't inflate the usage ranking.
                 Item::Task(task) => {
                     self.mode = Mode::Args { task: *task, collected: Vec::new() };
                     self.loaded_key = None;

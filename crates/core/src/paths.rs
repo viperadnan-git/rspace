@@ -41,29 +41,66 @@ impl Paths {
         &self.root
     }
 
+    /// Preferences (kept). User-facing, never auto-cleaned.
     pub fn config_dir(&self) -> PathBuf {
         self.root.join("config")
     }
 
-    pub fn logs_dir(&self) -> PathBuf {
-        self.root.join("logs")
+    /// Persistent app data (kept): pinned remotes, window layout.
+    pub fn data_dir(&self) -> PathBuf {
+        self.root.join("data")
     }
 
-    pub fn state_dir(&self) -> PathBuf {
-        self.root.join("state")
+    /// Disposable data — everything the Clean-up action wipes (history, logs).
+    pub fn cache_dir(&self) -> PathBuf {
+        self.root.join("cache")
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.cache_dir().join("logs")
     }
 
     pub fn settings_path(&self) -> PathBuf {
         self.config_dir().join("settings.json")
     }
 
+    /// Kept app state: pinned remotes + window layout.
+    pub fn db_path(&self) -> PathBuf {
+        self.data_dir().join("rspace.db")
+    }
+
+    /// Disposable history: recent remotes, command usage, job log.
+    pub fn history_db_path(&self) -> PathBuf {
+        self.cache_dir().join("history.db")
+    }
+
+    /// Running-daemon pid (runtime; left untouched by clean-up).
+    pub fn pid_path(&self) -> PathBuf {
+        self.root.join("rcd.pid")
+    }
+
     /// Create the root and all subdirectories if missing.
     pub fn ensure(&self) -> std::io::Result<()> {
-        for dir in [self.config_dir(), self.logs_dir(), self.state_dir()] {
+        for dir in [self.config_dir(), self.data_dir(), self.logs_dir()] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())
     }
+}
+
+/// Total size in bytes of all files under `path` (recursive; missing → 0).
+pub fn dir_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 #[cfg(test)]

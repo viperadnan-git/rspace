@@ -9,7 +9,9 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 directories.workspace = true
+rusqlite.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]

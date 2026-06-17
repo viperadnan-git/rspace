@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::sort::{SortField, SortOrder};
 
-/// User settings. `#[serde(default)]` keeps partial/old `settings.json` loading,
-/// so adding a field is always backward-compatible.
+/// User preferences. `#[serde(default)]` keeps partial/old `settings.json`
+/// loading, so adding a field is always backward-compatible. Machine-managed
+/// layout/state lives in the database ([`crate::db`]), not here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -17,19 +18,6 @@ pub struct Settings {
     pub sort_field: SortField,
     /// Default sort direction.
     pub sort_order: SortOrder,
-    /// Pinned remote names, in display order. Pinned remotes lead the sidebar.
-    pub pinned: Vec<String>,
-    /// Sidebar width in pixels. `None` = the layout default.
-    pub sidebar_width: Option<f32>,
-    /// Whether the transfers panel was left maximized.
-    pub transfers_maximized: bool,
-    /// Whether the file-preview pane is open.
-    pub preview_open: bool,
-    /// Preview pane width in pixels. `None` = the layout default.
-    pub preview_width: Option<f32>,
-    /// File-list column widths in pixels. `None` = the layout default.
-    pub col_date_width: Option<f32>,
-    pub col_size_width: Option<f32>,
 }
 
 impl Default for Settings {
@@ -39,13 +27,6 @@ impl Default for Settings {
             download_dir: None,
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
-            pinned: Vec::new(),
-            sidebar_width: None,
-            transfers_maximized: false,
-            preview_open: false,
-            preview_width: None,
-            col_date_width: None,
-            col_size_width: None,
         }
     }
 }

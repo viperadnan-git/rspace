@@ -122,6 +122,11 @@ pub fn divider() -> impl IntoElement {
     div().h(px(1.0)).w_full().bg(rgb(BORDER_MUTED))
 }
 
+/// A small uppercase section label (e.g. "RECENT").
+pub fn section_header(label: impl Into<SharedString>) -> Div {
+    div().px_3().py_1().text_xs().text_color(rgb(FG_SUBTLE)).child(label.into())
+}
+
 /// A picker/command-menu row: Zed-style inset selection pill (rounded, off the
 /// card edge). Caller fills the content (label left, key binding right).
 pub fn picker_item(id: usize, selected: bool) -> Stateful<Div> {

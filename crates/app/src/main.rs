@@ -1,7 +1,7 @@
 mod logging;
 
 use anyhow::Result;
-use rspace_core::{Paths, SettingsStore};
+use rspace_core::{Db, Paths, SettingsStore};
 use rspace_rclone_rc::{detect, Daemon, Service, INSTALL_URL};
 use rspace_ui::{run, RcloneStatus, Startup};
 
@@ -13,6 +13,7 @@ fn main() -> Result<()> {
     tracing::info!(root = %paths.root().display(), "storage ready");
 
     let store = SettingsStore::load(paths.settings_path());
+    let db = Db::open(&paths.db_path(), &paths.history_db_path());
 
     let Ok(found) = detect() else {
         tracing::warn!("rclone not found; prompting install from {INSTALL_URL}");
@@ -21,6 +22,7 @@ fn main() -> Result<()> {
             service: None,
             paths: paths.clone(),
             store,
+            db: db.clone(),
         });
         return Ok(());
     };
@@ -28,7 +30,7 @@ fn main() -> Result<()> {
 
     // reqwest's reactor lives on this runtime; the UI dispatches RC calls to it.
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    let pidfile = paths.state_dir().join("rcd.pid");
+    let pidfile = paths.pid_path();
 
     match runtime.block_on(Daemon::start(found.path.clone(), pidfile)) {
         Ok(daemon) => {
@@ -42,6 +44,7 @@ fn main() -> Result<()> {
                 service: Some(service.clone()),
                 paths: paths.clone(),
                 store,
+                db: db.clone(),
             });
             runtime.block_on(service.shutdown());
         }
@@ -52,6 +55,7 @@ fn main() -> Result<()> {
                 service: None,
                 paths: paths.clone(),
                 store,
+                db: db.clone(),
             });
         }
     }

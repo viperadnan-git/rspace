@@ -81,7 +81,8 @@ pub(crate) struct Preview {
 impl Workspace {
     pub(crate) fn toggle_preview(&mut self, _: &TogglePreview, _: &mut Window, cx: &mut Context<Self>) {
         self.preview_open = !self.preview_open;
-        self.store.update(|s| s.preview_open = self.preview_open);
+        self.ui.preview_open = self.preview_open;
+        self.save_ui();
         self.refresh_preview(cx);
         cx.notify();
     }
