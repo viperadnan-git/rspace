@@ -522,6 +522,15 @@ impl Workspace {
                         }
                     }),
                 )
+                // Files dragged from Finder drop into the open directory; the file
+                // list edge turns accent while they hover (invisible base border so
+                // the accent border adds no layout shift).
+                .border_2()
+                .border_color(rgb(INSET))
+                .drag_over::<ExternalPaths>(|s, _, _, _| s.border_color(rgb(ACCENT)).bg(rgba(ACCENT_SOFT)))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                    this.upload_paths(paths.paths().to_vec(), cx);
+                }))
             },
         );
 

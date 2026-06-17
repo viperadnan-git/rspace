@@ -278,10 +278,9 @@ impl Workspace {
     }
 
     pub(crate) fn begin_upload(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        if self.open_remote.is_none() {
             return;
-        };
-        let dst_dir = self.path.clone();
+        }
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: true,
@@ -290,29 +289,38 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
-                this.update(cx, |this, cx| {
-                    for path in paths {
-                        let is_dir = path.is_dir();
-                        let local = path.to_string_lossy().into_owned();
-                        let name = local.rsplit('/').next().unwrap_or(&local).to_string();
-                        let (r, d) = (remote.clone(), dst_dir.clone());
-                        let dst_path = join_path(&d, &name);
-                        let cli = if is_dir { "copy" } else { "copyto" };
-                        let command = rclone_cmd(cli, &[&local, &format!("{r}:{dst_path}")]);
-                        // Local source has no remote location; only the destination is navigable.
-                        let destination = JobTarget::new(name, r.clone(), dst_path, is_dir);
-                        let service = this.service.clone();
-                        this.spawn_job("Upload", vec![destination], command, true, cx, move |group| {
-                            let (service, local, r, d) =
-                                (service.clone(), local.clone(), r.clone(), d.clone());
-                            async move { service.upload(local, r, d, is_dir, group).await }
-                        });
-                    }
-                })
-                .ok();
+                this.update(cx, |this, cx| this.upload_paths(paths, cx)).ok();
             }
         })
         .detach();
+    }
+
+    /// Upload local files/directories into the open remote's current directory
+    /// (shared by the Upload picker and OS drag-and-drop).
+    pub(crate) fn upload_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let Some(remote) = self.open_remote.clone() else {
+            return;
+        };
+        let dst_dir = self.path.clone();
+        for path in paths {
+            let is_dir = path.is_dir();
+            let local = path.to_string_lossy().into_owned();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| local.clone());
+            let (r, d) = (remote.clone(), dst_dir.clone());
+            let dst_path = join_path(&d, &name);
+            let cli = if is_dir { "copy" } else { "copyto" };
+            let command = rclone_cmd(cli, &[&local, &format!("{r}:{dst_path}")]);
+            // Local source has no remote location; only the destination is navigable.
+            let destination = JobTarget::new(name, r.clone(), dst_path, is_dir);
+            let service = self.service.clone();
+            self.spawn_job("Upload", vec![destination], command, true, cx, move |group| {
+                let (service, local, r, d) = (service.clone(), local.clone(), r.clone(), d.clone());
+                async move { service.upload(local, r, d, is_dir, group).await }
+            });
+        }
     }
 
     pub(crate) fn copy(&mut self, _: &CopyEntry, _window: &mut Window, cx: &mut Context<Self>) {

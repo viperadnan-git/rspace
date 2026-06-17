@@ -25,7 +25,8 @@ use std::time::Duration;
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
-    DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding, Menu, MenuItem,
+    DismissEvent, Div, DragMoveEvent, Entity, ExternalPaths, FocusHandle, Focusable, KeyBinding,
+    Menu, MenuItem,
     MouseButton, MouseDownEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
@@ -977,6 +978,11 @@ impl Workspace {
         if is_dir {
             let remote = self.open_remote.clone().unwrap_or_default();
             self.navigate(remote, path, None, cx);
+        } else {
+            // Opening a file selects it (so the preview has a target) and shows
+            // it in the preview pane.
+            self.select_only(ix);
+            self.open_preview(cx);
         }
     }
 

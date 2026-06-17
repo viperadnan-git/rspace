@@ -87,6 +87,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Open the preview pane (persisting the layout) and show the current entry.
+    pub(crate) fn open_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.preview_open {
+            self.preview_open = true;
+            self.ui.preview_open = true;
+            self.save_ui();
+        }
+        self.refresh_preview(cx);
+        cx.notify();
+    }
+
     /// Make the preview track the cursor entry. Cheap no-op when the pane is
     /// closed or already showing that entry; serves cached results instantly.
     pub(crate) fn refresh_preview(&mut self, cx: &mut Context<Self>) {
