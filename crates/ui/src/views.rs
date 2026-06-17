@@ -158,7 +158,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let focused = self.pane == Pane::Sidebar;
-        let selected = ix == self.remote_sel;
+        // No highlight on the landing view (nothing open).
+        let selected = self.open_remote.is_some() && ix == self.remote_sel;
         let menu_name = remote.name.clone();
         let mut row = list_item(ix, selected, focused)
             .tooltip(tooltip_text(format!("{} · {}", remote.name, remote.kind)))
@@ -276,8 +277,8 @@ impl Workspace {
             .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))))
             .when_some(resize, |x, col| x.relative().child(self.column_resize_handle(col, cx)));
         match width {
-            // Inset content so it doesn't sit on the resize divider (Finder-style).
-            Some(w) => base.px_2().w(w).flex_shrink_0(),
+            // Shrink+clip below the preferred width so a column can't overflow the pane edge.
+            Some(w) => base.px_2().w(w).min_w(px(0.0)).overflow_hidden(),
             None => base.pr_2().flex_grow(1.0).min_w(px(0.0)),
         }
     }
@@ -322,14 +323,7 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
             .child(self.col_head(SortField::Name, "Name", None, false, None, cx))
-            .child(self.col_head(
-                SortField::Size,
-                "Size",
-                Some(self.col_size_width),
-                true,
-                Some(Column::Size),
-                cx,
-            ))
+            .child(self.col_head(SortField::Size, "Size", Some(self.col_size_width), true, Some(Column::Size), cx))
             .child(self.col_head(
                 SortField::Modified,
                 "Date Modified",
@@ -342,12 +336,6 @@ impl Workspace {
 
     pub(crate) fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.entries().len();
-        let count_text = match self.dir_query.status() {
-            _ if self.open_remote.is_none() => String::new(),
-            Status::Error(_) => String::new(),
-            _ => format!("{count} items"),
-        };
-
         let making_new = self.prompt.as_ref().is_some_and(|p| p.read(cx).target.is_none());
         let body = if self.open_remote.is_none() {
             self.render_welcome(cx).into_any_element()
@@ -458,9 +446,11 @@ impl Workspace {
                                 .child(
                                     h_flex()
                                         .w(this.col_size_width)
-                                        .flex_shrink_0()
+                                        .min_w(px(0.0))
                                         .px_2()
                                         .justify_end()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
                                         .text_xs()
                                         .text_color(rgb(FG_MUTED))
                                         .child(size_label),
@@ -468,8 +458,9 @@ impl Workspace {
                                 .child(
                                     div()
                                         .w(this.col_date_width)
-                                        .flex_shrink_0()
+                                        .min_w(px(0.0))
                                         .px_2()
+                                        .truncate()
                                         .text_xs()
                                         .text_color(rgb(FG_MUTED))
                                         .child(date_label),
@@ -492,6 +483,8 @@ impl Workspace {
         let body_area = v_flex()
             .flex_1()
             .min_h(px(0.0))
+            .min_w(px(0.0))
+            .overflow_hidden()
             .on_drag_move(cx.listener(Self::on_column_drag))
             .when(show_table, |el| el.child(self.column_header(cx)))
             .when(new_item, |el| el.child(self.prompt.as_ref().unwrap().clone()))
@@ -522,12 +515,10 @@ impl Workspace {
                         }
                     }),
                 )
-                // Files dragged from Finder drop into the open directory; the file
-                // list edge turns accent while they hover (invisible base border so
-                // the accent border adds no layout shift).
-                .border_2()
-                .border_color(rgb(INSET))
-                .drag_over::<ExternalPaths>(|s, _, _, _| s.border_color(rgb(ACCENT)).bg(rgba(ACCENT_SOFT)))
+                // Files dragged from Finder drop into the open directory; the list
+                // tints accent while they hover (bg only, so rows stay flush to
+                // the edge and nothing shifts).
+                .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgba(ACCENT_SOFT)))
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                     this.upload_paths(paths.paths().to_vec(), cx);
                 }))
@@ -572,7 +563,16 @@ impl Workspace {
                             .when(self.dir_query.is_fetching(), |el| {
                                 el.child(spinner("fetch-spinner", px(12.0), FG_MUTED))
                             })
-                            .child(count_text)
+                            .child(
+                                icon_button("refresh", "icons/refresh.svg")
+                                    .tooltip(tooltip_text(format!(
+                                        "Refresh ({})",
+                                        if cfg!(target_os = "macos") { "\u{2318}R" } else { "Ctrl R" }
+                                    )))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.force_reload_entries(cx)
+                                    })),
+                            )
                             .child(
                                 icon_button("toggle-preview", "icons/sidebar_right.svg")
                                     .when(self.preview_open, |b| b.bg(rgba(SELECT_MUTED)))
@@ -681,9 +681,16 @@ impl Workspace {
     }
 
     /// The brand mark plus the "rspace" wordmark.
-    fn render_brand(&self) -> impl IntoElement {
+    fn render_brand(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
+            .id("brand-home")
             .gap_1p5()
+            .px_1()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(OVERLAY)))
+            .tooltip(tooltip_text("Home"))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_home(cx)))
             .child(svg().path("logo.svg").size(px(15.0)).text_color(rgb(FG)))
             .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace"))
     }
@@ -700,7 +707,7 @@ impl Workspace {
             .bg(rgb(INSET))
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(self.render_brand())
+            .child(self.render_brand(cx))
             .child(
                 h_flex()
                     .id("settings-button")

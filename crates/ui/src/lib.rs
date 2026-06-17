@@ -986,6 +986,27 @@ impl Workspace {
         }
     }
 
+    /// Close the open remote and return to the landing (welcome) view.
+    fn go_home(&mut self, cx: &mut Context<Self>) {
+        if self.open_remote.is_none() {
+            return;
+        }
+        self.open_remote = None;
+        self.path = String::new();
+        self.entry_sel = 0;
+        self.sel_anchor = 0;
+        self.selected.clear();
+        self.pending_select = None;
+        self.preview = None;
+        self.prompt = None;
+        self.context = None;
+        self.bg_menu = None;
+        self.history.clear();
+        self.history_pos = 0;
+        self.pane = Pane::Sidebar;
+        cx.notify();
+    }
+
     /// Push a new location onto history, selecting `want` (by name) on arrival.
     /// Saves the current row first so going back restores it.
     fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {

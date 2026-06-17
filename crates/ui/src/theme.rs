@@ -25,10 +25,11 @@ pub const SELECT_MUTED: u32 = 0x656c7633;
 
 /// Faint horizontal divider between file-list rows (Finder-style).
 pub const SEPARATOR: u32 = 0x2d343d;
-/// File-list column default widths and drag bounds.
+/// File-list column default widths and drag bounds. `COL_SIZE`/`COL_MIN` fit
+/// the widest `human_size` value (e.g. "1023.9 MB") so it never wraps or clips.
 pub const COL_DATE: f32 = 136.0;
-pub const COL_SIZE: f32 = 72.0;
-pub const COL_MIN: f32 = 52.0;
+pub const COL_SIZE: f32 = 88.0;
+pub const COL_MIN: f32 = 72.0;
 pub const COL_MAX: f32 = 340.0;
 /// Row/header outer horizontal padding (`px_3`), in px — referenced by the
 /// column-resize math, so keep it in sync with the layout. Columns are flush
