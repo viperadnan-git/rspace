@@ -18,11 +18,12 @@ pub(crate) struct JobTarget {
     pub(crate) name: SharedString,
     pub(crate) remote: String,
     pub(crate) path: String,
+    pub(crate) is_dir: bool,
 }
 
 impl JobTarget {
-    pub(crate) fn new(name: impl Into<SharedString>, remote: String, path: String) -> Self {
-        Self { name: name.into(), remote, path }
+    pub(crate) fn new(name: impl Into<SharedString>, remote: String, path: String, is_dir: bool) -> Self {
+        Self { name: name.into(), remote, path, is_dir }
     }
 }
 
@@ -67,8 +68,9 @@ impl Job {
 pub(crate) enum JobsEvent {
     /// A successful job that should refresh the open listing.
     ReloadEntries,
-    /// A finished job was appended to the log; the history view should refresh.
-    Logged,
+    /// A job finished (logged): refresh the history and notify (success toasts
+    /// auto-dismiss; failures stay until dismissed, showing rclone's error).
+    Finished { label: SharedString, ok: bool, error: Option<SharedString> },
 }
 
 pub(crate) struct Jobs {
@@ -126,8 +128,8 @@ impl Jobs {
                     let stats = service.stats(group).await.ok();
                     let alive = this.update(cx, |this, cx| {
                         let mut reload = false;
-                        // Set when the job finishes this tick, to log after the borrow.
-                        let mut finished: Option<(String, Option<String>, Option<String>, bool, i64)> = None;
+                        // Set when the job finishes this tick, to act on after the borrow.
+                        let mut finished: Option<(String, Option<String>, Option<String>, bool, i64, String, Option<String>)> = None;
                         if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
                             if let Some(s) = &stats {
                                 j.bytes = s.bytes;
@@ -152,19 +154,20 @@ impl Jobs {
                                         } else {
                                             st.error.clone()
                                         };
-                                        tracing::warn!(job = %j.label(), elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
+                                        tracing::warn!(job = %j.label(), command = %j.command, elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
                                         j.error = Some(msg);
                                     }
                                     let endpoint = |i: usize| {
                                         j.targets.get(i).map(|t| format!("{}:{}", t.remote, t.path))
                                     };
-                                    finished = Some((j.verb.to_string(), endpoint(0), endpoint(1), st.success, j.bytes as i64));
+                                    let err = if st.success { None } else { j.error.clone() };
+                                    finished = Some((j.verb.to_string(), endpoint(0), endpoint(1), st.success, j.bytes as i64, j.label(), err));
                                 }
                             }
                         }
-                        if let Some((op, src, dst, ok, bytes)) = finished {
+                        if let Some((op, src, dst, ok, bytes, label, err)) = finished {
                             this.db.record_job(&op, src.as_deref(), dst.as_deref(), ok, bytes);
-                            cx.emit(JobsEvent::Logged);
+                            cx.emit(JobsEvent::Finished { label: label.into(), ok, error: err.map(Into::into) });
                         }
                         if reload {
                             cx.emit(JobsEvent::ReloadEntries);
@@ -222,6 +225,9 @@ impl Jobs {
         let id = self.seq;
         self.seq += 1;
         let group = format!("rspace/{id}");
+        // The command carries the full remote:path args — log it so a failure is
+        // diagnosable without guessing the source/destination.
+        tracing::info!(%group, command = %command, "job enqueued");
         self.items.push(Job {
             id,
             group: group.clone(),
@@ -248,14 +254,25 @@ impl Jobs {
     }
 
     fn on_job_submitted(&mut self, id: usize, result: Result<u64, ServiceError>, cx: &mut Context<Self>) {
+        // A job that fails to even start never reaches the poll loop, so log and
+        // notify here (same path the poll loop uses for in-flight failures).
+        let mut failed: Option<(String, Option<String>, Option<String>, String, String)> = None;
         if let Some(j) = self.items.iter_mut().find(|j| j.id == id) {
             match result {
                 Ok(jobid) => j.jobid = Some(jobid),
                 Err(e) => {
+                    let err = e.to_string();
+                    tracing::warn!(command = %j.command, error = %err, "job submit failed");
                     j.done = true;
-                    j.error = Some(e.to_string());
+                    j.error = Some(err.clone());
+                    let endpoint = |i: usize| j.targets.get(i).map(|t| format!("{}:{}", t.remote, t.path));
+                    failed = Some((j.verb.to_string(), endpoint(0), endpoint(1), j.label(), err));
                 }
             }
+        }
+        if let Some((op, src, dst, label, err)) = failed {
+            self.db.record_job(&op, src.as_deref(), dst.as_deref(), false, 0);
+            cx.emit(JobsEvent::Finished { label: label.into(), ok: false, error: Some(err.into()) });
         }
         cx.notify();
     }

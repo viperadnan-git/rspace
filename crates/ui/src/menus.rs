@@ -116,16 +116,9 @@ impl Workspace {
                 .into_any_element(),
             );
         }
-        let (e_cp, r_cp) = (entry.clone(), remote.clone());
         items.push(
             self.menu_item("Download", "icons/download.svg", cx, move |this, cx| {
                 this.download_selected(cx)
-            })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, cx| {
-                this.copy_to_clipboard(format!("{}:{}", r_cp, e_cp.path), cx)
             })
             .into_any_element(),
         );
@@ -153,6 +146,13 @@ impl Workspace {
         items.push(
             self.menu_item("Rename", "icons/edit.svg", cx, move |this, cx| {
                 this.begin_rename(r_rn.clone(), e_rn.clone(), cx)
+            })
+            .into_any_element(),
+        );
+        let (e_cp, r_cp) = (entry.clone(), remote.clone());
+        items.push(
+            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, cx| {
+                this.copy_to_clipboard(format!("{}:{}", r_cp, e_cp.path), cx)
             })
             .into_any_element(),
         );

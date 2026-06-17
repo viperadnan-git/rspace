@@ -93,6 +93,11 @@ impl Workspace {
         if !self.preview_open {
             return;
         }
+        // Nothing selected → nothing to preview (the cursor isn't a selection).
+        if self.selected.is_empty() {
+            self.preview = None;
+            return;
+        }
         let (Some(remote), Some(entry)) =
             (self.open_remote.clone(), self.entries().get(self.entry_sel).cloned())
         else {

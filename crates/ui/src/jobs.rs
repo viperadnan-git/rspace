@@ -38,8 +38,8 @@ impl Workspace {
             }
             let dst_path = join_path(&dst_dir, &name);
             let verb = if copy { "Copy" } else { "Move" };
-            let source = JobTarget::new(name.clone(), src_remote.clone(), path.clone());
-            let destination = JobTarget::new(name, dst_remote.clone(), dst_path.clone());
+            let source = JobTarget::new(name.clone(), src_remote.clone(), path.clone(), is_dir);
+            let destination = JobTarget::new(name, dst_remote.clone(), dst_path.clone(), is_dir);
             let command = rclone_cmd(
                 mode.cli_verb(is_dir),
                 &[&format!("{src_remote}:{path}"), &format!("{dst_remote}:{dst_path}")],
@@ -98,38 +98,78 @@ impl Workspace {
         let Some((method, params)) = op.build(&args) else {
             return;
         };
+        let remote = info_remote(&args);
+        let path = info_path(&args);
+        // A pending spinner toast that resolves into the result (promise-toast).
+        let toast = self.toast_pending(info_pending_label(op, &args), cx);
         let service = self.service.clone();
         cx.spawn(async move |this, cx| {
             let res = service.query(method, params).await;
-            this.update(cx, |this, cx| match res {
-                Ok(v) => match op.parse(&v) {
-                    Some(result) => this.show_info_result(result, cx),
-                    None => this.toast(format!("{}: nothing to show", op.label()), false, cx),
-                },
-                Err(e) => this.toast(format!("{} failed: {e}", op.label()), true, cx),
+            this.update(cx, |this, cx| {
+                let body = match res {
+                    Ok(v) => match op.parse(&v) {
+                        Some(result) => this.info_result_body(&remote, &path, result, cx),
+                        None => ToastBody::Message {
+                            message: format!("{}: nothing to show", op.label()).into(),
+                            danger: false,
+                        },
+                    },
+                    Err(e) => ToastBody::Message {
+                        message: format!("{} failed: {e}", op.label()).into(),
+                        danger: true,
+                    },
+                };
+                // The result card stays until dismissed; a transient error or
+                // "nothing to show" auto-dismisses like any other message.
+                let auto_dismiss = !matches!(body, ToastBody::Info { .. });
+                this.resolve_toast(toast, body, auto_dismiss, cx);
             })
             .ok();
         })
         .detach();
     }
 
-    fn show_info_result(&mut self, result: InfoResult, cx: &mut Context<Self>) {
-        let msg = match result {
+    /// An info result as a toast: a label title, the full `remote:path` subject,
+    /// and a metrics line. Only About headers with the remote's icon + name.
+    /// (A public link is copied to the clipboard.)
+    fn info_result_body(&mut self, remote: &str, path: &str, result: InfoResult, cx: &mut Context<Self>) -> ToastBody {
+        let part = |o: Option<i64>| o.map(human_size).unwrap_or_else(|| "?".into());
+        let full = format!("{remote}:{path}");
+        match result {
+            // About is about the whole remote: icon + name as the title, no path.
+            InfoResult::Quota { used, total, free } => ToastBody::Info {
+                icon: Some(self.remote_icon_for(remote)),
+                title: remote.to_string().into(),
+                value: Some(format!("{} of {} used", part(used), part(total)).into()),
+                detail: Some(format!("{} free", part(free)).into()),
+            },
+            InfoResult::Size { count, bytes } => ToastBody::Info {
+                icon: None,
+                title: "Size".into(),
+                value: Some(full.into()),
+                detail: Some(format!("{count} items \u{b7} {}", human_size(bytes)).into()),
+            },
+            InfoResult::Stat { name, bytes, is_dir } => ToastBody::Info {
+                icon: Some(if is_dir { "icons/folder.svg" } else { "icons/file.svg" }),
+                title: name.into(),
+                value: Some(full.into()),
+                detail: Some(if is_dir { "Folder".to_string() } else { human_size(bytes) }.into()),
+            },
             InfoResult::Link(url) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
-                format!("Link copied: {url}")
+                ToastBody::Info {
+                    icon: None,
+                    title: "Public link".into(),
+                    value: Some(url.into()),
+                    detail: Some("Copied to clipboard".into()),
+                }
             }
-            InfoResult::Size { count, bytes } => format!("{count} items \u{b7} {}", human_size(bytes)),
-            InfoResult::Quota { used, total, free } => {
-                let part = |o: Option<i64>| o.map(human_size).unwrap_or_else(|| "?".into());
-                format!("Used {} of {} \u{b7} {} free", part(used), part(total), part(free))
-            }
-            InfoResult::Stat { name, bytes, is_dir } => {
-                let what = if is_dir { "folder".to_string() } else { human_size(bytes) };
-                format!("{name} \u{b7} {what}")
-            }
-        };
-        self.toast(msg, false, cx);
+        }
+    }
+
+    /// The provider icon for a remote by name (generic cloud if unknown).
+    fn remote_icon_for(&self, name: &str) -> &'static str {
+        self.remotes.iter().find(|r| r.name == name).map_or("icons/cloud.svg", |r| remote_icon(&r.kind))
     }
 
     fn spawn_operation(&mut self, op: Operation, args: Vec<ArgValue>, cx: &mut Context<Self>) {
@@ -137,9 +177,9 @@ impl Workspace {
         let targets: Vec<JobTarget> = args
             .iter()
             .filter_map(|a| match a {
-                ArgValue::Path { remote, path, .. } => {
+                ArgValue::Path { remote, path, is_dir, .. } => {
                     let name = path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(remote);
-                    Some(JobTarget::new(name.to_string(), remote.clone(), path.clone()))
+                    Some(JobTarget::new(name.to_string(), remote.clone(), path.clone(), *is_dir))
                 }
                 ArgValue::Name(_) => None,
             })
@@ -201,8 +241,8 @@ impl Workspace {
         let to = join_path(parent_of(&entry.path), &new_name);
         self.pending_select = Some(new_name.clone());
         let (from, is_dir) = (entry.path.clone(), entry.is_dir);
-        let source = JobTarget::new(entry.name, remote.clone(), from.clone());
-        let destination = JobTarget::new(new_name.clone(), remote.clone(), to.clone());
+        let source = JobTarget::new(entry.name, remote.clone(), from.clone(), is_dir);
+        let destination = JobTarget::new(new_name.clone(), remote.clone(), to.clone(), is_dir);
         let command = rclone_cmd(
             TransferMode::Move.cli_verb(is_dir),
             &[&format!("{remote}:{from}"), &format!("{remote}:{to}")],
@@ -228,7 +268,7 @@ impl Workspace {
         };
         let path = join_path(&self.path, &name);
         self.pending_select = Some(name.clone());
-        let folder = JobTarget::new(name, remote.clone(), path.clone());
+        let folder = JobTarget::new(name, remote.clone(), path.clone(), true);
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
         self.spawn_job("New folder", vec![folder], command, true, cx, move |group| {
@@ -260,7 +300,7 @@ impl Workspace {
                         let cli = if is_dir { "copy" } else { "copyto" };
                         let command = rclone_cmd(cli, &[&local, &format!("{r}:{dst_path}")]);
                         // Local source has no remote location; only the destination is navigable.
-                        let destination = JobTarget::new(name, r.clone(), dst_path);
+                        let destination = JobTarget::new(name, r.clone(), dst_path, is_dir);
                         let service = this.service.clone();
                         this.spawn_job("Upload", vec![destination], command, true, cx, move |group| {
                             let (service, local, r, d) =
@@ -326,7 +366,7 @@ impl Workspace {
     /// Enqueue a single delete as an rclone job.
     fn delete_entry(&mut self, remote: String, entry: Entry, cx: &mut Context<Self>) {
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
-        let item = JobTarget::new(entry.name, remote.clone(), path.clone());
+        let item = JobTarget::new(entry.name, remote.clone(), path.clone(), is_dir);
         let command =
             rclone_cmd(if is_dir { "purge" } else { "deletefile" }, &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
@@ -352,7 +392,7 @@ impl Workspace {
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
         let local = format!("{}/{}", dest.to_string_lossy(), entry.name);
         // Local destination has no remote location; only the source is navigable.
-        let source = JobTarget::new(entry.name.clone(), remote.clone(), path.clone());
+        let source = JobTarget::new(entry.name.clone(), remote.clone(), path.clone(), is_dir);
         let command =
             rclone_cmd(TransferMode::Copy.cli_verb(is_dir), &[&format!("{remote}:{path}"), &local]);
         let service = self.service.clone();
@@ -403,8 +443,8 @@ impl Workspace {
             let dst_remote = dst_remote.clone();
             let dst_dir = dst_dir.clone();
             let dst_path = join_path(&dst_dir, &entry.name);
-            let source = JobTarget::new(entry.name.clone(), src_remote.clone(), src_path.clone());
-            let destination = JobTarget::new(entry.name.clone(), dst_remote.clone(), dst_path.clone());
+            let source = JobTarget::new(entry.name.clone(), src_remote.clone(), src_path.clone(), is_dir);
+            let destination = JobTarget::new(entry.name.clone(), dst_remote.clone(), dst_path.clone(), is_dir);
             let command = rclone_cmd(
                 mode.cli_verb(is_dir),
                 &[&format!("{src_remote}:{src_path}"), &format!("{dst_remote}:{dst_path}")],
@@ -493,5 +533,44 @@ impl Workspace {
             },
             cx,
         );
+    }
+}
+
+/// The remote name an info op targets (its first path arg).
+fn info_remote(args: &[ArgValue]) -> String {
+    args.iter()
+        .find_map(|a| match a {
+            ArgValue::Path { remote, .. } => Some(remote.clone()),
+            ArgValue::Name(_) => None,
+        })
+        .unwrap_or_default()
+}
+
+/// The path an info op targets (its first path arg); empty for a remote root.
+fn info_path(args: &[ArgValue]) -> String {
+    args.iter()
+        .find_map(|a| match a {
+            ArgValue::Path { path, .. } => Some(path.clone()),
+            ArgValue::Name(_) => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Spinner label shown while an info op runs, e.g. "Calculating size gdrive:photos…".
+fn info_pending_label(op: InfoOp, args: &[ArgValue]) -> String {
+    let target = args.iter().find_map(|a| match a {
+        ArgValue::Path { remote, path, .. } if path.is_empty() => Some(format!("{remote}:")),
+        ArgValue::Path { remote, path, .. } => Some(format!("{remote}:{path}")),
+        ArgValue::Name(_) => None,
+    });
+    let verb = match op {
+        InfoOp::Size => "Calculating size",
+        InfoOp::About => "Reading storage",
+        InfoOp::Stat => "Inspecting",
+        InfoOp::PublicLink => "Creating link",
+    };
+    match target {
+        Some(t) => format!("{verb} {t}\u{2026}"),
+        None => format!("{verb}\u{2026}"),
     }
 }

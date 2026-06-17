@@ -66,7 +66,7 @@ impl TransferMode {
     }
 }
 
-use crate::ops::{basename, join, split_parent, ArgValue, Operation};
+use crate::ops::{basename, join, only_file, split_parent, ArgValue, Operation};
 
 /// Bridge between the UI executor and the rclone daemon: RC calls run on the
 /// tokio runtime, results return over a oneshot the UI awaits. Cloneable.
@@ -232,19 +232,19 @@ impl Service {
         let (method, params) = if is_dir {
             ("sync/copy", serde_json::json!({ "srcFs": format!("{remote}:{path}"), "dstFs": join(&dest, &name) }))
         } else {
+            // Single file: listing-based copy restricted to exactly this file, so it
+            // works on backends whose NewObject can't resolve a path (e.g. torbox).
+            let (parent, leaf) = split_parent(&path);
             (
-                "operations/copyfile",
-                serde_json::json!({ "srcFs": format!("{remote}:"), "srcRemote": path, "dstFs": dest, "dstRemote": name }),
+                "sync/copy",
+                serde_json::json!({ "srcFs": format!("{remote}:{parent}"), "dstFs": dest, "_filter": { "IncludeRule": [only_file(&leaf)] } }),
             )
         };
         self.submit(method, params, group).await
     }
 
-    /// Copy or move `src_remote:src_path` into the `dst_remote:dst_dir` directory
     /// Build and submit a registry [`Operation`] from resolved `args` — the
     /// single dispatch + validation point shared by the context menu and palette.
-    /// Literal-path methods (`copyfile`/`movefile`) handle names with glob
-    /// metacharacters that an include-filter would silently miss.
     pub async fn run_operation(
         &self,
         op: Operation,
@@ -318,9 +318,9 @@ impl Service {
                 TransferMode::Copy.file_method(),
                 serde_json::json!({
                     "srcFs": parent,
-                    "srcRemote": name,
-                    "dstFs": format!("{remote}:"),
-                    "dstRemote": join(&dst_dir, &name),
+                    "srcRemote": &name,
+                    "dstFs": format!("{remote}:{dst_dir}"),
+                    "dstRemote": &name,
                 }),
             )
         };

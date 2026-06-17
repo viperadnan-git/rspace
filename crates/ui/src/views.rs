@@ -424,6 +424,12 @@ impl Workspace {
                                     }
                                     cx.notify();
                                 }))
+                                // Keep a row's left-press from reaching the body's
+                                // deselect handler (the row's on_click does the selecting).
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                                )
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
@@ -502,13 +508,27 @@ impl Workspace {
                         cx.notify();
                     }),
                 )
+                // Click in empty space deselects (Finder-style). Rows stop
+                // propagation, so this only fires off the rows.
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.pane = Pane::Explorer;
+                        this.context = None;
+                        this.bg_menu = None;
+                        if !this.selected.is_empty() {
+                            this.selected.clear();
+                            cx.notify();
+                        }
+                    }),
+                )
             },
         );
 
         v_flex()
             .flex_1()
             .bg(rgb(INSET))
-            .child(
+            .children(self.open_remote.is_some().then(|| {
                 h_flex()
                     .w_full()
                     .h(px(34.0))
@@ -552,8 +572,8 @@ impl Workspace {
                                         this.toggle_preview(&TogglePreview, window, cx)
                                     })),
                             ),
-                    ),
-            )
+                    )
+                }))
             .child(body_area)
     }
 
@@ -600,9 +620,16 @@ impl Workspace {
                 el.child(
                     v_flex()
                         .items_center()
-                        .gap_1()
+                        .gap_2()
                         .child(section_header("RECENT"))
-                        .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .justify_center()
+                                .gap_1p5()
+                                .max_w(px(360.0))
+                                .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
+                        ),
                 )
             })
             .child(
@@ -623,22 +650,25 @@ impl Workspace {
             })
     }
 
-    /// A recent-remote quick-open row on the start screen.
+    /// A compact recent-remote quick-open chip on the start screen.
     fn recent_remote_row(&self, ix: usize, remote: RemoteInfo, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = remote.name.clone();
         h_flex()
             .id(("recent-remote", ix))
-            .gap_2()
+            .flex_shrink_0()
+            .gap_1p5()
             .px_2()
-            .py_1()
+            .py_0p5()
             .rounded_md()
+            .border_1()
+            .border_color(rgb(BORDER_MUTED))
             .cursor_pointer()
             .hover(|s| s.bg(rgba(OVERLAY)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.navigate(name.clone(), String::new(), None, cx)
             }))
-            .child(svg().path(remote_icon(&remote.kind)).size(px(14.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
-            .child(div().text_sm().text_color(rgb(FG)).child(remote.name.clone()))
+            .child(svg().path(remote_icon(&remote.kind)).size(px(12.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
+            .child(div().text_xs().text_color(rgb(FG)).child(remote.name.clone()))
     }
 
     /// The brand mark plus the "rspace" wordmark.

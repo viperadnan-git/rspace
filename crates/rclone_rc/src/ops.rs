@@ -127,23 +127,23 @@ impl Operation {
                 let [src, dst] = args else { return None };
                 let (sr, sp, is_dir) = src.as_path()?;
                 let (dr, dd, _) = dst.as_path()?;
-                // Paste semantics: drop the source basename into the dest dir.
-                let dst_path = join(dd, &basename(sp));
                 let mv = matches!(self, Operation::Move);
                 Some(if is_dir {
+                    // Paste semantics: drop the dir into the dest under its own name.
+                    let dst_path = join(dd, &basename(sp));
                     let method = if mv { "sync/move" } else { "sync/copy" };
                     (method, json!({ "srcFs": format!("{sr}:{sp}"), "dstFs": format!("{dr}:{dst_path}") }))
                 } else {
-                    let method = if mv { "operations/movefile" } else { "operations/copyfile" };
-                    (
-                        method,
-                        json!({
-                            "srcFs": format!("{sr}:"),
-                            "srcRemote": sp,
-                            "dstFs": format!("{dr}:"),
-                            "dstRemote": dst_path,
-                        }),
-                    )
+                    // Single file: restrict the sync engine to exactly this file via
+                    // `only_file` so it resolves by listing the parent — works on backends
+                    // whose NewObject can't resolve a path (torbox), where copyfile fails.
+                    let (parent, leaf) = split_parent(sp);
+                    let method = if mv { "sync/move" } else { "sync/copy" };
+                    (method, json!({
+                        "srcFs": format!("{sr}:{parent}"),
+                        "dstFs": format!("{dr}:{dd}"),
+                        "_filter": { "IncludeRule": [only_file(&leaf)] },
+                    }))
                 })
             }
             // Make the destination dir mirror the source (one-way, deletes extras).
@@ -156,8 +156,14 @@ impl Operation {
             Operation::Delete => {
                 let [target] = args else { return None };
                 let (r, p, is_dir) = target.as_path()?;
-                let method = if is_dir { "operations/purge" } else { "operations/deletefile" };
-                Some((method, json!({ "fs": format!("{r}:"), "remote": p })))
+                Some(if is_dir {
+                    ("operations/purge", json!({ "fs": format!("{r}:"), "remote": p }))
+                } else {
+                    // Listing-based delete restricted to exactly this file (same reason
+                    // as copy: works where NewObject/deletefile can't resolve a path).
+                    let (parent, leaf) = split_parent(p);
+                    ("operations/delete", json!({ "fs": format!("{r}:{parent}"), "_filter": { "IncludeRule": [only_file(&leaf)] } }))
+                })
             }
             // Free space / clear old versions on the whole fs at the target path.
             Operation::Cleanup => {
@@ -187,10 +193,9 @@ impl Operation {
                 Some(if is_dir {
                     ("sync/move", json!({ "srcFs": format!("{r}:{p}"), "dstFs": format!("{r}:{dst}") }))
                 } else {
-                    (
-                        "operations/movefile",
-                        json!({ "srcFs": format!("{r}:"), "srcRemote": p, "dstFs": format!("{r}:"), "dstRemote": dst }),
-                    )
+                    let (src_fs, src_leaf) = fs_leaf(r, p);
+                    let (dst_fs, dst_leaf) = fs_leaf(r, &dst);
+                    ("operations/movefile", json!({ "srcFs": src_fs, "srcRemote": src_leaf, "dstFs": dst_fs, "dstRemote": dst_leaf }))
                 })
             }
             // Download a URL into the destination directory (name from the URL).
@@ -322,5 +327,46 @@ pub fn join(dir: &str, name: &str) -> String {
         name.to_string()
     } else {
         format!("{dir}/{name}")
+    }
+}
+
+/// Address a single file object the way rclone's own `NewFsFile` does: the fs is
+/// the file's parent directory and the remote is the leaf name. Pure split.
+pub(crate) fn fs_leaf(remote: &str, path: &str) -> (String, String) {
+    let (parent, leaf) = split_parent(path);
+    (format!("{remote}:{parent}"), leaf)
+}
+
+/// An `IncludeRule` matching exactly `leaf` at the fs root (anchored, glob chars
+/// escaped) — lets the sync engine resolve a single file by listing, for backends
+/// whose `NewObject` can't resolve a path (e.g. torbox). See the `glob_escape` test.
+pub(crate) fn only_file(leaf: &str) -> String {
+    let mut out = String::with_capacity(leaf.len() + 1);
+    out.push('/');
+    for c in leaf.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_escape() {
+        assert_eq!(only_file("movie.mp4"), "/movie.mp4");
+        assert_eq!(only_file("a[1].txt"), "/a\\[1\\].txt");
+        assert_eq!(only_file("b*?{x}.mkv"), "/b\\*\\?\\{x\\}.mkv");
+        assert_eq!(only_file("back\\slash"), "/back\\\\slash");
+    }
+
+    #[test]
+    fn fs_leaf_splits_parent() {
+        assert_eq!(fs_leaf("r", "dir/file.txt"), ("r:dir".into(), "file.txt".into()));
+        assert_eq!(fs_leaf("r", "file.txt"), ("r:".into(), "file.txt".into()));
     }
 }

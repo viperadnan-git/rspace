@@ -42,7 +42,7 @@ use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
 use picker::Picker;
 use prompt::PromptModal;
-use toast::Toast;
+use toast::{Toast, ToastBody};
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use remotes::RemoteConfigModal;
 use query::{Query, Status};
@@ -497,6 +497,9 @@ struct Workspace {
     preview_cache: Vec<(String, PreviewState)>,
     rc_health: RcHealth,
     clipboard: Option<Clipboard>,
+    /// Whether the OS window is focused; toast dismiss timers pause when not
+    /// (Sonner-style), so a toast can't expire while the user isn't looking.
+    window_active: bool,
 }
 
 impl Workspace {
@@ -525,10 +528,24 @@ impl Workspace {
         let preview_open = ui.preview_open;
         let jobs = cx.new(|_| Jobs::new(service.clone(), db.clone()));
         jobs.update(cx, |jobs, cx| jobs.start_polling(cx));
+        cx.observe_window_activation(window, |this, window, _| {
+            this.window_active = window.is_window_active();
+        })
+        .detach();
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
-            JobsEvent::Logged => {
+            JobsEvent::Finished { label, ok, error } => {
                 this.job_history = this.db.recent_jobs(JOB_HISTORY_LIMIT);
+                if *ok {
+                    this.toast(label.clone(), false, cx);
+                } else {
+                    // Surface rclone's own reason, not just "failed".
+                    let msg = match error {
+                        Some(e) => format!("{label} failed \u{2014} {e}"),
+                        None => format!("{label} failed"),
+                    };
+                    this.toast_sticky(msg, true, cx);
+                }
                 cx.notify();
             }
         })
@@ -589,6 +606,7 @@ impl Workspace {
             preview_cache: Vec::new(),
             rc_health: RcHealth::Unknown,
             clipboard: None,
+            window_active: true,
         };
         this.load_remotes(cx);
         Self::poll_health(window, cx);
@@ -829,7 +847,6 @@ impl Workspace {
 
     fn load_remote(&mut self, ix: usize, cx: &mut Context<Self>) {
         if let Some(remote) = self.ordered_remotes().get(ix) {
-            self.remote_sel = ix;
             let name = remote.name.clone();
             self.navigate(name, String::new(), None, cx);
         }
@@ -906,7 +923,7 @@ impl Workspace {
             None => self.pinned.push(name.clone()),
         }
         self.db.save_pinned(&self.pinned);
-        self.restore_remote_sel(selected);
+        self.select_remote(selected.as_deref());
         cx.notify();
     }
 
@@ -922,7 +939,7 @@ impl Workspace {
             self.pinned.insert(ip, name);
             self.db.save_pinned(&self.pinned);
         }
-        self.restore_remote_sel(selected);
+        self.select_remote(selected.as_deref());
         cx.notify();
     }
 
@@ -936,11 +953,15 @@ impl Workspace {
                 self.db.save_pinned(&self.pinned);
             }
         }
-        self.restore_remote_sel(selected);
+        self.select_remote(selected.as_deref());
         cx.notify();
     }
 
-    fn restore_remote_sel(&mut self, name: Option<String>) {
+    /// Move the sidebar cursor/highlight onto `name` (no-op if it isn't listed).
+    /// The highlight is derived from this by-name, so every path that opens or
+    /// reorders remotes routes through here instead of poking `remote_sel`
+    /// directly — the selection can't drift from the open remote.
+    fn select_remote(&mut self, name: Option<&str>) {
         if let Some(name) = name {
             if let Some(ix) = self.ordered_remotes().iter().position(|r| r.name == name) {
                 self.remote_sel = ix;
@@ -967,6 +988,9 @@ impl Workspace {
             self.db.record_remote(&remote);
             self.recent_remotes = self.db.recent_remotes(RECENT_REMOTES_FETCH);
         }
+        // Keep the sidebar highlight on the remote being shown. Every open path
+        // routes through navigate(), so syncing here covers all of them.
+        self.select_remote(Some(&remote));
         self.remember_sel();
         self.open_remote = Some(remote.clone());
         self.path = path.clone();
@@ -980,14 +1004,17 @@ impl Workspace {
         self.load_entries(cx);
     }
 
-    /// Reveal a job target in the explorer: open its containing directory and
-    /// select the item itself.
+    /// Reveal a job target in the explorer: open a folder directly, or open a
+    /// file's containing directory with the file selected.
     pub(crate) fn reveal_target(&mut self, target: JobTarget, cx: &mut Context<Self>) {
         self.jobs_open = false;
         self.pane = Pane::Explorer;
-        self.restore_remote_sel(Some(target.remote.clone()));
-        let containing_dir = parent_of(&target.path).to_string();
-        self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
+        if target.is_dir {
+            self.navigate(target.remote, target.path, None, cx);
+        } else {
+            let containing_dir = parent_of(&target.path).to_string();
+            self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
+        }
     }
 
     /// Resize a file-list column by dragging its left divider. Width is measured
@@ -1087,30 +1114,29 @@ impl Workspace {
     }
 
     /// Apply a pending select-by-name once its listing has loaded, then clamp.
+    /// A freshly opened directory has *no* selection (Finder-style) — only an
+    /// explicit `pending_select` (e.g. after rename, or the child folder when
+    /// going up) selects an item.
     fn resolve_selection(&mut self) {
         if self.dir_query.data().is_none() {
             return;
         }
         if let Some(name) = self.pending_select.take() {
-            if let Some(idx) = self.entries().iter().position(|e| e.name == name) {
-                self.entry_sel = idx;
+            let idx = self.entries().iter().position(|e| e.name == name);
+            if let Some(idx) = idx {
+                self.select_only(idx);
                 self.scroll_to_selection();
+                return;
             }
         }
         let len = self.entries().len();
         if len > 0 && self.entry_sel >= len {
             self.entry_sel = len - 1;
         }
-        // Prune stale paths only for a real multi-selection (single-select is kept
-        // valid by the cursor logic, so the common path allocates nothing).
-        if self.selected.len() > 1 {
+        // Drop any selected paths that no longer exist in the listing.
+        if !self.selected.is_empty() {
             let valid: HashSet<String> = self.entries().iter().map(|e| e.path.clone()).collect();
             self.selected.retain(|p| valid.contains(p));
-        }
-        if self.selected.is_empty() {
-            if let Some(p) = self.entry_path_at(self.entry_sel) {
-                self.selected.insert(p);
-            }
         }
     }
 
@@ -1218,11 +1244,12 @@ impl Workspace {
 
     /// Selected entries in display order; falls back to the cursor row.
     fn selected_entries(&self) -> Vec<Entry> {
-        let entries = self.entries();
+        // No selection means no operands — keyboard copy/cut/delete/download
+        // no-op rather than silently acting on the cursor row.
         if self.selected.is_empty() {
-            return entries.get(self.entry_sel).cloned().into_iter().collect();
+            return Vec::new();
         }
-        entries.iter().filter(|e| self.selected.contains(&e.path)).cloned().collect()
+        self.entries().iter().filter(|e| self.selected.contains(&e.path)).cloned().collect()
     }
 
     /// Cursor becomes the sole selection (plain click / arrow).
@@ -1281,11 +1308,16 @@ impl Workspace {
                 }
             }
             Pane::Explorer => {
-                let next = (self.entry_sel + 1).min(len - 1);
-                if window.modifiers().shift {
-                    self.select_range_to(next);
+                // From no selection, the first Down selects the first row.
+                if self.selected.is_empty() {
+                    self.select_only(0);
                 } else {
-                    self.select_only(next);
+                    let next = (self.entry_sel + 1).min(len - 1);
+                    if window.modifiers().shift {
+                        self.select_range_to(next);
+                    } else {
+                        self.select_only(next);
+                    }
                 }
             }
         }
@@ -1297,7 +1329,15 @@ impl Workspace {
         match self.pane {
             Pane::Sidebar => self.remote_sel = self.remote_sel.saturating_sub(1),
             Pane::Explorer => {
-                if self.entries().is_empty() {
+                let len = self.entries().len();
+                if len == 0 {
+                    return;
+                }
+                // From no selection, the first Up selects the last row.
+                if self.selected.is_empty() {
+                    self.select_only(len - 1);
+                    cx.notify();
+                    self.scroll_to_selection();
                     return;
                 }
                 let prev = self.entry_sel.saturating_sub(1);
