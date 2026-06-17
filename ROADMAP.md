@@ -4,11 +4,12 @@ A fast, keyboard-first GUI for rclone: browse remotes like a file manager and
 mount them through native OS sync-provider APIs (no FUSE hacks where the OS
 offers a real API).
 
-## Status (2026-06-15)
-Phase 0 and Phase 1 are done; Phase 3's browser-side write ops shipped early
-(the browser is now a full read/write file manager). **Not yet started:** the
-File Provider mount (Phase 2 — the headline differentiator), remote management
-UI, the command palette, and the Settings storage page.
+## Status (2026-06-18)
+Phase 1 is complete (the command palette and remote-management UI have now
+shipped) and Phase 3's browser-side write ops shipped early — the browser is a
+full read/write, keyboard-first file manager. Phase 0 is done except macOS
+code-signing/notarization. **Not yet started:** the File Provider mount
+(Phase 2 — the headline differentiator) and the Settings storage & config page.
 
 Deferred deliberately: the **teardown manifest** and **storage-accounting** APIs
 were scaffolded then removed — speculative with no caller (we don't yet create
@@ -17,9 +18,12 @@ first external artifacts) and the Phase 3 Settings page. Cache/blobs dirs were
 dropped too; only `config`/`logs`/`state` exist now.
 
 Shipped beyond the original plan: file preview pane (image/text/info over
-`--rc-serve`), drag-and-drop move/copy, multi-select, per-provider icons,
-pinned remotes, resizable + persisted layout (sidebar/preview/columns),
-transfer retry.
+`--rc-serve`), drag-and-drop move/copy plus OS→app file-drop upload,
+multi-select, per-provider icons, pinned remotes, resizable + persisted layout
+(sidebar/preview/columns), transfer retry, an operation-registry command
+palette, schema-driven add/edit/remove remotes (incl. OAuth), SQLite-backed
+state + job history, promise-style notifications, a restartable rcd daemon with
+status-bar controls, and a brand/home landing view.
 
 ## Principles
 - **Speed is non-negotiable.** No design that trades it away. Async I/O, no
@@ -121,7 +125,7 @@ rspace/
 - [x] File-browser UI: remote list, directory navigation, breadcrumb, resizable
       columns, pinned remotes, per-provider icons.
 - [x] First-class keyboard nav (arrows + vim-style); multi-select.
-- [ ] Command palette (keyboard-first promise — still missing).
+- [x] Command palette (operation registry; browser actions reachable by keyboard).
 - [x] Read-only actions: preview pane (image/text/info), copy path, download.
 
 ### Phase 2 — File Provider mount (macOS)
@@ -136,7 +140,7 @@ rspace/
 - [x] Upload / copy / move / delete / mkdir / rename via RC in the browser
       (incl. cross-remote copy/move, drag-and-drop). Through FP: pending Phase 2.
 - [x] Transfer queue + progress (RC `core/stats`), error surfacing, retry.
-- [ ] Remote management UI (add/edit/remove via rclone config over RC).
+- [x] Remote management UI (schema-driven add/edit/remove over RC, incl. OAuth).
 - [ ] Settings — storage & config page: footprint breakdown, per-category clear
       (incl. API-driven OS-managed eviction), config inspection + manifest view.
 
