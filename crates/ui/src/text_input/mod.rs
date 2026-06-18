@@ -5,10 +5,11 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, Bounds,
-    ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseDownEvent, MouseMoveEvent,
-    PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, Window,
+    actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, svg, App, Bounds,
+    ClickEvent, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId,
+    MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
+    TextRun, UTF16Selection, Window,
 };
 
 use crate::theme::*;
@@ -130,6 +131,13 @@ pub struct TextInput {
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// Horizontal scroll so the caret stays visible when the text is wider than
+    /// the field (single-line scroll, like a native text input).
+    scroll_offset: Pixels,
+    /// Center the text within the field (for compact values like a stepper).
+    centered: bool,
+    /// Show an inline clear (×) button when focused and non-empty (search fields).
+    clearable: bool,
 }
 
 impl TextInput {
@@ -146,11 +154,24 @@ impl TextInput {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            scroll_offset: px(0.0),
+            centered: false,
+            clearable: false,
         }
     }
 
     pub fn masked(mut self, masked: bool) -> Self {
         self.masked = masked;
+        self
+    }
+
+    pub fn centered(mut self) -> Self {
+        self.centered = true;
+        self
+    }
+
+    pub fn clearable(mut self) -> Self {
+        self.clearable = true;
         self
     }
 
@@ -291,13 +312,46 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx);
     }
 
-    fn on_mouse_down(&mut self, ev: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Consume the click so it doesn't reach a backdrop that blurs on outside
+        // clicks, and focus explicitly (stopping propagation suppresses gpui's
+        // focus-on-click) — clicking into the field should focus it.
+        cx.stop_propagation();
+        self.focus_handle.focus(window, cx);
         let offset = self.index_for_x(ev.position);
-        if ev.modifiers.shift {
-            self.select_to(offset, cx);
-        } else {
-            self.move_to(offset, cx);
+        match ev.click_count {
+            // Double-click selects the word under the cursor; triple selects all.
+            2 => {
+                let (start, end) = self.word_at(offset);
+                self.selection_reversed = false;
+                self.selected_range = start..end;
+                cx.notify();
+            }
+            n if n >= 3 => {
+                self.selection_reversed = false;
+                self.selected_range = 0..self.content.len();
+                cx.notify();
+            }
+            _ if ev.modifiers.shift => self.select_to(offset, cx),
+            _ => self.move_to(offset, cx),
         }
+    }
+
+    /// The maximal run of word characters (alphanumerics, `_-.`) around `offset`.
+    fn word_at(&self, offset: usize) -> (usize, usize) {
+        let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.');
+        let start = self.content[..offset]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_word(*c))
+            .last()
+            .map_or(offset, |(i, _)| i);
+        let end = self.content[offset..]
+            .char_indices()
+            .take_while(|(_, c)| is_word(*c))
+            .last()
+            .map_or(offset, |(i, c)| offset + i + c.len_utf8());
+        (start, end)
     }
 
     fn on_mouse_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -330,6 +384,18 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Empty the field (the inline clear button) and keep focus for more typing.
+    fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.content = SharedString::default();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.scroll_offset = px(0.0);
+        self.error = None;
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
     fn cursor(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.start
@@ -352,10 +418,58 @@ impl TextInput {
     }
 
     fn index_for_x(&self, position: Point<Pixels>) -> usize {
+        // The placeholder is shown but isn't editable text, so a click collapses
+        // to the start rather than landing at a placeholder offset (which would
+        // be out of bounds for the empty content).
+        if self.content.is_empty() {
+            return 0;
+        }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
             return 0;
         };
-        line.index_for_x(position.x - bounds.left()).unwrap_or(self.content.len())
+        let local = position.x - bounds.left() - self.align_offset() + self.scroll_offset;
+        let Some(offset) = line.index_for_x(local) else {
+            return self.content.len();
+        };
+        if self.masked {
+            // The shaped line is one "•" (3 bytes) per char; map back to content.
+            let chars = offset / "\u{2022}".len();
+            self.content.char_indices().nth(chars).map_or(self.content.len(), |(b, _)| b)
+        } else {
+            self.clamp_content(offset)
+        }
+    }
+
+    /// When centered and the text fits the field, the x offset that centers it.
+    fn align_offset(&self) -> Pixels {
+        if !self.centered {
+            return px(0.0);
+        }
+        match (self.last_bounds.as_ref(), self.last_layout.as_ref()) {
+            (Some(bounds), Some(line)) => ((bounds.size.width - line.width) / 2.0).max(px(0.0)),
+            _ => px(0.0),
+        }
+    }
+
+    /// Clamp a content byte offset into range and onto a char boundary, so it is
+    /// always safe to slice `content` with it.
+    fn clamp_content(&self, offset: usize) -> usize {
+        let len = self.content.len();
+        if offset >= len {
+            return len;
+        }
+        let mut o = offset;
+        while o > 0 && !self.content.is_char_boundary(o) {
+            o -= 1;
+        }
+        o
+    }
+
+    /// Both ends clamped into range and ordered, so it's safe to splice `content`.
+    fn clamp_range(&self, range: Range<usize>) -> Range<usize> {
+        let start = self.clamp_content(range.start);
+        let end = self.clamp_content(range.end).max(start);
+        start..end
     }
 
     fn prev_boundary(&self, offset: usize) -> usize {
@@ -477,8 +591,9 @@ impl EntityInputHandler for TextInput {
             .map(|r| self.range_from_utf16(&r))
             .or_else(|| self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-        self.content = (self.content[..range.start].to_owned() + new_text + &self.content[range.end..]).into();
-        let at = range.start + new_text.len();
+        let Range { start, end } = self.clamp_range(range);
+        self.content = (self.content[..start].to_owned() + new_text + &self.content[end..]).into();
+        let at = start + new_text.len();
         self.selected_range = at..at;
         self.marked_range = None;
         self.error = None;
@@ -497,13 +612,14 @@ impl EntityInputHandler for TextInput {
             .map(|r| self.range_from_utf16(&r))
             .or_else(|| self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-        self.content = (self.content[..range.start].to_owned() + new_text + &self.content[range.end..]).into();
-        self.marked_range = (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
+        let Range { start, end } = self.clamp_range(range);
+        self.content = (self.content[..start].to_owned() + new_text + &self.content[end..]).into();
+        self.marked_range = (!new_text.is_empty()).then(|| start..start + new_text.len());
         self.selected_range = new_selected_range_utf16
             .map(|r| self.range_from_utf16(&r))
-            .map(|r| r.start + range.start..r.end + range.start)
+            .map(|r| r.start + start..r.end + start)
             .unwrap_or_else(|| {
-                let at = range.start + new_text.len();
+                let at = start + new_text.len();
                 at..at
             });
         cx.notify();
@@ -547,6 +663,7 @@ impl Render for TextInput {
         } else {
             BORDER_MUTED
         };
+        let show_clear = self.clearable && !self.bare && focused && !self.content.is_empty();
         let input_box = div()
             .track_focus(&self.focus_handle)
             .key_context("TextInput")
@@ -577,20 +694,44 @@ impl Render for TextInput {
             // A tab stop, so forms get keyboard navigation automatically.
             .tab_index(0)
             .tab_stop(true)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
             .w_full()
             .text_sm()
             .line_height(px(18.0))
             .cursor_text()
             // Box chrome, unless embedded inline (e.g. a list row supplies its own).
             .when(!self.bare, |el| {
-                el.px_2()
-                    .py(px(5.0))
+                el.h(px(30.0))
+                    .px_2()
                     .rounded_md()
-                    .bg(rgb(INSET))
+                    .bg(rgb(ELEVATED))
                     .border_1()
                     .border_color(rgb(border))
             })
-            .child(TextElement { input: cx.entity() });
+            // Clip the single line so long text scrolls within the field rather
+            // than overflowing it; the clear button sits outside the clip.
+            .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(TextElement { input: cx.entity() }))
+            .when(show_clear, |el| {
+                el.child(
+                    div()
+                        .id("ti-clear")
+                        .flex_none()
+                        .size(px(18.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgba(OVERLAY)))
+                        // Don't let the clear click also reposition the caret.
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
+                        .child(svg().path("icons/x.svg").size(px(11.0)).text_color(rgb(FG_MUTED))),
+                )
+            });
         let error = self.error.clone().filter(|_| !self.bare);
         div()
             .flex()

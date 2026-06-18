@@ -20,7 +20,7 @@ impl Render for RemoteConfigModal {
             Phase::Form => self.config_form(cx).into_any_element(),
             Phase::Question => self.config_question(cx).into_any_element(),
         };
-        modal_card("remote-config-card", cx)
+        modal_card("remote-config-card", &self.focus_handle, cx)
             // "modal" suppresses the workspace's `!modal` shortcuts; "RemoteConfig"
             // scopes the dialog's own key bindings.
             .key_context("modal RemoteConfig")
@@ -67,8 +67,7 @@ impl RemoteConfigModal {
                     .filter_map(|i| backends.get(i).map(|b| (i, b.clone())))
                     .map(|(i, (name, desc))| {
                         let kind = name.clone();
-                        list_item(i, i == sel, true)
-                            .justify_start()
+                        nav_item(i, i == sel, true)
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 this.pick_backend(kind.clone(), cx)
                             }))
@@ -252,6 +251,6 @@ impl RemoteConfigModal {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let style = if primary { ButtonStyle::Primary } else { ButtonStyle::Secondary };
-        focus_ring(modal_button(id, label, style, action, cx)).track_focus(focus).tab_index(0)
+        focus_ring(button(id, label, style, action, cx)).track_focus(focus).tab_index(0)
     }
 }

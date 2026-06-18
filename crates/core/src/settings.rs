@@ -14,6 +14,10 @@ pub struct Settings {
     pub refresh_secs: u64,
     /// Where downloads go. `None` = the platform default downloads folder.
     pub download_dir: Option<String>,
+    /// Explicit rclone binary path. `None` = auto-detect (PATH + known locations).
+    pub rclone_path: Option<String>,
+    /// Explicit rclone config file (`RCLONE_CONFIG`). `None` = rclone's default.
+    pub rclone_config_path: Option<String>,
     /// Default column directory listings are sorted by.
     pub sort_field: SortField,
     /// Default sort direction.
@@ -25,6 +29,8 @@ impl Default for Settings {
         Self {
             refresh_secs: 5,
             download_dir: None,
+            rclone_path: None,
+            rclone_config_path: None,
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
         }

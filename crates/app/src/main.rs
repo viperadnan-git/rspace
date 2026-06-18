@@ -2,8 +2,19 @@ mod logging;
 
 use anyhow::Result;
 use rspace_core::{mount_root, Db, Paths, SettingsStore};
-use rspace_rclone_rc::{detect, reap_mount_orphans, Daemon, Service, INSTALL_URL};
+use rspace_rclone_rc::{detect, from_path, reap_mount_orphans, Daemon, Rclone, Service, INSTALL_URL};
 use rspace_ui::{run, RcloneStatus, Startup};
+
+/// The configured rclone path (validated) if set, else auto-detection.
+fn resolve_rclone(store: &SettingsStore) -> Option<Rclone> {
+    if let Some(path) = store.get().rclone_path.as_deref() {
+        if let Some(found) = from_path(path) {
+            return Some(found);
+        }
+        tracing::warn!(path, "configured rclone path is invalid; falling back to detection");
+    }
+    detect().ok()
+}
 
 fn main() -> Result<()> {
     let paths = Paths::resolve()?;
@@ -15,8 +26,14 @@ fn main() -> Result<()> {
     let store = SettingsStore::load(paths.settings_path());
     let db = Db::open(&paths.db_path(), &paths.history_db_path());
 
-    let Ok(found) = detect() else {
-        tracing::warn!("rclone not found; prompting install from {INSTALL_URL}");
+    // Point every rclone invocation (rcd, mounts, detection) at a custom config
+    // file via the env var rclone reads. Safe: startup is single-threaded, before
+    // the runtime or UI spawn any threads.
+    if let Some(config) = store.get().rclone_config_path.clone() {
+        unsafe { std::env::set_var("RCLONE_CONFIG", config) };
+    }
+
+    let Some(found) = resolve_rclone(&store) else {
         run(Startup {
             rclone: RcloneStatus::Missing { install_url: INSTALL_URL.to_string() },
             service: None,

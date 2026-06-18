@@ -373,15 +373,10 @@ impl Workspace {
                 .child(spinner("dir-size", px(12.0), FG_MUTED))
                 .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Calculating…"))
                 .into_any_element(),
-            _ => div()
-                .id("calc-size")
-                .text_xs()
-                .text_color(rgb(ACCENT))
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(ACCENT_HOVER)))
-                .child("Calculate size")
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.calculate_dir_size(cx)))
-                .into_any_element(),
+            _ => text_link("calc-size", "Calculate size", None, |this, _, cx| {
+                this.calculate_dir_size(cx)
+            }, cx)
+            .into_any_element(),
         }
     }
 }

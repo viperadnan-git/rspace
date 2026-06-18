@@ -21,6 +21,7 @@ pub(crate) struct MountOptionsModal {
     cache_size: Entity<TextInput>,
     cache_age: Entity<TextInput>,
     ro_focus: FocusHandle,
+    focused: bool,
 }
 
 impl EventEmitter<MountOptionsEvent> for MountOptionsModal {}
@@ -53,6 +54,7 @@ impl MountOptionsModal {
             cache_size,
             cache_age,
             ro_focus: cx.focus_handle(),
+            focused: false,
         }
     }
 
@@ -108,10 +110,8 @@ impl Workspace {
 
 impl Render for MountOptionsModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.focus_handle.is_focused(window) {
-            self.focus_handle.focus(window, cx);
-        }
-        modal_card("mount-options-card", cx)
+        focus_once(&mut self.focused, &self.focus_handle, window, cx);
+        modal_card("mount-options-card", &self.focus_handle, cx)
             .key_context("modal MountOptions")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::save))
@@ -151,14 +151,14 @@ impl Render for MountOptionsModal {
                     .w_full()
                     .justify_end()
                     .gap_2()
-                    .child(modal_button(
+                    .child(button(
                         "mo-cancel",
                         "Cancel",
                         ButtonStyle::Secondary,
                         |_, cx| cx.emit(MountOptionsEvent::Dismiss),
                         cx,
                     ))
-                    .child(modal_button(
+                    .child(button(
                         "mo-save",
                         "Save",
                         ButtonStyle::Primary,

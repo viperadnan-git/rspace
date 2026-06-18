@@ -16,6 +16,7 @@ pub(crate) struct ConfirmModal {
     message: SharedString,
     confirm_label: SharedString,
     danger: bool,
+    focused: bool,
 }
 
 impl EventEmitter<ConfirmEvent> for ConfirmModal {}
@@ -40,6 +41,7 @@ impl ConfirmModal {
             message: message.into(),
             confirm_label: confirm_label.into(),
             danger,
+            focused: false,
         }
     }
 
@@ -50,11 +52,9 @@ impl ConfirmModal {
 
 impl Render for ConfirmModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.focus_handle.is_focused(window) {
-            self.focus_handle.focus(window, cx);
-        }
+        focus_once(&mut self.focused, &self.focus_handle, window, cx);
         let accept_style = if self.danger { ButtonStyle::Danger } else { ButtonStyle::Primary };
-        modal_card("confirm-card", cx)
+        modal_card("confirm-card", &self.focus_handle, cx)
             .key_context("modal Confirm")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::accept))
@@ -67,8 +67,8 @@ impl Render for ConfirmModal {
                     .w_full()
                     .justify_end()
                     .gap_2()
-                    .child(modal_button("confirm-cancel", "Cancel", ButtonStyle::Secondary, |_, cx| cx.emit(ConfirmEvent::Dismissed), cx))
-                    .child(modal_button("confirm-accept", self.confirm_label.clone(), accept_style, |_, cx| cx.emit(ConfirmEvent::Accepted), cx)),
+                    .child(button("confirm-cancel", "Cancel", ButtonStyle::Secondary, |_, cx| cx.emit(ConfirmEvent::Dismissed), cx))
+                    .child(button("confirm-accept", self.confirm_label.clone(), accept_style, |_, cx| cx.emit(ConfirmEvent::Accepted), cx)),
             )
     }
 }

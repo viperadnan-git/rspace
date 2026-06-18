@@ -101,7 +101,7 @@ impl RemoteConfigModal {
             options: Vec::new(),
             bools: Map::new(),
             fields: HashMap::new(),
-            search: cx.new(|cx| TextInput::new(cx, "Search backends…")),
+            search: cx.new(|cx| TextInput::new(cx, "Search backends…").clearable()),
             name,
             answer: cx.new(|cx| TextInput::new(cx, "")),
             show_advanced: false,

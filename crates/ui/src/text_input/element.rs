@@ -11,6 +11,7 @@ pub(super) struct Prepaint {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    origin: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -88,11 +89,31 @@ impl Element for TextElement {
             }
         };
 
+        // Single-line horizontal scroll: keep the caret inside the field. Scroll
+        // only when the caret would fall outside the visible window, then clamp
+        // so the text never scrolls past its start.
+        let caret_x = line.x_for_index(shaped_index(cursor));
+        let pad = px(2.0);
+        let prev = input.scroll_offset;
+        let mut scroll = prev;
+        if caret_x < scroll {
+            scroll = caret_x;
+        } else if caret_x > scroll + bounds.size.width - pad {
+            scroll = caret_x - bounds.size.width + pad;
+        }
+        scroll = scroll.max(px(0.0)).min((line.width - bounds.size.width + pad).max(px(0.0)));
+        // Center the (fitting) text when requested; otherwise left-align + scroll.
+        let align = if input.centered {
+            ((bounds.size.width - line.width) / 2.0).max(px(0.0))
+        } else {
+            px(0.0)
+        };
+        let origin = bounds.left() + align - scroll;
+
         let (cursor, selection) = if selected.is_empty() {
-            let x = line.x_for_index(shaped_index(cursor));
             (
                 Some(fill(
-                    Bounds::new(point(bounds.left() + x, bounds.top()), size(px(1.5), bounds.bottom() - bounds.top())),
+                    Bounds::new(point(origin + caret_x, bounds.top()), size(px(1.5), bounds.bottom() - bounds.top())),
                     rgb(ACCENT),
                 )),
                 None,
@@ -102,14 +123,19 @@ impl Element for TextElement {
                 None,
                 Some(fill(
                     Bounds::from_corners(
-                        point(bounds.left() + line.x_for_index(shaped_index(selected.start)), bounds.top()),
-                        point(bounds.left() + line.x_for_index(shaped_index(selected.end)), bounds.bottom()),
+                        point(origin + line.x_for_index(shaped_index(selected.start)), bounds.top()),
+                        point(origin + line.x_for_index(shaped_index(selected.end)), bounds.bottom()),
                     ),
                     rgba(SELECT),
                 )),
             )
         };
-        Prepaint { line: Some(line), cursor, selection }
+        // `input` (the read borrow) is no longer used past here, so persisting the
+        // new scroll offset can take a mutable borrow.
+        if scroll != prev {
+            self.input.update(cx, |input, _| input.scroll_offset = scroll);
+        }
+        Prepaint { line: Some(line), cursor, selection, origin }
     }
 
     fn paint(
@@ -128,7 +154,8 @@ impl Element for TextElement {
             window.paint_quad(selection);
         }
         let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), gpui::TextAlign::Left, None, window, cx).ok();
+        let text_origin = point(prepaint.origin, bounds.top());
+        line.paint(text_origin, window.line_height(), gpui::TextAlign::Left, None, window, cx).ok();
         if focus.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);

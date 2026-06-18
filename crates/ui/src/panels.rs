@@ -78,21 +78,12 @@ impl Workspace {
                                     cx.notify();
                                 })),
                             )
-                            .child(
-                                h_flex()
-                                    .id("transfers-close")
-                                    .size(px(22.0))
-                                    .justify_center()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .text_color(rgb(FG_MUTED))
-                                    .hover(|s| s.bg(rgba(OVERLAY)))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.jobs_open = false;
-                                        cx.notify();
-                                    }))
-                                    .child("✕"),
-                            ),
+                            .child(icon_button("transfers-close", "icons/x.svg").on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.jobs_open = false;
+                                    cx.notify();
+                                }),
+                            )),
                     ),
             )
             .child(body)
@@ -305,7 +296,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let card = modal_card("settings-card", cx)
+        let card = modal_card("settings-card", &self.focus, cx)
             .w(px(480.0))
             .max_h(relative(0.85))
             .gap_0()
@@ -371,30 +362,24 @@ impl Workspace {
                     Some(current),
                     cx,
                 )))
-                .child(pill_button("choose-dir", "Choose…", |this, cx| {
+                .child(button("choose-dir", "Choose…", ButtonStyle::Soft, |this, cx| {
                     this.choose_download_dir(cx)
                 }, cx)),
         )
     }
 
-    fn refresh_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn refresh_setting(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         setting_block(
             "Refresh interval",
             "How often open folders revalidate in the background.",
             h_flex()
-                .gap_1()
-                .child(self.refresh_preset(5, cx))
-                .child(self.refresh_preset(15, cx))
-                .child(self.refresh_preset(30, cx))
-                .child(self.refresh_preset(60, cx)),
+                .gap_2()
+                .items_center()
+                .child(self.refresh_field.clone())
+                .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("seconds")),
         )
     }
 
-    fn refresh_preset(&self, secs: u64, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.store.get().refresh_secs == secs;
-        chip(SharedString::from(format!("preset-{secs}")), format!("{secs}s"), active)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_refresh(secs, cx)))
-    }
 
     fn storage_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (total, clearable) = self.storage_size.unwrap_or_default();
@@ -406,25 +391,29 @@ impl Workspace {
                 .gap_2()
                 .items_center()
                 .child(div().flex_grow(1.0).min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
-                .child(pill_button("clean-up", "Clean up", |this, cx| this.request_cleanup(cx), cx)),
+                .child(button("clean-up", "Clean up", ButtonStyle::Soft, |this, cx| this.request_cleanup(cx), cx)),
         )
     }
 
     /// rclone's own paths (from `config/paths`, so correct per-OS) plus its cache
     /// size and a clear action. Paths are clickable and open with the OS default.
     fn rclone_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let binary = Some(self.rclone_bin.clone()).filter(|s| !s.is_empty());
         let config = self.rclone_paths.as_ref().map(|p| p.config.clone());
         let cache = self.rclone_paths.as_ref().map(|p| p.cache.clone());
         let cache_label = match self.rclone_cache_size {
             Some(b) => SharedString::from(format!("Cache · {}", human_size(b as i64))),
             None => "Cache".into(),
         };
+        let bin_override = self.store.get().rclone_path.is_some();
+        let config_override = self.store.get().rclone_config_path.is_some();
         setting_block(
             "rclone",
-            "Paths rclone uses on this system. Click to open; Clear removes the cache.",
+            "The binary, config, and cache rspace uses. Auto-resolved unless you override them; changing relaunches the app.",
             v_flex()
                 .gap_3()
-                .child(self.path_link("rclone-config", Some("Config file".into()), config, cx))
+                .child(self.rclone_path_row(RcloneField::Binary, "Binary", binary, bin_override, cx))
+                .child(self.rclone_path_row(RcloneField::Config, "Config file", config, config_override, cx))
                 .child(
                     h_flex()
                         .gap_2()
@@ -435,11 +424,121 @@ impl Workspace {
                             cache,
                             cx,
                         )))
-                        .child(pill_button("clear-rclone-cache", "Clear", |this, cx| {
+                        .child(button("clear-rclone-cache", "Clear", ButtonStyle::Soft, |this, cx| {
                             this.request_clear_rclone_cache(cx)
                         }, cx)),
                 ),
         )
+    }
+
+    /// One rclone override row. Normally a path link + Change (+ Reset when
+    /// overridden); while editing, a compact inline input + Browse/Cancel/Save so
+    /// the path can be typed or picked.
+    fn rclone_path_row(
+        &self,
+        field: RcloneField,
+        label: &'static str,
+        current: Option<String>,
+        overridden: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (link_id, change_id, reset_id, browse_id, cancel_id, save_id) = match field {
+            RcloneField::Binary => {
+                ("rclone-bin", "change-bin", "reset-bin", "browse-bin", "cancel-bin", "save-bin")
+            }
+            RcloneField::Config => {
+                ("rclone-config", "change-config", "reset-config", "browse-config", "cancel-config", "save-config")
+            }
+        };
+        let editing = self.rclone_edit.as_ref().filter(|(f, _)| *f == field).map(|(_, i)| i.clone());
+        if let Some(input) = editing {
+            return h_flex()
+                .w_full()
+                .gap_1()
+                .items_center()
+                .child(div().flex_1().min_w(px(0.0)).child(input))
+                .child(button(browse_id, "Browse", ButtonStyle::Soft, |this, cx| this.browse_rclone_edit(cx), cx))
+                .child(button(cancel_id, "Cancel", ButtonStyle::Secondary, |this, cx| this.cancel_rclone_edit(cx), cx))
+                .child(button(save_id, "Save", ButtonStyle::Primary, |this, cx| this.confirm_rclone_edit(cx), cx))
+                .into_any_element();
+        }
+        let current_for_edit = current.clone().unwrap_or_default();
+        h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.path_link(link_id, Some(label.into()), current, cx)))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(button(change_id, "Change", ButtonStyle::Soft, move |this, cx| {
+                        this.begin_rclone_edit(field, current_for_edit.clone(), cx)
+                    }, cx))
+                    .when(overridden, |el| {
+                        el.child(
+                            button(reset_id, "Reset", ButtonStyle::Secondary, move |this, cx| {
+                                this.reset_rclone(field, cx)
+                            }, cx)
+                            .tooltip(tooltip_text("Use automatic resolution")),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn begin_rclone_edit(&mut self, field: RcloneField, current: String, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| crate::text_input::TextInput::new(cx, field.placeholder()));
+        if !current.is_empty() {
+            input.update(cx, |i, cx| i.set_text(current, cx));
+        }
+        self.rclone_edit = Some((field, input));
+        self.rclone_edit_focus = true;
+        cx.notify();
+    }
+
+    fn cancel_rclone_edit(&mut self, cx: &mut Context<Self>) {
+        self.rclone_edit = None;
+        cx.notify();
+    }
+
+    /// Save the edited override (validating the binary), then relaunch.
+    fn confirm_rclone_edit(&mut self, cx: &mut Context<Self>) {
+        let Some((field, input)) = self.rclone_edit.as_ref() else {
+            return;
+        };
+        let field = *field;
+        let path = input.read(cx).text().trim().to_string();
+        if path.is_empty() {
+            self.cancel_rclone_edit(cx);
+            return;
+        }
+        if field == RcloneField::Binary && rspace_rclone_rc::from_path(&path).is_none() {
+            self.toast("That isn't a working rclone binary", true, cx);
+            return;
+        }
+        self.set_rclone_override(field, Some(path));
+        relaunch();
+    }
+
+    /// Fill the edit input from a file picker (the user still confirms).
+    fn browse_rclone_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, input)) = self.rclone_edit.as_ref() {
+            pick_file_into(input.clone(), cx);
+        }
+    }
+
+    /// Drop an override and relaunch (back to automatic resolution).
+    fn reset_rclone(&mut self, field: RcloneField, _cx: &mut Context<Self>) {
+        self.set_rclone_override(field, None);
+        relaunch();
+    }
+
+    /// Persist (`Some`) or clear (`None`) the override for `field`.
+    fn set_rclone_override(&mut self, field: RcloneField, value: Option<String>) {
+        self.store.update(|s| match field {
+            RcloneField::Binary => s.rclone_path = value,
+            RcloneField::Config => s.rclone_config_path = value,
+        });
     }
 
     /// A labeled, truncating path that opens with the OS default app on click

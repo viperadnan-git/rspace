@@ -161,7 +161,7 @@ impl Workspace {
         // No highlight on the landing view (nothing open).
         let selected = self.open_remote.is_some() && ix == self.remote_sel;
         let menu_name = remote.name.clone();
-        let mut row = list_item(ix, selected, focused)
+        let mut row = nav_item(ix, selected, focused)
             .tooltip(tooltip_text(format!("{} · {}", remote.name, remote.kind)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.load_remote(ix, cx)))
             .on_mouse_down(
@@ -257,6 +257,7 @@ impl Workspace {
                     }),
                 )
                 .track_scroll(&self.remote_scroll)
+                .px_1()
                 .flex_1(),
             )
     }
@@ -627,11 +628,7 @@ impl Workspace {
             "Add a remote to start browsing your cloud."
         };
 
-        let brand = v_flex()
-            .items_center()
-            .gap_2()
-            .child(svg().path("logo.svg").size(px(56.0)).text_color(rgb(FG)))
-            .child(div().text_size(px(20.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgb(FG)).child("rspace"));
+        let brand = brand_mark();
 
         // Recently-opened remotes still present in the config, newest first.
         // Filter the cached recents against the live config, then cap — so
@@ -656,18 +653,12 @@ impl Workspace {
             })
             .when(!recent.is_empty(), |el| {
                 el.child(
-                    v_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(section_header("RECENT"))
-                        .child(
-                            h_flex()
-                                .flex_wrap()
-                                .justify_center()
-                                .gap_1p5()
-                                .max_w(px(360.0))
-                                .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
-                        ),
+                    h_flex()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap_1p5()
+                        .max_w(px(360.0))
+                        .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
                 )
             })
             .child(
@@ -678,7 +669,7 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Run a command")),
             )
             .when(!has_remotes, |el| {
-                el.child(modal_button(
+                el.child(button(
                     "welcome-add",
                     "Add remote",
                     ButtonStyle::Secondary,
@@ -738,15 +729,8 @@ impl Workspace {
             .border_color(rgb(BORDER_MUTED))
             .child(self.render_brand(cx))
             .child(
-                h_flex()
-                    .id("settings-button")
-                    .size(px(24.0))
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgba(OVERLAY)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings(cx)))
-                    .child(svg().path("icons/settings.svg").size(px(16.0)).text_color(rgb(FG_MUTED))),
+                icon_button("settings-button", "icons/settings.svg")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings(cx))),
             )
     }
 

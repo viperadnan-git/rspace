@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use gpui::{
     div, img, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView,
-    App, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, HighlightStyle, Image,
-    MouseButton, MouseDownEvent, ObjectFit, Pixels, Render, SharedString, Stateful, StyledText,
-    Transformation, Window,
+    App, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, FontWeight, HighlightStyle,
+    Image, MouseButton, MouseDownEvent, ObjectFit, PathPromptOptions, Pixels, Render, SharedString,
+    Stateful, StyledText, Transformation, Window,
 };
+
+use crate::text_input::TextInput;
 use rspace_core::{SortField, SortOrder};
 use rspace_rclone_rc::Entry;
 
@@ -108,6 +110,20 @@ pub fn remote_icon(kind: &str) -> &'static str {
 
 pub fn list_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     let base = h_flex().id(id).w_full().justify_between().gap_2().px_3().py_1().cursor_pointer();
+    if selected && focused {
+        base.bg(rgba(SELECT))
+    } else if selected {
+        base.bg(rgba(SELECT_MUTED))
+    } else {
+        base.hover(|s| s.bg(rgba(OVERLAY)))
+    }
+}
+
+/// A settings-sidebar nav entry: an inset, rounded row with a neutral fill on
+/// selection and a subtle hover (matching Zed's settings navbar). The container
+/// supplies the horizontal inset so the rounded highlight floats off the edges.
+pub fn nav_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
+    let base = h_flex().id(id).w_full().gap_2().items_center().px_2().py_1().rounded_md().cursor_pointer();
     if selected && focused {
         base.bg(rgba(SELECT))
     } else if selected {
@@ -218,7 +234,8 @@ pub fn icon_button(id: impl Into<gpui::ElementId>, icon: &'static str) -> Statef
 
 /// Base for a centered modal card: elevated surface that swallows clicks so they
 /// don't fall through to the dismiss-on-click backdrop.
-pub fn modal_card<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div> {
+pub fn modal_card<V: 'static>(id: &'static str, focus: &FocusHandle, cx: &mut Context<V>) -> Stateful<Div> {
+    let focus = focus.clone();
     v_flex()
         .id(id)
         .p_5()
@@ -227,7 +244,48 @@ pub fn modal_card<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful
         .border_1()
         .border_color(rgb(BORDER_MUTED))
         .shadow_lg()
-        .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+        // A click on the card itself (inputs stop propagation, so never them)
+        // blurs the focused field and keeps focus/shortcuts on the card. Also
+        // stops the click reaching any backdrop behind the modal.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_, _: &MouseDownEvent, window, cx| {
+                focus.focus(window, cx);
+                cx.stop_propagation();
+            }),
+        )
+}
+
+/// Focus `handle` once, tracked by `done`: a container takes initial keyboard
+/// focus on open without stealing it back from child inputs each frame.
+pub fn focus_once(done: &mut bool, handle: &FocusHandle, window: &mut Window, cx: &mut App) {
+    if !*done {
+        *done = true;
+        handle.focus(window, cx);
+    }
+}
+
+/// Prompt for a single file and write its path into `input`; no-op on cancel.
+pub fn pick_file_into<V: 'static>(input: Entity<TextInput>, cx: &mut Context<V>) {
+    let rx = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: None,
+    });
+    cx.spawn(async move |this, cx| {
+        if let Ok(Ok(Some(paths))) = rx.await {
+            if let Some(p) = paths.into_iter().next() {
+                let text = p.to_string_lossy().into_owned();
+                this.update(cx, |_, cx| {
+                    input.update(cx, |i, cx| i.set_text(text, cx));
+                    cx.notify();
+                })
+                .ok();
+            }
+        }
+    })
+    .detach();
 }
 
 /// A text button base (padding, rounding, label); caller adds color/hover/click.
@@ -240,14 +298,17 @@ pub fn focus_ring<E: Styled + InteractiveElement>(el: E) -> E {
     el.border_1().border_color(rgba(0x0000_0000)).focus_visible(|s| s.border_color(rgb(ACCENT)))
 }
 
+/// Visual variants of [`button`]. `Primary` = accent fill; `Soft` = muted fill
+/// (Choose…/Clean up/Check again); `Secondary` = ghost (no fill); `Danger` = red.
 pub enum ButtonStyle {
     Primary,
-    Danger,
+    Soft,
     Secondary,
+    Danger,
 }
 
-/// A modal action button (Cancel/Save/Delete…).
-pub fn modal_button<V: 'static>(
+/// A labelled action button in one of the [`ButtonStyle`] variants.
+pub fn button<V: 'static>(
     id: &'static str,
     label: impl Into<SharedString>,
     style: ButtonStyle,
@@ -260,23 +321,48 @@ pub fn modal_button<V: 'static>(
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
     match style {
         ButtonStyle::Primary => base.bg(rgb(ACCENT)).text_color(rgb(0xffffff)).hover(|s| s.bg(rgb(ACCENT_HOVER))),
-        ButtonStyle::Danger => base.bg(rgb(DANGER)).text_color(rgb(0xffffff)),
+        ButtonStyle::Soft => base.text_color(rgb(FG)).bg(rgba(OVERLAY)).hover(|s| s.bg(rgba(SELECT_MUTED))),
         ButtonStyle::Secondary => base.text_color(rgb(FG)).hover(|s| s.bg(rgba(OVERLAY))),
+        ButtonStyle::Danger => base.bg(rgb(DANGER)).text_color(rgb(0xffffff)),
     }
 }
 
-/// A muted secondary action button used in Settings rows (Choose…/Clean up/Clear).
-pub fn pill_button<V: 'static>(
+/// The rspace brand mark: the logo over the wordmark, as shown on the home
+/// (welcome) screen.
+pub fn brand_mark() -> impl IntoElement {
+    v_flex()
+        .items_center()
+        .gap_2()
+        .child(svg().path("logo.svg").size(px(56.0)).text_color(rgb(FG)))
+        .child(
+            div()
+                .text_size(px(20.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(FG))
+                .child("rspace"),
+        )
+}
+
+/// An inline text link with an optional leading icon: muted, brightening to
+/// accent on hover. The click receives the window (e.g. to move focus).
+pub fn text_link<V: 'static>(
     id: &'static str,
     label: impl Into<SharedString>,
-    on_click: impl Fn(&mut V, &mut Context<V>) + 'static,
+    icon: Option<&'static str>,
+    on_click: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
     cx: &mut Context<V>,
 ) -> Stateful<Div> {
-    text_button(id, label)
-        .text_color(rgb(FG))
-        .bg(rgba(OVERLAY))
-        .hover(|s| s.bg(rgba(SELECT_MUTED)))
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)))
+    h_flex()
+        .id(id)
+        .gap_1p5()
+        .items_center()
+        .text_sm()
+        .cursor_pointer()
+        .text_color(rgb(FG_MUTED))
+        .hover(|s| s.text_color(rgb(ACCENT)))
+        .children(icon.map(|i| svg().path(i).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))))
+        .child(label.into())
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
 }
 
 /// A small selectable pill (example values, segmented presets).

@@ -28,6 +28,14 @@ pub fn detect() -> Result<Rclone, NotFound> {
     Ok(Rclone { path, version })
 }
 
+/// Validate a user-supplied rclone path (e.g. from settings): returns its
+/// version, or `None` when it isn't a working rclone binary.
+pub fn from_path(path: impl Into<PathBuf>) -> Option<Rclone> {
+    let path = path.into();
+    let version = version(&path)?;
+    Some(Rclone { path, version })
+}
+
 fn path_lookup() -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
