@@ -265,6 +265,20 @@ pub fn modal_button<V: 'static>(
     }
 }
 
+/// A muted secondary action button used in Settings rows (Choose…/Clean up/Clear).
+pub fn pill_button<V: 'static>(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    on_click: impl Fn(&mut V, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    text_button(id, label)
+        .text_color(rgb(FG))
+        .bg(rgba(OVERLAY))
+        .hover(|s| s.bg(rgba(SELECT_MUTED)))
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)))
+}
+
 /// A small selectable pill (example values, segmented presets).
 pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
     let base = h_flex()

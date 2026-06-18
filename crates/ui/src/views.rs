@@ -534,8 +534,9 @@ impl Workspace {
             },
         );
 
-        v_flex()
+        let content = v_flex()
             .flex_1()
+            .min_w(px(0.0))
             .bg(rgb(INSET))
             .children(self.open_remote.is_some().then(|| {
                 h_flex()
@@ -592,7 +593,26 @@ impl Workspace {
                             ),
                     )
                 }))
-            .child(body_area)
+            .child(body_area);
+
+        // The preview pane belongs to the file-list view, so it is built only in
+        // the open-remote branch — the layout structure (not a scattered guard)
+        // keeps it off the welcome screen.
+        if self.open_remote.is_none() {
+            content.into_any_element()
+        } else {
+            // Plain flex_row, not h_flex: the panes stretch to full height
+            // (h_flex's items_center would collapse them to content height).
+            div()
+                .flex()
+                .flex_row()
+                .flex_1()
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .child(content)
+                .when(self.preview_open, |el| el.child(self.render_preview(cx)))
+                .into_any_element()
+        }
     }
 
     /// Start screen before a remote is open: brand mark, a one-line prompt, and

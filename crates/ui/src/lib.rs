@@ -5,6 +5,7 @@ mod confirm;
 mod fuzzy;
 mod jobs;
 mod menus;
+mod mount_options;
 mod panels;
 mod picker;
 mod preview;
@@ -18,8 +19,9 @@ mod transfers;
 mod views;
 mod widgets;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::Path;
 use std::time::Duration;
 
 use gpui::{
@@ -36,8 +38,8 @@ use rspace_core::{
     dir_size, mount_root, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState,
 };
 use rspace_rclone_rc::{
-    ArgKind, ArgSpec, ArgValue, Entry, InfoOp, InfoResult, Operation, Provider, RemoteInfo,
-    RemoteOption, Service, ServiceError, TransferMode,
+    ArgKind, ArgSpec, ArgValue, ConfigPaths, Entry, InfoOp, InfoResult, MountConfig, Operation,
+    Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
 };
 
 use preview::{Preview, PreviewState};
@@ -48,6 +50,7 @@ use prompt::PromptModal;
 use toast::{Toast, ToastBody};
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use remotes::RemoteConfigModal;
+use mount_options::MountOptionsModal;
 use query::{Query, Status};
 use theme::*;
 use widgets::*;
@@ -100,7 +103,9 @@ actions!(
         AddRemote,
         OpenSettings,
         RestartDaemon,
-        ToggleTransfers
+        ToggleTransfers,
+        MountSave,
+        MountCancel
     ]
 );
 
@@ -266,6 +271,8 @@ fn bind_keys(cx: &mut App) {
         // Text-input dialog: Enter submits, Escape cancels.
         KeyBinding::new("enter", PromptSubmit, Some("Prompt")),
         KeyBinding::new("escape", PromptCancel, Some("Prompt")),
+        KeyBinding::new("enter", MountSave, Some("MountOptions")),
+        KeyBinding::new("escape", MountCancel, Some("MountOptions")),
     ]);
     // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns it.
     #[cfg(target_os = "macos")]
@@ -427,6 +434,12 @@ struct Workspace {
     remote_config: Option<Entity<RemoteConfigModal>>,
     /// Subscription to the open modal's dismiss/saved events.
     remote_config_sub: Option<gpui::Subscription>,
+    /// Open per-remote mount-options modal + its event subscription.
+    mount_options: Option<Entity<MountOptionsModal>>,
+    mount_options_sub: Option<gpui::Subscription>,
+    /// Per-remote mount config (cache mode, read-only, limits); cached from the
+    /// DB, edited via the mount-options modal, read when mounting.
+    mount_configs: HashMap<String, MountConfig>,
     sidebar_width: Pixels,
     preview_width: Pixels,
     col_date_width: Pixels,
@@ -471,6 +484,10 @@ struct Workspace {
     mounted: HashSet<String>,
     /// (total, clearable) storage bytes, computed when Settings opens.
     storage_size: Option<(u64, u64)>,
+    /// rclone's own paths (`config/paths`), fetched when Settings opens.
+    rclone_paths: Option<ConfigPaths>,
+    /// Size of rclone's cache dir, computed once `rclone_paths` resolves.
+    rclone_cache_size: Option<u64>,
     settings_open: bool,
     /// Right-click context menu: the targeted entry and the cursor position.
     context: Option<(Entry, Point<Pixels>)>,
@@ -526,6 +543,11 @@ impl Workspace {
         let pinned = db.load_pinned();
         let recent_remotes = db.recent_remotes(RECENT_REMOTES_FETCH);
         let job_history = db.recent_jobs(JOB_HISTORY_LIMIT);
+        let mount_configs = db
+            .load_mount_configs()
+            .into_iter()
+            .filter_map(|(name, json)| serde_json::from_str(&json).ok().map(|c| (name, c)))
+            .collect();
         let sidebar_width = clamped_width(ui.sidebar_width, SIDEBAR_W, SIDEBAR_MIN, SIDEBAR_MAX);
         let preview_width = clamped_width(ui.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
         let col_date_width = clamped_width(ui.col_date_width, COL_DATE, COL_MIN, COL_MAX);
@@ -567,6 +589,9 @@ impl Workspace {
             remote_menu: None,
             remote_config: None,
             remote_config_sub: None,
+            mount_options: None,
+            mount_options_sub: None,
+            mount_configs,
             sidebar_width,
             preview_width,
             col_date_width,
@@ -593,6 +618,8 @@ impl Workspace {
             job_history,
             mounted: HashSet::new(),
             storage_size: None,
+            rclone_paths: None,
+            rclone_cache_size: None,
             settings_open: false,
             context: None,
             bg_menu: None,
@@ -720,7 +747,11 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.confirm.is_some() || self.prompt.is_some() || self.remote_config.is_some() {
+        if self.confirm.is_some()
+            || self.prompt.is_some()
+            || self.remote_config.is_some()
+            || self.mount_options.is_some()
+        {
             return;
         }
         let previous_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
@@ -763,12 +794,42 @@ impl Workspace {
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = true;
         self.refresh_storage_size();
+        self.fetch_rclone_info(cx);
         cx.notify();
     }
 
-    /// (total, clearable) bytes on disk: the whole app dir, and just the cache.
+    /// (total, clearable) bytes for the app's own dir — bounded, so sized inline.
     fn refresh_storage_size(&mut self) {
         self.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
+    }
+
+    /// Resolve rclone's own paths (`config/paths`, fetched once) and size its
+    /// cache. The VFS cache can be many GB, so the walk runs on the background
+    /// executor rather than blocking the UI thread.
+    fn fetch_rclone_info(&mut self, cx: &mut Context<Self>) {
+        let service = self.service.clone();
+        // Resolve paths only once (they don't change at runtime); the size walk
+        // runs every open so it stays fresh.
+        let cache = self.rclone_paths.as_ref().map(|p| p.cache.clone());
+        cx.spawn(async move |this, cx| {
+            let (cache, fetched) = match cache {
+                Some(cache) => (cache, None),
+                None => match service.config_paths().await {
+                    Ok(paths) => (paths.cache.clone(), Some(paths)),
+                    Err(_) => return,
+                },
+            };
+            let size = cx.background_executor().spawn(async move { dir_size(Path::new(&cache)) }).await;
+            this.update(cx, |this, cx| {
+                this.rclone_cache_size = Some(size);
+                if let Some(paths) = fetched {
+                    this.rclone_paths = Some(paths);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn action_restart_daemon(&mut self, _: &RestartDaemon, _: &mut Window, cx: &mut Context<Self>) {
@@ -1194,6 +1255,7 @@ impl Workspace {
             || self.confirm.is_some()
             || self.prompt.is_some()
             || self.remote_config.is_some()
+            || self.mount_options.is_some()
             || self.jobs_open
         {
             self.settings_open = false;
@@ -1201,6 +1263,7 @@ impl Workspace {
             self.command_palette = None;
             self.confirm = None;
             self.prompt = None;
+            self.mount_options = None;
             self.close_remote_config(cx);
             self.close_menus();
             cx.notify();
@@ -1508,6 +1571,7 @@ impl Render for Workspace {
             || self.confirm.is_some()
             || self.prompt.is_some()
             || self.command_palette.is_some()
+            || self.mount_options.is_some()
         {
             // modal entities own their focus
         } else if !self.focus.is_focused(window) {
@@ -1585,8 +1649,8 @@ impl Render for Workspace {
                                 .min_h(px(0.0))
                                 .w_full()
                                 .child(self.render_sidebar(cx))
-                                .child(self.render_explorer(cx))
-                                .when(self.preview_open, |el| el.child(self.render_preview(cx))),
+                                // The explorer owns the preview pane (file-list view only).
+                                .child(self.render_explorer(cx)),
                         )
                     })
                     .when(self.jobs_open, |el| el.child(self.render_transfers(cx)))
@@ -1608,6 +1672,29 @@ impl Render for Workspace {
                     cx,
                 ))
             })
+            .when_some(self.remote_config.clone(), |el, modal| {
+                el.child(self.modal_overlay(
+                    false,
+                    false,
+                    |this, cx| this.close_remote_config(cx),
+                    modal,
+                    cx,
+                ))
+            })
+            .when_some(self.mount_options.clone(), |el, modal| {
+                el.child(self.modal_overlay(
+                    false,
+                    false,
+                    |this, cx| {
+                        this.mount_options = None;
+                        cx.notify();
+                    },
+                    modal,
+                    cx,
+                ))
+            })
+            .when(self.settings_open, |el| el.child(self.render_settings(cx)))
+            // Last among the modals so a confirm (e.g. from Settings) is topmost.
             .when_some(self.confirm.clone(), |el, modal| {
                 el.child(self.modal_overlay(
                     true,
@@ -1620,16 +1707,6 @@ impl Render for Workspace {
                     cx,
                 ))
             })
-            .when_some(self.remote_config.clone(), |el, modal| {
-                el.child(self.modal_overlay(
-                    false,
-                    false,
-                    |this, cx| this.close_remote_config(cx),
-                    modal,
-                    cx,
-                ))
-            })
-            .when(self.settings_open, |el| el.child(self.render_settings(cx)))
             .when(!self.toasts.is_empty(), |el| el.child(self.render_toasts(cx)))
     }
 }

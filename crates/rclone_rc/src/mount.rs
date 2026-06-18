@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -22,6 +23,47 @@ pub type SharedMounts = Arc<Mutex<Mounts>>;
 const MOUNT_CMD: &str = "nfsmount";
 #[cfg(not(target_os = "macos"))]
 const MOUNT_CMD: &str = "mount";
+
+/// VFS cache mode for a mount (`--vfs-cache-mode`). `Writes` (the default)
+/// streams reads — good for media — while caching writes; `Full` caches reads
+/// too (better app compatibility, more disk); `Off`/`Minimal` are near read-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheMode {
+    Off,
+    Minimal,
+    Writes,
+    Full,
+}
+
+impl Default for CacheMode {
+    fn default() -> Self {
+        Self::Writes
+    }
+}
+
+impl CacheMode {
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Writes => "writes",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// Per-remote mount options, mapped to rclone mount/VFS flags.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MountConfig {
+    pub cache_mode: CacheMode,
+    pub read_only: bool,
+    /// `--vfs-cache-max-size` (e.g. "10G"); empty = unlimited.
+    pub cache_max_size: String,
+    /// `--vfs-cache-max-age` (e.g. "1h"); empty = rclone's default.
+    pub cache_max_age: String,
+}
 
 #[derive(Debug, Error)]
 pub enum MountError {
@@ -50,21 +92,20 @@ pub struct Mounts {
 }
 
 impl Mounts {
-    /// Mount `remote:`, waiting until it is live. A VFS write cache (under
-    /// `cache_dir`) makes it writable. macOS uses the built-in NFS server at
-    /// `mountpoint` (no macFUSE); Linux mounts there via FUSE; Windows ignores
-    /// the path and takes the next free drive letter (`*`). No-op if mounted.
+    /// Mount `remote:`, waiting until it is live. The VFS cache (in rclone's
+    /// standard per-OS cache dir) makes it writable. macOS uses the built-in NFS
+    /// server at `mountpoint` (no macFUSE); Linux mounts there via FUSE; Windows
+    /// ignores the path and takes the next free drive letter (`*`). No-op if mounted.
     pub async fn mount(
         &mut self,
         rclone: &Path,
-        cache_dir: &Path,
         remote: &str,
         mountpoint: &Path,
+        config: &MountConfig,
     ) -> Result<(), MountError> {
         if self.active.contains_key(remote) {
             return Ok(());
         }
-        let _ = std::fs::create_dir_all(cache_dir);
         #[cfg(not(target_os = "windows"))]
         let _ = std::fs::create_dir_all(mountpoint);
 
@@ -74,13 +115,17 @@ impl Mounts {
         cmd.arg("*");
         #[cfg(not(target_os = "windows"))]
         cmd.arg(mountpoint);
-        cmd.arg("--vfs-cache-mode")
-            .arg("writes")
-            .arg("--cache-dir")
-            .arg(cache_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
+        cmd.arg("--vfs-cache-mode").arg(config.cache_mode.as_arg());
+        if config.read_only {
+            cmd.arg("--read-only");
+        }
+        if !config.cache_max_size.is_empty() {
+            cmd.arg("--vfs-cache-max-size").arg(&config.cache_max_size);
+        }
+        if !config.cache_max_age.is_empty() {
+            cmd.arg("--vfs-cache-max-age").arg(&config.cache_max_age);
+        }
+        cmd.stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
         let child = cmd.spawn().map_err(MountError::Spawn)?;
 
         if let Err(e) = await_mounted(mountpoint, Duration::from_secs(15)).await {

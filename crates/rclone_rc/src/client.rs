@@ -101,6 +101,14 @@ pub struct ConfigStep {
     pub error: String,
 }
 
+/// rclone's resolved on-disk paths (`config/paths`) — detected per-OS by rclone.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigPaths {
+    pub config: String,
+    pub cache: String,
+    pub temp: String,
+}
+
 /// One entry from `operations/list`. Field names match rclone's JSON.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Entry {
@@ -276,6 +284,11 @@ impl RcClient {
         }
         let r: Providers = self.call("config/providers", &json!({})).await?;
         Ok(r.providers)
+    }
+
+    /// rclone's resolved config/cache/temp paths (`config/paths`).
+    pub async fn config_paths(&self) -> Result<ConfigPaths, RcError> {
+        self.call("config/paths", &json!({})).await
     }
 
     /// The stored parameters of a configured remote (`config/get`), for editing.

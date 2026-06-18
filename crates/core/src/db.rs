@@ -49,6 +49,10 @@ impl Db {
              CREATE TABLE IF NOT EXISTS pinned (
                  name     TEXT PRIMARY KEY,
                  position INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS mount_config (
+                 name   TEXT PRIMARY KEY,
+                 config TEXT NOT NULL
              );",
         )
     }
@@ -76,13 +80,19 @@ impl Db {
         )
     }
 
-    /// Empty the disposable history (recent remotes, command usage, jobs). The
-    /// trailing VACUUM shrinks the file on disk so the freed space is actually
-    /// reclaimed (the "clearable" figure in Settings reflects the real saving).
+    /// Empty the disposable history (recent remotes, command usage, jobs).
+    ///
+    /// VACUUM compacts the db, but in WAL mode it writes the rewrite into the
+    /// `-wal` sidecar, which is never truncated while the connection stays open —
+    /// so each clean-up actually *grew* the on-disk footprint that the "clearable"
+    /// figure measures. The trailing checkpoint folds the WAL back into the db and
+    /// truncates it to zero, so the space is genuinely reclaimed.
     pub fn clear_history(&self) {
         let conn = self.cache.lock().unwrap();
         let _ = conn.execute_batch(
-            "DELETE FROM recent_remotes; DELETE FROM command_usage; DELETE FROM jobs; VACUUM;",
+            "DELETE FROM recent_remotes; DELETE FROM command_usage; DELETE FROM jobs;
+             VACUUM;
+             PRAGMA wal_checkpoint(TRUNCATE);",
         );
     }
 
@@ -131,6 +141,29 @@ impl Db {
             let _ = tx.execute("INSERT INTO pinned (name, position) VALUES (?1, ?2)", params![name, i as i64]);
         }
         let _ = tx.commit();
+    }
+
+    /// Per-remote mount config as opaque JSON `(name, config)`; the UI owns the
+    /// shape. Returned for all remotes so the UI can cache them at startup.
+    pub fn load_mount_configs(&self) -> Vec<(String, String)> {
+        let conn = self.data.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT name, config FROM mount_config") else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else {
+            return Vec::new();
+        };
+        rows.flatten().collect()
+    }
+
+    /// Persist a remote's mount config JSON (best-effort upsert).
+    pub fn save_mount_config(&self, name: &str, config: &str) {
+        let conn = self.data.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO mount_config (name, config) VALUES (?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET config = excluded.config",
+            params![name, config],
+        );
     }
 
     /// Mark `name` as just opened (recency = `last_opened`).

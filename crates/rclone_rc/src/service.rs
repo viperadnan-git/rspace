@@ -6,9 +6,11 @@ use tokio::sync::{oneshot, Mutex};
 
 use std::path::PathBuf;
 
-use crate::client::{ConfigStep, Entry, JobStatus, Provider, RcClient, RemoteInfo, Stats};
+use crate::client::{
+    ConfigPaths, ConfigStep, Entry, JobStatus, Provider, RcClient, RemoteInfo, Stats,
+};
 use crate::daemon::{Daemon, SharedDaemon};
-use crate::mount::{Mounts, SharedMounts};
+use crate::mount::{MountConfig, Mounts, SharedMounts};
 use crate::RcError;
 
 /// Aborts a spawned task when dropped — used so an unfinished interactive
@@ -87,21 +89,19 @@ pub struct Service {
     client: Arc<RwLock<RcClient>>,
     daemon: SharedDaemon,
     rclone: PathBuf,
-    mount_cache: PathBuf,
     mounts: SharedMounts,
 }
 
 impl Service {
     /// Take ownership of a started [`Daemon`], exposing it as a restartable
-    /// service. `rclone`/`mount_cache` back the no-install NFS mounts.
-    pub fn from_daemon(handle: Handle, daemon: Daemon, rclone: PathBuf, mount_cache: PathBuf) -> Self {
+    /// service. `rclone` (the binary) backs the no-install NFS mounts.
+    pub fn from_daemon(handle: Handle, daemon: Daemon, rclone: PathBuf) -> Self {
         let client = Arc::new(RwLock::new(daemon.client().clone()));
         Self {
             handle,
             client,
             daemon: Arc::new(Mutex::new(daemon)),
             rclone,
-            mount_cache,
             mounts: Arc::new(Mutex::new(Mounts::default())),
         }
     }
@@ -146,21 +146,31 @@ impl Service {
         self.daemon.lock().await.shutdown().await;
     }
 
-    /// Mount `remote:` at `mountpoint` via `rclone nfsmount` (no macFUSE, no sudo).
-    pub async fn mount_remote(&self, remote: String, mountpoint: PathBuf) -> Result<(), ServiceError> {
-        let (mounts, rclone, cache) =
-            (self.mounts.clone(), self.rclone.clone(), self.mount_cache.clone());
+    /// Mount `remote:` at `mountpoint` with `config`'s VFS/mount flags (no macFUSE, no sudo).
+    pub async fn mount_remote(
+        &self,
+        remote: String,
+        mountpoint: PathBuf,
+        config: MountConfig,
+    ) -> Result<(), ServiceError> {
+        let (mounts, rclone) = (self.mounts.clone(), self.rclone.clone());
         let (tx, rx) = oneshot::channel();
         self.handle.spawn(async move {
             let r = mounts
                 .lock()
                 .await
-                .mount(&rclone, &cache, &remote, &mountpoint)
+                .mount(&rclone, &remote, &mountpoint, &config)
                 .await
                 .map_err(|e| ServiceError::Mount(e.to_string()));
             let _ = tx.send(r);
         });
         rx.await.map_err(|_| ServiceError::Cancelled)?
+    }
+
+    /// rclone's resolved config/cache/temp paths (`config/paths`), as detected
+    /// per-OS by rclone itself.
+    pub async fn config_paths(&self) -> Result<ConfigPaths, ServiceError> {
+        self.run(|c| async move { c.config_paths().await }).await
     }
 
     /// Unmount `remote`.

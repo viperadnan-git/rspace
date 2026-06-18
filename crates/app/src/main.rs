@@ -39,12 +39,7 @@ fn main() -> Result<()> {
 
     match runtime.block_on(Daemon::start(found.path.clone(), pidfile)) {
         Ok(daemon) => {
-            let service = Service::from_daemon(
-                runtime.handle().clone(),
-                daemon,
-                found.path.clone(),
-                paths.mount_cache_dir(),
-            );
+            let service = Service::from_daemon(runtime.handle().clone(), daemon, found.path.clone());
             service.install_signal_cleanup();
             run(Startup {
                 rclone: RcloneStatus::Found {

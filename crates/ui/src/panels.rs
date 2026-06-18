@@ -306,13 +306,18 @@ impl Workspace {
 
     pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let card = modal_card("settings-card", cx)
-            .w(px(460.0))
-            .gap_5()
+            .w(px(480.0))
+            .max_h(relative(0.85))
+            .gap_0()
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .w_full()
                     .justify_between()
                     .items_center()
+                    .pb_4()
+                    .border_b_1()
+                    .border_color(rgb(BORDER_MUTED))
                     .child(div().text_lg().text_color(rgb(FG)).child("Settings"))
                     .child(
                         icon_button("settings-close", "icons/x.svg").on_click(cx.listener(
@@ -323,10 +328,23 @@ impl Workspace {
                         )),
                     ),
             )
-            .child(self.refresh_setting(cx))
-            .child(self.download_setting(cx))
-            .child(self.storage_setting(cx))
-            .child(self.settings_info(cx));
+            .child(
+                v_flex()
+                    .id("settings-body")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_scroll()
+                    .pt_4()
+                    .gap_5()
+                    .child(self.refresh_setting(cx))
+                    .child(divider())
+                    .child(self.download_setting(cx))
+                    .child(divider())
+                    .child(self.storage_setting(cx))
+                    .child(divider())
+                    .child(self.rclone_setting(cx))
+                    .child(self.settings_info(cx)),
+            );
         self.modal_overlay(
             true,
             false,
@@ -347,31 +365,15 @@ impl Workspace {
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(
-                    div()
-                        .flex_grow(1.0)
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_xs()
-                        .text_color(rgb(FG_MUTED))
-                        .child(current),
-                )
-                .child(
-                    h_flex()
-                        .id("choose-dir")
-                        .flex_shrink_0()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(rgba(OVERLAY))
-                        .text_color(rgb(FG))
-                        .hover(|s| s.bg(rgba(SELECT_MUTED)))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.choose_download_dir(cx)
-                        }))
-                        .child("Choose…"),
-                ),
+                .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.path_link(
+                    "download-dir",
+                    None,
+                    Some(current),
+                    cx,
+                )))
+                .child(pill_button("choose-dir", "Choose…", |this, cx| {
+                    this.choose_download_dir(cx)
+                }, cx)),
         )
     }
 
@@ -404,21 +406,108 @@ impl Workspace {
                 .gap_2()
                 .items_center()
                 .child(div().flex_grow(1.0).min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
+                .child(pill_button("clean-up", "Clean up", |this, cx| this.request_cleanup(cx), cx)),
+        )
+    }
+
+    /// rclone's own paths (from `config/paths`, so correct per-OS) plus its cache
+    /// size and a clear action. Paths are clickable and open with the OS default.
+    fn rclone_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let config = self.rclone_paths.as_ref().map(|p| p.config.clone());
+        let cache = self.rclone_paths.as_ref().map(|p| p.cache.clone());
+        let cache_label = match self.rclone_cache_size {
+            Some(b) => SharedString::from(format!("Cache · {}", human_size(b as i64))),
+            None => "Cache".into(),
+        };
+        setting_block(
+            "rclone",
+            "Paths rclone uses on this system. Click to open; Clear removes the cache.",
+            v_flex()
+                .gap_3()
+                .child(self.path_link("rclone-config", Some("Config file".into()), config, cx))
                 .child(
                     h_flex()
-                        .id("clean-up")
-                        .flex_shrink_0()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(rgba(OVERLAY))
-                        .text_color(rgb(FG))
-                        .hover(|s| s.bg(rgba(SELECT_MUTED)))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.request_cleanup(cx)))
-                        .child("Clean up"),
+                        .gap_2()
+                        .items_center()
+                        .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.path_link(
+                            "rclone-cache",
+                            Some(cache_label),
+                            cache,
+                            cx,
+                        )))
+                        .child(pill_button("clear-rclone-cache", "Clear", |this, cx| {
+                            this.request_clear_rclone_cache(cx)
+                        }, cx)),
                 ),
         )
+    }
+
+    /// A labeled, truncating path that opens with the OS default app on click
+    /// (highlights on hover). `w_full` gives `truncate` a bounded width to clip
+    /// against, so it shows the path rather than just an ellipsis.
+    fn path_link(
+        &self,
+        id: &'static str,
+        label: Option<SharedString>,
+        path: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let display: SharedString = path.clone().map(Into::into).unwrap_or_else(|| "…".into());
+        let mut text = div()
+            .id(id)
+            .w_full()
+            .truncate()
+            .text_xs()
+            .text_color(rgb(FG_MUTED))
+            .child(display);
+        if let Some(path) = path {
+            text = text
+                .cursor_pointer()
+                .tooltip(tooltip_text("Open with default app"))
+                .hover(|s| s.text_color(rgb(ACCENT)))
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                    cx.open_with_system(Path::new(&path))
+                }));
+        }
+        v_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .gap(px(2.0))
+            .children(label.map(|l| div().text_xs().text_color(rgb(FG_SUBTLE)).child(l)))
+            .child(text)
+    }
+
+    /// Refuse while mounts are live (clearing the cache would corrupt them),
+    /// else confirm before deleting rclone's cache dir.
+    fn request_clear_rclone_cache(&mut self, cx: &mut Context<Self>) {
+        if !self.mounted.is_empty() {
+            self.toast("Unmount all remotes before clearing the cache", true, cx);
+            return;
+        }
+        if self.rclone_paths.is_none() {
+            return;
+        }
+        self.ask_confirm(
+            "Clear rclone cache?",
+            "Deletes rclone's shared cache directory (used by all rclone tools on this system). It is rebuilt on demand.",
+            "Clear",
+            false,
+            |this, cx| this.clear_rclone_cache(cx),
+            cx,
+        );
+    }
+
+    fn clear_rclone_cache(&mut self, cx: &mut Context<Self>) {
+        if !self.mounted.is_empty() {
+            self.toast("Unmount all remotes before clearing the cache", true, cx);
+            return;
+        }
+        let Some(cache) = self.rclone_paths.as_ref().map(|p| p.cache.clone()) else {
+            return;
+        };
+        let _ = std::fs::remove_dir_all(&cache);
+        self.rclone_cache_size = Some(0);
+        self.toast("rclone cache cleared", false, cx);
     }
 
     /// Confirm, then clear disposable history + logs (keeps preferences + pins).
@@ -446,33 +535,12 @@ impl Workspace {
     fn settings_info(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let root = self.paths.root().display().to_string();
         v_flex()
-            .gap_2()
+            .gap_3()
             .pt_3()
             .border_t_1()
             .border_color(rgb(BORDER_MUTED))
             .child(info_row("rclone", &self.version))
-            .child(
-                h_flex()
-                    .id("open-data-dir")
-                    .w_full()
-                    .justify_between()
-                    .gap_4()
-                    .text_xs()
-                    .cursor_pointer()
-                    .tooltip(tooltip_text("Open in file manager"))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        cx.open_with_system(this.paths.root());
-                    }))
-                    .child(div().flex_shrink_0().text_color(rgb(FG_MUTED)).child("Data folder"))
-                    .child(
-                        h_flex()
-                            .min_w(px(0.0))
-                            .gap_1()
-                            .items_center()
-                            .child(div().min_w(px(0.0)).truncate().text_color(rgb(ACCENT)).child(root))
-                            .child(svg().path("icons/folder_open.svg").size(px(12.0)).flex_shrink_0().text_color(rgb(ACCENT))),
-                    ),
-            )
+            .child(self.path_link("data-folder", Some("Data folder".into()), Some(root), cx))
     }
 
     pub(crate) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {

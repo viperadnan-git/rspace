@@ -195,12 +195,19 @@ impl Workspace {
         if mounted {
             let reveal_name = name.clone();
             items.push(
-                self.menu_item("Reveal in Finder", "icons/folder_open.svg", cx, move |this, _cx| {
-                    this.reveal_mount(&reveal_name)
+                self.menu_item("Reveal in Finder", "icons/folder_open.svg", cx, move |this, cx| {
+                    this.reveal_mount(&reveal_name, cx)
                 })
                 .into_any_element(),
             );
         }
+        let opts_name = name.clone();
+        items.push(
+            self.menu_item("Mount options\u{2026}", "icons/settings.svg", cx, move |this, cx| {
+                this.begin_mount_options(opts_name.clone(), cx)
+            })
+            .into_any_element(),
+        );
 
         let pin_name = name.clone();
         let (pin_label, pin_icon) = if pinned { ("Unpin", "icons/pin.svg") } else { ("Pin", "icons/pin.svg") };

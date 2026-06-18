@@ -114,9 +114,14 @@ impl Workspace {
     }
 
     pub(crate) fn render_toasts(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().absolute().bottom_4().right_4().child(
-            v_flex().gap_2().items_end().children(self.toasts.iter().map(|t| self.toast_card(t, cx))),
+        // Deferred above the modal overlays (priority 3) so toasts surface on top
+        // of Settings/confirm dialogs rather than behind them.
+        deferred(
+            div().absolute().bottom_4().right_4().child(
+                v_flex().gap_2().items_end().children(self.toasts.iter().map(|t| self.toast_card(t, cx))),
+            ),
         )
+        .priority(4)
     }
 
     fn toast_card(&self, toast: &Toast, cx: &mut Context<Self>) -> gpui::AnyElement {

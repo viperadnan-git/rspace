@@ -66,11 +66,6 @@ impl Paths {
         self.cache_dir().join("logs")
     }
 
-    /// VFS cache backing writable mounts (`rclone nfsmount --cache-dir`).
-    pub fn mount_cache_dir(&self) -> PathBuf {
-        self.cache_dir().join("mount")
-    }
-
     pub fn settings_path(&self) -> PathBuf {
         self.config_dir().join("settings.json")
     }
