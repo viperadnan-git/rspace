@@ -1,21 +1,32 @@
 # rspace — Roadmap
 
 A fast, keyboard-first GUI for rclone: browse remotes like a file manager and
-mount them through native OS sync-provider APIs (no FUSE hacks where the OS
-offers a real API).
+mount them with **zero extra installs**, using rclone's built-in NFS server and
+the OS's native NFS client (no macFUSE/WinFsp kernel extension). Native
+sync-provider APIs (File Provider / CFAPI) are a backlog aspiration — they need
+paid developer programs.
 
 ## Status (2026-06-18)
 Phase 1 is complete (the command palette and remote-management UI have now
 shipped) and Phase 3's browser-side write ops shipped early — the browser is a
-full read/write, keyboard-first file manager. Phase 0 is done except macOS
-code-signing/notarization. **Not yet started:** the File Provider mount
-(Phase 2 — the headline differentiator) and the Settings storage & config page.
+full read/write, keyboard-first file manager. The app bundle is **ad-hoc signed**
+with entitlements + version (runs locally; users clear the quarantine flag).
+**Not yet started:** the mount feature (Phase 2, now no-install NFS) and the
+Settings storage & config page.
+
+The **File Provider mount** that was the planned headline is **backlogged**: it
+needs restricted entitlements (File Provider + App Group) authorized by a
+provisioning profile — which requires a paid Apple Developer account — plus
+notarization to run anywhere but the dev's machine. De-quarantine does *not*
+unlock it (that's only Gatekeeper's launch check; entitlements are validated by a
+separate layer). The mount feature is re-based on rclone's **built-in NFS server**
++ the OS's native NFS client, which needs no kernel extension and no install.
 
 Deferred deliberately: the **teardown manifest** and **storage-accounting** APIs
-were scaffolded then removed — speculative with no caller (we don't yet create
-any OS-managed artifacts to track). They return with Phase 2 (FP creates the
-first external artifacts) and the Phase 3 Settings page. Cache/blobs dirs were
-dropped too; only `config`/`logs`/`state` exist now.
+were scaffolded then removed — speculative with no caller. They return with the
+mount feature (the VFS cache is the first sizable on-disk artifact) and the
+Settings page. Cache/blobs dirs were dropped too; only `config`/`logs`/`state`
+exist now (mount adds a VFS cache dir).
 
 Shipped beyond the original plan: file preview pane (image/text/info over
 `--rc-serve`), drag-and-drop move/copy plus OS→app file-drop upload,
@@ -46,10 +57,19 @@ status-bar controls, and a brand/home landing view.
 | rclone install | User's responsibility; we auto-detect, else redirect to install docs |
 
 ## Mount strategy per OS
-- **macOS** — File Provider API (replicated extension).
-- **Windows** — Cloud Files API (CFAPI) sync-root provider.
-- **Linux** — rclone FUSE mount (no native sync-provider API exists).
-- **Any OS, opt-in** — explicit rclone FUSE mount when the user asks.
+Primary goal: **mount with no extra install.** rclone runs an internal NFS server
+and the OS's built-in NFS client mounts it — no kernel extension.
+- **macOS** — `rclone nfsmount` to `~/rspace/<remote>` (built-in NFS client).
+  Needs `--vfs-cache-mode writes` for a writable mount. No macFUSE, no sudo.
+- **Linux** — `rclone mount` to `~/rspace/<remote>` (libfuse is normally
+  preinstalled; no sudo for a user mount). Unmount via `fusermount -uz`.
+- **Windows** — `rclone mount remote: *` to take the next free drive letter (a
+  clean Explorer drive). Requires **WinFsp** (the one platform needing an install).
+- **Opt-in, power-user** — macFUSE / FUSE-T on macOS for `rclone mount` when the
+  user already has them: better app compatibility than NFS.
+
+Backlogged native paths (need paid developer programs): macOS **File Provider**,
+Windows **CFAPI** sync-root provider.
 
 ## Settings — storage & config management
 A user-facing view over the single-source-of-truth model, so users can audit and
@@ -57,17 +77,17 @@ reclaim space without uninstalling. Modeled on battle-tested patterns (browser
 "Clear browsing data", macOS app-storage breakdown, Docker Desktop disk usage).
 
 - **Footprint summary** — total on-disk size at the top, broken down by category:
-  config, content cache / blobs, logs, daemon state, and **OS-managed** (File
-  Provider materialized files / CFAPI placeholders) shown as a distinct bucket
-  since it lives outside the app root.
+  config, **mount VFS cache**, logs, daemon state. (A distinct **OS-managed**
+  bucket returns only if the backlogged File Provider / CFAPI paths ship, since
+  those materialize files outside the app root.)
 - **Async, progressive sizing** — directory sizes computed off the UI thread and
   cached; never block on a large cache scan.
 - **Per-category clear** — each category clearable independently, with a
   confirmation that states exactly what is and isn't affected (e.g. clearing
   cache never touches remotes/config). Destructive actions are explicit.
-- **OS-managed eviction via API, not `rm`** — clearing File Provider/CFAPI storage
-  goes through the OS API (evict items / domain APIs), recorded against the
-  teardown manifest. Direct deletion is never used for OS-managed buckets.
+- **VFS cache clear** — purge the mount cache directly (it lives under the app
+  root). If the backlogged File Provider / CFAPI paths ship, their OS-managed
+  storage is evicted via the OS API (not `rm`) and recorded in the manifest.
 - **Config inspection** — list config file path(s) and the rclone config
   location, size, last-modified; reveal in Finder/Explorer; view contents
   **read-only with secrets redacted** by default.
@@ -96,11 +116,11 @@ rspace/
   crates/
     app/                # binary: wires core + ui
     core/               # domain: remotes, file tree, storage, manifest, cache
-    rclone_rc/          # typed RC API client + daemon lifecycle + path detection
+    rclone_rc/          # typed RC client + daemon/mount (NFS) lifecycle + detection
     ui/                 # gpui views, keybindings, command palette
-    platform_macos/     # File Provider bridge (Swift extension + FFI)
-    platform_windows/   # CFAPI sync-root provider
-    platform_linux/     # rclone mount management
+    platform_macos/     # (backlog) File Provider bridge — see Backlog
+    platform_windows/   # (backlog) CFAPI sync-root provider — see Backlog
+    platform_linux/     # (reserved) Linux-specific mount bits, if any
 ```
 
 ## Phases
@@ -116,8 +136,9 @@ rspace/
 - [x] rcd daemon lifecycle: spawn on loopback, random auth token, health check,
       graceful shutdown + signal cleanup; `--rc-serve` for object previews.
 - [x] gpui app shell + keybinding system foundation.
-- [ ] macOS code-signing / dev-cert setup (have `.app` bundle + icon; signing
-      and notarization still pending — needed by Phase 2).
+- [x] macOS `.app` bundle: icon, version, ad-hoc signed with entitlements (runs
+      locally; users clear quarantine). Developer ID + notarization need a paid
+      Apple account → backlog.
 
 ### Phase 1 — Browser MVP (macOS)
 - [x] RC client: list remotes (`config/dump`), list dir (`operations/list`),
@@ -128,13 +149,18 @@ rspace/
 - [x] Command palette (operation registry; browser actions reachable by keyboard).
 - [x] Read-only actions: preview pane (image/text/info), copy path, download.
 
-### Phase 2 — File Provider mount (macOS)
-- [ ] File Provider replicated extension (Swift) bundled in the app.
-- [ ] Domain register/unregister via `NSFileProviderManager` → write to manifest.
-- [ ] Extension ↔ core bridge — **spike:** IPC vs direct RC API from a sandboxed
-      extension; decide and document.
-- [ ] Item enumeration + on-demand content fetch through rclone.
-- [ ] **Spike:** verify exactly what FP persists and prove full removal.
+### Phase 2 — Mount (no-install, rclone NFS)
+- [ ] Mount lifecycle: spawn `rclone nfsmount` (macOS) / `rclone mount` (Linux)
+      per remote with `--vfs-cache-mode writes`; health-check, unmount, cleanup —
+      reuse the rcd daemon-management pattern (process owned by core, not detached).
+- [ ] Mount config: remote → mountpoint mapping, persisted; a sane default
+      mountpoint under the user's home; auto-unmount on quit.
+- [ ] UI: mount/unmount controls + live mount state (sidebar + status bar).
+- [ ] VFS cache under the app root; size surfaced (feeds the Settings page).
+- [ ] **Spike:** NFS write quirks on macOS (Finder/Office edge cases — rclone
+      issues #7503/#7973); choose cache mode + flags that work for common apps.
+- [ ] Opt-in: detect macFUSE/FUSE-T/WinFsp and offer `rclone mount` for better
+      app compatibility where the user already has them.
 
 ### Phase 3 — Write ops & polish (browser-side shipped early)
 - [x] Upload / copy / move / delete / mkdir / rename via RC in the browser
@@ -144,16 +170,15 @@ rspace/
 - [ ] Settings — storage & config page: footprint breakdown, per-category clear
       (incl. API-driven OS-managed eviction), config inspection + manifest view.
 
-### Phase 4 — Windows (CFAPI)
-- [ ] CFAPI sync-root provider + placeholder hydration.
-- [ ] Sync-root register/teardown → manifest.
+### Phase 4 — Windows & Linux
+- [ ] Verify the Phase 2 mount on Windows (`rclone mount remote: *` drive letter;
+      needs WinFsp) and Linux (`rclone mount` on libfuse). Command paths are in
+      place; untested on those platforms. CFAPI native provider → backlog.
+- [ ] Per-platform packaging: MSIX (Windows), AppImage/deb (Linux).
 
-### Phase 5 — Linux + explicit mount
-- [ ] rclone FUSE mount lifecycle (Linux + opt-in elsewhere): mount, status,
-      unmount, cleanup.
-
-### Phase 6 — Packaging & uninstall
-- [ ] Signed/notarized `.app` (macOS), MSIX (Windows), AppImage/deb (Linux).
+### Phase 5 — Packaging & uninstall
+- [ ] Distributable bundles: ad-hoc `.app` + de-quarantine note (macOS; notarized
+      build is backlog), MSIX (Windows), AppImage/deb (Linux).
 - [ ] Uninstaller: wipe app-root + replay teardown manifest.
 - [ ] Per-platform full-cleanup verification.
 
@@ -161,9 +186,20 @@ rspace/
 - Product name: `rspace` (lowercase).
 - Bundle identifier: `com.viperadnan.rspace` (domain `viperadnan.com`).
 
+## Backlog (blocked or deferred)
+- **File Provider mount (macOS)** — native, on-demand placeholder materialization;
+  was the planned headline. BLOCKED: restricted File Provider + App Group
+  entitlements need a provisioning profile (paid Apple Developer account), and
+  distribution needs notarization. The Swift extension + IPC spike live here until
+  an account exists.
+- **Windows CFAPI sync-root provider** — native placeholder hydration; same
+  paid-developer / native-integration class as File Provider. Revisit together.
+- **Developer ID signing + notarization** — needs the paid Apple account; until
+  then the app ships ad-hoc-signed and users clear the quarantine flag.
+
 ## Open questions (track, don't guess)
-- FP extension ↔ core IPC mechanism (Phase 2 spike).
-- Cache/blob store layout and eviction policy.
+- NFS mount write reliability on macOS for common apps (cache mode + flags).
+- VFS cache layout and eviction policy.
 - RC API auth: loopback-only + per-session random token — confirm sufficient.
 
 ## Resolved
