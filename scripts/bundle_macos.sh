@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Build rspace.app (macOS) with the embedded icon, using only the stock toolchain.
+# Build rspace.app (macOS) with the embedded icon and version metadata.
+# The toolchain ad-hoc-signs the binary so the app runs locally; we have no
+# Developer ID, so distribution is unsigned — recipients clear the quarantine
+# flag (`xattr -dr com.apple.quarantine rspace.app`) or right-click → Open.
 # Usage: scripts/bundle_macos.sh [--release]
 set -euo pipefail
 
@@ -12,13 +15,15 @@ else
   cargo build --bin rspace
 fi
 
+version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+
 app="target/rspace.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/rspace" "$app/Contents/MacOS/rspace"
 cp crates/app/resources/rspace.icns "$app/Contents/Resources/rspace.icns"
 
-cat >"$app/Contents/Info.plist" <<'PLIST'
+cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -30,10 +35,12 @@ cat >"$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIconFile</key><string>rspace</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>10.15</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
 
-echo "built $app"
+echo "built $app ($version, $profile)"
