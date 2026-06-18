@@ -181,6 +181,27 @@ impl Workspace {
             .into_any_element(),
         );
 
+        let mounted = self.mounted.contains(&name);
+        let mount_name = name.clone();
+        items.push(
+            self.menu_item(
+                if mounted { "Unmount" } else { "Mount" },
+                "icons/hard_drive.svg",
+                cx,
+                move |this, cx| this.toggle_mount(mount_name.clone(), cx),
+            )
+            .into_any_element(),
+        );
+        if mounted {
+            let reveal_name = name.clone();
+            items.push(
+                self.menu_item("Reveal in Finder", "icons/folder_open.svg", cx, move |this, _cx| {
+                    this.reveal_mount(&reveal_name)
+                })
+                .into_any_element(),
+            );
+        }
+
         let pin_name = name.clone();
         let (pin_label, pin_icon) = if pinned { ("Unpin", "icons/pin.svg") } else { ("Pin", "icons/pin.svg") };
         items.push(

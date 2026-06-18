@@ -11,6 +11,8 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
 use crate::client::RcClient;
+#[cfg(any(unix, windows))]
+use crate::mount::SharedMounts;
 
 /// Shared, restartable handle to the daemon (held by the [`Service`] and the
 /// signal handler so both always act on the current child).
@@ -125,11 +127,15 @@ async fn await_healthy(client: &RcClient, timeout: Duration) -> Result<(), Daemo
     Err(DaemonError::Unhealthy(timeout))
 }
 
-/// Shut down the current daemon on a termination signal, then exit —
+/// Tear down mounts and the daemon on a termination signal, then exit —
 /// `kill_on_drop` doesn't run when a signal kills the process. Acts on the
 /// shared (restart-safe) daemon. Unix: SIGINT/SIGTERM. Windows: Ctrl-* events.
 #[cfg(unix)]
-pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDaemon) {
+pub fn install_signal_cleanup(
+    handle: &tokio::runtime::Handle,
+    daemon: SharedDaemon,
+    mounts: SharedMounts,
+) {
     use tokio::signal::unix::{signal, SignalKind};
 
     handle.spawn(async move {
@@ -142,12 +148,16 @@ pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDae
             _ = term.recv() => {}
             _ = int.recv() => {}
         }
-        signal_shutdown(daemon).await;
+        signal_shutdown(daemon, mounts).await;
     });
 }
 
 #[cfg(windows)]
-pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDaemon) {
+pub fn install_signal_cleanup(
+    handle: &tokio::runtime::Handle,
+    daemon: SharedDaemon,
+    mounts: SharedMounts,
+) {
     use tokio::signal::windows;
 
     handle.spawn(async move {
@@ -167,15 +177,17 @@ pub fn install_signal_cleanup(handle: &tokio::runtime::Handle, daemon: SharedDae
             _ = shutdown.recv() => {}
             _ = logoff.recv() => {}
         }
-        signal_shutdown(daemon).await;
+        signal_shutdown(daemon, mounts).await;
     });
 }
 
-/// Lock the shared daemon, shut it down (bounded), then exit. A stuck lock (mid
-/// restart) is bounded too — the pid file is the backstop for any survivor.
+/// Unmount everything and shut the daemon down (bounded), then exit. A stuck
+/// lock (mid restart) is bounded too — the pid file and mount-table reap on the
+/// next launch are the backstops for any survivor.
 #[cfg(any(unix, windows))]
-async fn signal_shutdown(daemon: SharedDaemon) -> ! {
+async fn signal_shutdown(daemon: SharedDaemon, mounts: SharedMounts) -> ! {
     let _ = tokio::time::timeout(Duration::from_secs(4), async {
+        mounts.lock().await.unmount_all().await;
         daemon.lock().await.shutdown().await;
     })
     .await;
@@ -188,8 +200,8 @@ pub fn reap_orphan(pidfile: &Path) {
     let Some(pid) = read_pid(pidfile) else {
         return;
     };
-    if is_rclone_rcd(pid) {
-        terminate(pid);
+    if crate::proc::cmdline_contains(pid, &["rclone", "rcd"]) {
+        crate::proc::terminate(pid);
     }
     let _ = std::fs::remove_file(pidfile);
 }
@@ -217,56 +229,6 @@ fn token(len: usize) -> String {
         b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
     (0..len).map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char).collect()
-}
-
-/// True only if `pid` names a live process whose command line is `rclone rcd`.
-#[cfg(unix)]
-fn is_rclone_rcd(pid: u32) -> bool {
-    let Ok(out) = std::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "args="])
-        .output()
-    else {
-        return false;
-    };
-    let cmd = String::from_utf8_lossy(&out.stdout).to_lowercase();
-    cmd.contains("rclone") && cmd.contains("rcd")
-}
-
-#[cfg(unix)]
-fn terminate(pid: u32) {
-    let pid = pid.to_string();
-    let _ = std::process::Command::new("kill").args(["-TERM", &pid]).status();
-    std::thread::sleep(Duration::from_millis(500));
-    if is_alive(&pid) {
-        let _ = std::process::Command::new("kill").args(["-KILL", &pid]).status();
-    }
-}
-
-#[cfg(unix)]
-fn is_alive(pid: &str) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", pid])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn is_rclone_rcd(pid: u32) -> bool {
-    let Ok(out) = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output()
-    else {
-        return false;
-    };
-    String::from_utf8_lossy(&out.stdout).to_lowercase().contains("rclone")
-}
-
-#[cfg(windows)]
-fn terminate(pid: u32) {
-    let _ = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status();
 }
 
 #[cfg(test)]

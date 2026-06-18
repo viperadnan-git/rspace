@@ -32,7 +32,9 @@ use gpui::{
     UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use rspace_core::{dir_size, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState};
+use rspace_core::{
+    dir_size, mount_root, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState,
+};
 use rspace_rclone_rc::{
     ArgKind, ArgSpec, ArgValue, Entry, InfoOp, InfoResult, Operation, Provider, RemoteInfo,
     RemoteOption, Service, ServiceError, TransferMode,
@@ -464,6 +466,9 @@ struct Workspace {
     recent_remotes: Vec<String>,
     /// Cached job log for the transfers history view; refreshed on `Logged`.
     job_history: Vec<JobRecord>,
+    /// Names of mounted remotes; refreshed after a mount/unmount, read by the
+    /// sidebar and remote menu — kept out of the render path.
+    mounted: HashSet<String>,
     /// (total, clearable) storage bytes, computed when Settings opens.
     storage_size: Option<(u64, u64)>,
     settings_open: bool,
@@ -586,6 +591,7 @@ impl Workspace {
             pinned,
             recent_remotes,
             job_history,
+            mounted: HashSet::new(),
             storage_size: None,
             settings_open: false,
             context: None,

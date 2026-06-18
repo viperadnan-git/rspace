@@ -4,8 +4,11 @@ use thiserror::Error;
 use tokio::runtime::Handle;
 use tokio::sync::{oneshot, Mutex};
 
+use std::path::PathBuf;
+
 use crate::client::{ConfigStep, Entry, JobStatus, Provider, RcClient, RemoteInfo, Stats};
 use crate::daemon::{Daemon, SharedDaemon};
+use crate::mount::{Mounts, SharedMounts};
 use crate::RcError;
 
 /// Aborts a spawned task when dropped — used so an unfinished interactive
@@ -26,6 +29,8 @@ pub enum ServiceError {
     Cancelled,
     #[error("daemon restart: {0}")]
     Daemon(String),
+    #[error("mount: {0}")]
+    Mount(String),
     #[error("invalid arguments for {0}")]
     InvalidArgs(&'static str),
 }
@@ -81,19 +86,34 @@ pub struct Service {
     handle: Handle,
     client: Arc<RwLock<RcClient>>,
     daemon: SharedDaemon,
+    rclone: PathBuf,
+    mount_cache: PathBuf,
+    mounts: SharedMounts,
 }
 
 impl Service {
-    /// Take ownership of a started [`Daemon`], exposing it as a restartable service.
-    pub fn from_daemon(handle: Handle, daemon: Daemon) -> Self {
+    /// Take ownership of a started [`Daemon`], exposing it as a restartable
+    /// service. `rclone`/`mount_cache` back the no-install NFS mounts.
+    pub fn from_daemon(handle: Handle, daemon: Daemon, rclone: PathBuf, mount_cache: PathBuf) -> Self {
         let client = Arc::new(RwLock::new(daemon.client().clone()));
-        Self { handle, client, daemon: Arc::new(Mutex::new(daemon)) }
+        Self {
+            handle,
+            client,
+            daemon: Arc::new(Mutex::new(daemon)),
+            rclone,
+            mount_cache,
+            mounts: Arc::new(Mutex::new(Mounts::default())),
+        }
     }
 
-    /// Install termination-signal cleanup for the (current) daemon.
+    /// Install termination-signal cleanup for the daemon and mounts.
     pub fn install_signal_cleanup(&self) {
         #[cfg(any(unix, windows))]
-        crate::daemon::install_signal_cleanup(&self.handle, self.daemon.clone());
+        crate::daemon::install_signal_cleanup(
+            &self.handle,
+            self.daemon.clone(),
+            self.mounts.clone(),
+        );
     }
 
     /// Snapshot the current RC client (cheap clone; changes after a restart).
@@ -120,10 +140,45 @@ impl Service {
         rx.await.map_err(|_| ServiceError::Cancelled)?
     }
 
-    /// Gracefully stop the daemon (on app exit).
+    /// Gracefully stop the daemon and tear down every mount (on app exit).
     pub async fn shutdown(&self) {
+        self.mounts.lock().await.unmount_all().await;
         self.daemon.lock().await.shutdown().await;
     }
+
+    /// Mount `remote:` at `mountpoint` via `rclone nfsmount` (no macFUSE, no sudo).
+    pub async fn mount_remote(&self, remote: String, mountpoint: PathBuf) -> Result<(), ServiceError> {
+        let (mounts, rclone, cache) =
+            (self.mounts.clone(), self.rclone.clone(), self.mount_cache.clone());
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn(async move {
+            let r = mounts
+                .lock()
+                .await
+                .mount(&rclone, &cache, &remote, &mountpoint)
+                .await
+                .map_err(|e| ServiceError::Mount(e.to_string()));
+            let _ = tx.send(r);
+        });
+        rx.await.map_err(|_| ServiceError::Cancelled)?
+    }
+
+    /// Unmount `remote`.
+    pub async fn unmount_remote(&self, remote: String) -> Result<(), ServiceError> {
+        let mounts = self.mounts.clone();
+        let (tx, rx) = oneshot::channel();
+        self.handle.spawn(async move {
+            let r = mounts
+                .lock()
+                .await
+                .unmount(&remote)
+                .await
+                .map_err(|e| ServiceError::Mount(e.to_string()));
+            let _ = tx.send(r);
+        });
+        rx.await.map_err(|_| ServiceError::Cancelled)?
+    }
+
 
     /// Run an RC call on the tokio runtime, awaiting its result over a oneshot.
     async fn run<T, Fut>(

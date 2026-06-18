@@ -323,6 +323,58 @@ impl Workspace {
         }
     }
 
+    /// Mount `remote` (no-install NFS) if unmounted, else unmount it; a pending
+    /// toast tracks the result. The op result is authoritative, so the cached
+    /// `mounted` set is updated from it directly (no extra service round-trip).
+    pub(crate) fn toggle_mount(&mut self, remote: String, cx: &mut Context<Self>) {
+        let mounting = !self.mounted.contains(&remote);
+        let Some(mountpoint) = mount_root().map(|r| r.join(&remote)) else {
+            self.toast_sticky("Cannot determine a mount location", true, cx);
+            return;
+        };
+        let verb = if mounting { "Mounting" } else { "Unmounting" };
+        let pending = self.toast_pending(format!("{verb} {remote}\u{2026}"), cx);
+        let service = self.service.clone();
+        cx.spawn(async move |this, cx| {
+            let result = if mounting {
+                service.mount_remote(remote.clone(), mountpoint).await
+            } else {
+                service.unmount_remote(remote.clone()).await
+            };
+            this.update(cx, |this, cx| {
+                let body = match &result {
+                    Ok(()) => {
+                        if mounting {
+                            this.mounted.insert(remote.clone());
+                        } else {
+                            this.mounted.remove(&remote);
+                        }
+                        ToastBody::Message {
+                            message: format!("{remote} {}", if mounting { "mounted" } else { "unmounted" })
+                                .into(),
+                            danger: false,
+                        }
+                    }
+                    Err(e) => ToastBody::Message { message: format!("{e}").into(), danger: true },
+                };
+                this.resolve_toast(pending, body, true, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Open a mounted remote in the OS file manager.
+    pub(crate) fn reveal_mount(&self, remote: &str) {
+        let Some(mountpoint) = mount_root().map(|r| r.join(remote)) else {
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(&mountpoint).spawn();
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("xdg-open").arg(&mountpoint).spawn();
+    }
+
     pub(crate) fn copy(&mut self, _: &CopyEntry, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_clipboard(TransferMode::Copy, cx);
     }

@@ -1,7 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
+use directories::{ProjectDirs, UserDirs};
 use thiserror::Error;
+
+/// User-visible root for mountpoints (`~/rspace`); each remote mounts at
+/// `mount_root()/<remote>`. Separate from the app data root (App Support).
+pub fn mount_root() -> Option<PathBuf> {
+    UserDirs::new().map(|u| u.home_dir().join(APP_NAME))
+}
 
 /// Reverse-DNS application identifier; also the macOS bundle id.
 pub const APP_QUALIFIER: &str = "com";
@@ -58,6 +64,11 @@ impl Paths {
 
     pub fn logs_dir(&self) -> PathBuf {
         self.cache_dir().join("logs")
+    }
+
+    /// VFS cache backing writable mounts (`rclone nfsmount --cache-dir`).
+    pub fn mount_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("mount")
     }
 
     pub fn settings_path(&self) -> PathBuf {

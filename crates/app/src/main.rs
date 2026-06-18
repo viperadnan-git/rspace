@@ -1,8 +1,8 @@
 mod logging;
 
 use anyhow::Result;
-use rspace_core::{Db, Paths, SettingsStore};
-use rspace_rclone_rc::{detect, Daemon, Service, INSTALL_URL};
+use rspace_core::{mount_root, Db, Paths, SettingsStore};
+use rspace_rclone_rc::{detect, reap_mount_orphans, Daemon, Service, INSTALL_URL};
 use rspace_ui::{run, RcloneStatus, Startup};
 
 fn main() -> Result<()> {
@@ -28,13 +28,23 @@ fn main() -> Result<()> {
     };
     tracing::info!(path = %found.path.display(), version = %found.version, "rclone detected");
 
+    // Clear any mount left by a crashed previous run before starting fresh.
+    if let Some(root) = mount_root() {
+        reap_mount_orphans(&root);
+    }
+
     // reqwest's reactor lives on this runtime; the UI dispatches RC calls to it.
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let pidfile = paths.pid_path();
 
     match runtime.block_on(Daemon::start(found.path.clone(), pidfile)) {
         Ok(daemon) => {
-            let service = Service::from_daemon(runtime.handle().clone(), daemon);
+            let service = Service::from_daemon(
+                runtime.handle().clone(),
+                daemon,
+                found.path.clone(),
+                paths.mount_cache_dir(),
+            );
             service.install_signal_cleanup();
             run(Startup {
                 rclone: RcloneStatus::Found {

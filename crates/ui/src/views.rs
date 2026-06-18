@@ -186,6 +186,15 @@ impl Workspace {
                     .text_color(rgb(FG))
                     .child(remote.name.clone()),
             )
+            .when(self.mounted.contains(&remote.name), |r| {
+                r.child(
+                    svg()
+                        .path("icons/hard_drive.svg")
+                        .size(px(11.0))
+                        .flex_shrink_0()
+                        .text_color(rgb(ACCENT)),
+                )
+            })
             .when(pinned, |r| {
                 r.child(svg().path("icons/pin.svg").size(px(11.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
             });
