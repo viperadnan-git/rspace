@@ -12,11 +12,6 @@ directories.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
-tempfile = "3"
 
 [lints]
 workspace = true

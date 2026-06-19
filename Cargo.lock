@@ -4842,23 +4842,9 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
- "tokio",
  "tracing",
 ]
-
-[[package]]
-name = "rspace-platform-linux"
-version = "0.0.0"
-
-[[package]]
-name = "rspace-platform-macos"
-version = "0.0.0"
-
-[[package]]
-name = "rspace-platform-windows"
-version = "0.0.0"
 
 [[package]]
 name = "rspace-rclone-rc"
