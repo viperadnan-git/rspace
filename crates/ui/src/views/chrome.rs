@@ -48,7 +48,7 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.bg(rgba(OVERLAY)))
             .tooltip(tooltip_text("Home"))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_home(cx)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.go_home(window, cx)))
             .child(svg().path("logo.svg").size(px(15.0)).text_color(rgb(FG)))
             .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace"))
     }

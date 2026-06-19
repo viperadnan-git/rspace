@@ -67,24 +67,21 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
-    pub(crate) fn toggle_pane(&mut self, _: &TogglePane, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pane = match self.pane {
-            Pane::Sidebar if self.open_remote.is_some() => Pane::Explorer,
-            Pane::Sidebar => Pane::Sidebar,
-            Pane::Explorer => Pane::Sidebar,
-        };
-        cx.notify();
+    pub(crate) fn toggle_pane(&mut self, _: &TogglePane, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_focused(window, cx) {
+            self.focus_sidebar_pane(window, cx);
+        } else if self.open_remote.is_some() {
+            self.enter_explorer(window, cx);
+        }
     }
 
-    pub(crate) fn focus_sidebar(&mut self, _: &FocusSidebar, _window: &mut Window, cx: &mut Context<Self>) {
-        self.pane = Pane::Sidebar;
-        cx.notify();
+    pub(crate) fn focus_sidebar(&mut self, _: &FocusSidebar, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_sidebar_pane(window, cx);
     }
 
-    pub(crate) fn focus_explorer(&mut self, _: &FocusExplorer, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_explorer(&mut self, _: &FocusExplorer, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_remote.is_some() {
-            self.pane = Pane::Explorer;
-            cx.notify();
+            self.enter_explorer(window, cx);
         }
     }
 

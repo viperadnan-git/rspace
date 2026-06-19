@@ -9,6 +9,7 @@ impl Render for Workspace {
         // it to the active pane. Modals, the inline prompt, the settings panel,
         // and the explorer (incl. its search input) each own their own focus.
         let explorer_focused = self.explorer.focus_handle(cx).contains_focused(window, cx);
+        let sidebar_focused = self.sidebar.focus_handle(cx).contains_focused(window, cx);
         if self.modal.is_some() || self.prompt.is_some() {
         } else if self.settings_open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
@@ -17,18 +18,17 @@ impl Render for Workspace {
                 let handle = input.read(cx).focus_handle(cx);
                 focus_once(&mut self.rclone_edit_focus, &handle, window, cx);
             }
-        } else if !explorer_focused && !self.focus.is_focused(window) {
-            match self.pane {
-                Pane::Explorer => self.explorer.focus_handle(cx).focus(window, cx),
-                Pane::Sidebar => self.focus.focus(window, cx),
+        } else if !explorer_focused && !sidebar_focused && !self.focus.is_focused(window) {
+            // Focus lost (e.g. a modal closed): route to the active pane.
+            if self.open_remote.is_some() {
+                self.focus_explorer_pane(window, cx);
+            } else {
+                self.focus_sidebar_pane(window, cx);
             }
         }
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::select_prev))
-            .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::go_up))
             .on_action(cx.listener(Self::action_back))
             .on_action(cx.listener(Self::action_forward))

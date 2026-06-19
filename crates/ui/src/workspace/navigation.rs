@@ -1,4 +1,4 @@
-//! Directory navigation and history; the explorer owns the listing/selection.
+//! Directory navigation and history; the explorer and sidebar own their views.
 
 use super::*;
 
@@ -16,15 +16,35 @@ impl Workspace {
         self.explorer.update(cx, |e, cx| e.force_reload_entries(cx));
     }
 
-    pub(crate) fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
-        self.explorer.update(cx, |e, cx| e.toggle_search(window, cx));
-    }
-
     pub(crate) fn reload(&mut self, _: &Reload, _window: &mut Window, cx: &mut Context<Self>) {
         self.force_reload_entries(cx);
     }
 
-    pub(crate) fn go_home(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.explorer.update(cx, |e, cx| e.toggle_search(window, cx));
+    }
+
+    /// Whether the explorer pane currently holds keyboard focus.
+    pub(crate) fn explorer_focused(&self, window: &Window, cx: &App) -> bool {
+        self.explorer.focus_handle(cx).contains_focused(window, cx)
+    }
+
+    pub(crate) fn focus_explorer_pane(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.explorer.focus_handle(cx).focus(window, cx);
+    }
+
+    /// Deliberately move into the explorer (Tab / arrow): focus it and, if it has
+    /// no selection, land the cursor on the first row.
+    pub(crate) fn enter_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_explorer_pane(window, cx);
+        self.explorer.update(cx, |e, cx| e.select_first_if_empty(cx));
+    }
+
+    pub(crate) fn focus_sidebar_pane(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.focus_handle(cx).focus(window, cx);
+    }
+
+    pub(crate) fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_remote.is_none() {
             return;
         }
@@ -36,8 +56,8 @@ impl Workspace {
         self.bg_menu = None;
         self.history.clear();
         self.history_pos = 0;
-        self.pane = Pane::Sidebar;
         self.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));
+        self.focus_sidebar_pane(window, cx);
         cx.notify();
     }
 
@@ -50,7 +70,7 @@ impl Workspace {
         }
         // Keep the sidebar highlight on the remote being shown. Every open path
         // routes through navigate(), so syncing here covers all of them.
-        self.select_remote(Some(&remote));
+        self.select_remote(Some(&remote), cx);
         self.remember_sel(cx);
         self.open_remote = Some(remote.clone());
         self.path = path.clone();
@@ -62,15 +82,15 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn reveal_target(&mut self, target: JobTarget, cx: &mut Context<Self>) {
+    pub(crate) fn reveal_target(&mut self, target: JobTarget, window: &mut Window, cx: &mut Context<Self>) {
         self.jobs_open = false;
-        self.pane = Pane::Explorer;
         if target.is_dir {
             self.navigate(target.remote, target.path, None, cx);
         } else {
             let containing_dir = parent_of(&target.path).to_string();
             self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
         }
+        self.focus_explorer_pane(window, cx);
     }
 
     /// Remember the cursor row of the current location, so going back restores it.
@@ -109,7 +129,6 @@ impl Workspace {
         let loc = self.history[self.history_pos].clone();
         self.open_remote = Some(loc.remote.clone());
         self.path = loc.path.clone();
-        self.pane = Pane::Explorer;
         self.explorer.update(cx, |e, cx| e.show(Some(loc.remote), loc.path, loc.selected, cx));
         cx.notify();
     }
@@ -122,48 +141,18 @@ impl Workspace {
         self.go_forward(cx);
     }
 
-    pub(crate) fn go_up(&mut self, _: &GoUp, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane != Pane::Explorer {
+    pub(crate) fn go_up(&mut self, _: &GoUp, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.explorer_focused(window, cx) {
             return;
         }
         if self.path.is_empty() {
-            self.pane = Pane::Sidebar;
+            self.focus_sidebar_pane(window, cx);
             cx.notify();
         } else {
             let child = self.path.rsplit('/').next().unwrap_or_default().to_string();
             let parent = parent_of(&self.path).to_string();
             let remote = self.open_remote.clone().unwrap_or_default();
             self.navigate(remote, parent, Some(child), cx);
-        }
-    }
-
-    // --- sidebar (remote list) keyboard nav; the explorer owns its own ---------
-
-    pub(crate) fn select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane != Pane::Sidebar {
-            return;
-        }
-        let len = self.remotes.len();
-        if len > 0 && self.remote_sel + 1 < len {
-            self.remote_sel += 1;
-            self.remote_scroll.scroll_to_item(self.remote_sel, ScrollStrategy::Nearest);
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane != Pane::Sidebar {
-            return;
-        }
-        self.remote_sel = self.remote_sel.saturating_sub(1);
-        self.remote_scroll.scroll_to_item(self.remote_sel, ScrollStrategy::Nearest);
-        cx.notify();
-    }
-
-    pub(crate) fn open(&mut self, _: &Open, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane == Pane::Sidebar {
-            self.load_remote(self.remote_sel, cx);
-            self.pane = Pane::Explorer;
         }
     }
 }

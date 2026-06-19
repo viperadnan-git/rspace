@@ -146,7 +146,7 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn close_settings(&mut self, _: &CloseSettings, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_settings(&mut self, _: &CloseSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_open
             || self.context.is_some()
             || self.remote_menu.is_some()
@@ -161,7 +161,7 @@ impl Workspace {
             self.close_modal(cx);
             self.close_menus();
             cx.notify();
-        } else if self.pane == Pane::Explorer && self.explorer.read(cx).selection_len() > 1 {
+        } else if self.explorer_focused(window, cx) && self.explorer.read(cx).selection_len() > 1 {
             // Nothing to close: collapse a multi-selection back to the cursor.
             self.explorer.update(cx, |e, cx| e.collapse_selection(cx));
             cx.notify();

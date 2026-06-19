@@ -206,14 +206,14 @@ impl Workspace {
         self.begin_upload(cx);
     }
 
-    pub(crate) fn rename(&mut self, _: &Rename, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane != Pane::Explorer {
+    pub(crate) fn rename(&mut self, _: &Rename, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.explorer_focused(window, cx) {
             return;
         }
         let Some(remote) = self.open_remote.clone() else {
             return;
         };
-        if let Some(entry) = self.explorer.read(cx).focused_entry() {
+        if let Some(entry) = self.explorer.read(cx).cursor_entry() {
             self.begin_rename(remote, entry, cx);
         }
     }
@@ -316,20 +316,24 @@ impl Workspace {
             });
         }
     }
-    pub(crate) fn copy(&mut self, _: &CopyEntry, _window: &mut Window, cx: &mut Context<Self>) {
-        self.set_clipboard(TransferMode::Copy, cx);
+    pub(crate) fn copy(&mut self, _: &CopyEntry, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_focused(window, cx) {
+            self.set_clipboard(TransferMode::Copy, cx);
+        }
     }
 
-    pub(crate) fn cut(&mut self, _: &CutEntry, _window: &mut Window, cx: &mut Context<Self>) {
-        self.set_clipboard(TransferMode::Move, cx);
+    pub(crate) fn cut(&mut self, _: &CutEntry, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_focused(window, cx) {
+            self.set_clipboard(TransferMode::Move, cx);
+        }
     }
 
     pub(crate) fn paste(&mut self, _: &PasteEntry, _window: &mut Window, cx: &mut Context<Self>) {
         self.paste_clipboard(cx);
     }
 
-    pub(crate) fn delete(&mut self, _: &DeleteEntry, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane == Pane::Explorer {
+    pub(crate) fn delete(&mut self, _: &DeleteEntry, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_focused(window, cx) {
             self.request_delete_selected(cx);
         }
     }
@@ -406,9 +410,6 @@ impl Workspace {
         let Some(remote) = self.open_remote.clone() else {
             return;
         };
-        if self.pane != Pane::Explorer {
-            return;
-        }
         let entries = self.selected_entries(cx);
         if entries.is_empty() {
             return;

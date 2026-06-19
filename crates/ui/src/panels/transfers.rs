@@ -134,7 +134,7 @@ impl Workspace {
             .text_color(rgb(FG))
             .hover(|s| s.bg(rgba(OVERLAY)))
             .tooltip(tooltip_text(full_path))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.reveal_target(target.clone(), cx)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.reveal_target(target.clone(), window, cx)))
             .child(name)
     }
 

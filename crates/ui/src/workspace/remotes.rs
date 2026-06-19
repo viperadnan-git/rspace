@@ -89,8 +89,25 @@ impl Workspace {
         v
     }
 
+    /// Number of pinned rows shown (only pins that exist in the remote list).
+    pub(crate) fn pinned_count(&self) -> usize {
+        self.pinned_remotes().len()
+    }
+
+    pub(crate) fn has_open_remote(&self) -> bool {
+        self.open_remote.is_some()
+    }
+
+    pub(crate) fn mounted_set(&self) -> HashSet<String> {
+        self.mounted.clone()
+    }
+
+    fn sidebar_cursor_name(&self, cx: &App) -> Option<String> {
+        self.sidebar.read(cx).selected_name(&self.ordered_remotes())
+    }
+
     pub(crate) fn toggle_pin(&mut self, name: String, cx: &mut Context<Self>) {
-        let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
+        let selected = self.sidebar_cursor_name(cx);
         match self.pinned.iter().position(|n| n == &name) {
             Some(pos) => {
                 self.pinned.remove(pos);
@@ -98,7 +115,7 @@ impl Workspace {
             None => self.pinned.push(name.clone()),
         }
         self.db.save_pinned(&self.pinned);
-        self.select_remote(selected.as_deref());
+        self.select_remote(selected.as_deref(), cx);
         cx.notify();
     }
 
@@ -106,19 +123,19 @@ impl Workspace {
         if from == before {
             return;
         }
-        let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
+        let selected = self.sidebar_cursor_name(cx);
         if let Some(fp) = self.pinned.iter().position(|n| n == from) {
             let name = self.pinned.remove(fp);
             let ip = self.pinned.iter().position(|n| n == before).unwrap_or(self.pinned.len());
             self.pinned.insert(ip, name);
             self.db.save_pinned(&self.pinned);
         }
-        self.select_remote(selected.as_deref());
+        self.select_remote(selected.as_deref(), cx);
         cx.notify();
     }
 
     pub(crate) fn move_pinned(&mut self, name: &str, up: bool, cx: &mut Context<Self>) {
-        let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
+        let selected = self.sidebar_cursor_name(cx);
         if let Some(i) = self.pinned.iter().position(|n| n == name) {
             let j = if up { i.checked_sub(1) } else { (i + 1 < self.pinned.len()).then_some(i + 1) };
             if let Some(j) = j {
@@ -126,20 +143,17 @@ impl Workspace {
                 self.db.save_pinned(&self.pinned);
             }
         }
-        self.select_remote(selected.as_deref());
+        self.select_remote(selected.as_deref(), cx);
         cx.notify();
     }
 
     /// Move the sidebar cursor/highlight onto `name` (no-op if it isn't listed).
     /// The highlight is derived from this by-name, so every path that opens or
-    /// reorders remotes routes through here instead of poking `remote_sel`
-    /// directly — the selection can't drift from the open remote.
-    pub(crate) fn select_remote(&mut self, name: Option<&str>) {
-        if let Some(name) = name {
-            if let Some(ix) = self.ordered_remotes().iter().position(|r| r.name == name) {
-                self.remote_sel = ix;
-            }
-        }
+    /// reorders remotes routes through here — the selection can't drift from the
+    /// open remote.
+    pub(crate) fn select_remote(&mut self, name: Option<&str>, cx: &mut Context<Self>) {
+        let ordered = self.ordered_remotes();
+        self.sidebar.update(cx, |s, _| s.select_by_name(name, &ordered));
     }
 
     pub(crate) fn active_remote(&self) -> Option<&RemoteInfo> {

@@ -11,6 +11,7 @@ mod panels;
 mod preview;
 mod query;
 mod remotes;
+mod sidebar;
 mod theme;
 mod transfers;
 mod views;
@@ -55,6 +56,7 @@ use workspace::modal::ActiveModal;
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use number_field::{NumberField, NumberFieldEvent};
 use explorer::{Explorer, ExplorerEvent};
+use sidebar::{Sidebar, SidebarEvent};
 use text_input::TextInput;
 use query::{Query, Status};
 use theme::*;
@@ -119,12 +121,6 @@ actions!(
 
 pub use bootstrap::{run, RcloneStatus, Startup};
 pub(crate) use status_screen::{relaunch, StatusScreen};
-
-#[derive(PartialEq, Clone, Copy)]
-enum Pane {
-    Sidebar,
-    Explorer,
-}
 
 #[derive(PartialEq, Clone, Copy)]
 enum CopySource {
@@ -249,10 +245,10 @@ struct Workspace {
     rclone_bin: String,
     version: String,
     focus: FocusHandle,
-    pane: Pane,
     remotes: Vec<RemoteInfo>,
-    remote_sel: usize,
-    remote_scroll: UniformListScrollHandle,
+    /// The remotes sidebar pane (owns the cursor/scroll/focus).
+    sidebar: Entity<Sidebar>,
+    _sidebar_sub: gpui::Subscription,
     /// Right-click menu on a remote: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
     /// In-progress rclone binary/config override edit in Settings (field + input).
@@ -328,7 +324,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
         let ui = db.load_ui();
         let pinned = db.load_pinned();
         let recent_remotes = db.recent_remotes(RECENT_REMOTES_FETCH);
@@ -361,6 +356,9 @@ impl Workspace {
             Explorer::new(weak.clone(), service.clone(), sort_field, sort_order, refresh_secs, window, cx)
         });
         let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
+        let sidebar = cx.new(|cx| Sidebar::new(weak.clone(), cx));
+        sidebar.focus_handle(cx).focus(window, cx);
+        let sidebar_sub = cx.subscribe(&sidebar, Self::on_sidebar_event);
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
@@ -384,10 +382,9 @@ impl Workspace {
             rclone_bin,
             version,
             focus,
-            pane: Pane::Sidebar,
             remotes: Vec::new(),
-            remote_sel: 0,
-            remote_scroll: UniformListScrollHandle::new(),
+            sidebar,
+            _sidebar_sub: sidebar_sub,
             remote_menu: None,
             rclone_edit: None,
             rclone_edit_focus: false,
@@ -468,6 +465,22 @@ impl Workspace {
                     s.sort_field = field;
                     s.sort_order = order;
                 });
+            }
+        }
+    }
+
+    /// Bridge sidebar signals to the remotes model and navigation.
+    fn on_sidebar_event(&mut self, _: Entity<Sidebar>, event: &SidebarEvent, cx: &mut Context<Self>) {
+        match event {
+            SidebarEvent::Open(ix) => self.load_remote(*ix, cx),
+            SidebarEvent::Menu(name, pos) => {
+                self.remote_menu = Some((name.clone(), *pos));
+                cx.notify();
+            }
+            SidebarEvent::Add => self.begin_add_remote(cx),
+            SidebarEvent::Reorder { from, before } => self.reorder_pinned(from, before, cx),
+            SidebarEvent::DropEntry { dragged, dst_remote } => {
+                self.drop_into(dragged, dst_remote.clone(), String::new(), false, cx);
             }
         }
     }
