@@ -15,7 +15,7 @@ impl Workspace {
         let verb = if mounting { "Mounting" } else { "Unmounting" };
         let pending = self.toast_pending(format!("{verb} {remote}\u{2026}"), cx);
         let config = self.mount_config_for(&remote);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         let ok_msg = format!("{remote} {}", if mounting { "mounted" } else { "unmounted" });
         let op = {
             let remote = remote.clone();
@@ -74,7 +74,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Ok(json) = serde_json::to_string(&config) {
-            self.db.save_mount_config(&remote, &json);
+            self.app.db.save_mount_config(&remote, &json);
         }
         self.mount_configs.insert(remote.clone(), config);
         if self.mounted.contains(&remote) {
@@ -91,7 +91,7 @@ impl Workspace {
         };
         let config = self.mount_config_for(&remote);
         let pending = self.toast_pending(format!("Remounting {remote}\u{2026}"), cx);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         let ok_msg = format!("{remote} remounted");
         let op = {
             let remote = remote.clone();

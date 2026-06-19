@@ -240,8 +240,17 @@ impl Render for DragLabel {
     }
 }
 
-struct Workspace {
+/// The app's shared, cheap-to-clone dependencies, bundled so the workspace holds
+/// one field instead of three; cloned out to async tasks as needed.
+#[derive(Clone)]
+struct AppState {
     service: Service,
+    db: Db,
+    paths: Paths,
+}
+
+struct Workspace {
+    app: AppState,
     version: String,
     focus: FocusHandle,
     remotes: Vec<RemoteInfo>,
@@ -268,9 +277,7 @@ struct Workspace {
     /// Last folder viewed per remote; reopening a remote returns to it.
     remote_paths: HashMap<String, String>,
     copied: Option<CopySource>,
-    paths: Paths,
     store: SettingsStore,
-    db: Db,
     /// Cached layout state, mirrored to `db` on change via [`Self::save_ui`].
     ui: UiState,
     pinned: Vec<String>,
@@ -374,8 +381,9 @@ impl Workspace {
             }
         })
         .detach();
+        let app = AppState { service, db, paths };
         let this = Self {
-            service,
+            app,
             version,
             focus,
             remotes: Vec::new(),
@@ -401,9 +409,7 @@ impl Workspace {
             history_pos: 0,
             remote_paths: HashMap::new(),
             copied: None,
-            paths,
             store,
-            db,
             ui,
             pinned,
             recent_remotes,

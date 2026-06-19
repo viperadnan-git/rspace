@@ -122,7 +122,7 @@ impl Workspace {
             (RcHealth::Up, false) => format!("{status} · rclone {}", self.version),
             _ => status.to_string(),
         };
-        let logs = self.paths.logs_dir().to_string_lossy().into_owned();
+        let logs = self.app.paths.logs_dir().to_string_lossy().into_owned();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
             v_flex()

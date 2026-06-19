@@ -64,8 +64,8 @@ impl Workspace {
     /// Saves the current row first so going back restores it.
     pub(crate) fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
         if self.open_remote.as_deref() != Some(remote.as_str()) {
-            self.db.record_remote(&remote);
-            self.recent_remotes = self.db.recent_remotes(RECENT_REMOTES_FETCH);
+            self.app.db.record_remote(&remote);
+            self.recent_remotes = self.app.db.recent_remotes(RECENT_REMOTES_FETCH);
         }
         // Keep the sidebar highlight on the remote being shown. Every open path
         // routes through navigate(), so syncing here covers all of them.

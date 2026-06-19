@@ -24,7 +24,7 @@ impl Workspace {
     }
 
     pub(crate) fn save_ui(&self) {
-        self.db.save_ui(&self.ui);
+        self.app.db.save_ui(&self.ui);
     }
 
     pub(crate) fn minimize(&mut self, _: &Minimize, window: &mut Window, _cx: &mut Context<Self>) {

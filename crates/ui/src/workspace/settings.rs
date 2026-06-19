@@ -13,8 +13,8 @@ impl Workspace {
         }
         let previous_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
         let workspace = cx.entity().downgrade();
-        let service = self.service.clone();
-        let db = self.db.clone();
+        let service = self.app.service.clone();
+        let db = self.app.db.clone();
         // Pinned-first (pin order preserved), matching the sidebar; the palette's
         // stable fuzzy sort keeps this order on empty query and score ties.
         let remotes = self.ordered_remotes();
@@ -51,14 +51,14 @@ impl Workspace {
     }
 
     pub(crate) fn refresh_storage_size(&mut self) {
-        self.settings.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
+        self.settings.storage_size = Some((dir_size(self.app.paths.root()), dir_size(&self.app.paths.cache_dir())));
     }
 
     /// Resolve rclone's own paths (`config/paths`, fetched once) and size its
     /// cache. The VFS cache can be many GB, so the walk runs on the background
     /// executor rather than blocking the UI thread.
     pub(crate) fn fetch_rclone_info(&mut self, cx: &mut Context<Self>) {
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         // Resolve paths only once (they don't change at runtime); the size walk
         // runs every open so it stays fresh.
         let cache = self.settings.rclone_paths.as_ref().map(|p| p.cache.clone());

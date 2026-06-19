@@ -4,7 +4,7 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn load_remotes(&self, cx: &mut Context<Self>) {
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         cx.spawn(async move |this, cx| {
             let result = service.remotes().await;
             this.update(cx, |this, cx| {
@@ -47,7 +47,7 @@ impl Workspace {
     }
 
     pub(crate) fn delete_remote(&mut self, name: String, cx: &mut Context<Self>) {
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         cx.spawn(async move |this, cx| {
             let result = service.config_delete(name.clone()).await;
             this.update(cx, |this, cx| {
@@ -59,7 +59,7 @@ impl Workspace {
                         }
                         this.remote_paths.remove(&name);
                         this.pinned.retain(|n| n != &name);
-                        this.db.save_pinned(&this.pinned);
+                        this.app.db.save_pinned(&this.pinned);
                         this.load_remotes(cx);
                     }
                     Err(e) => this.toast(format!("Couldn't delete \"{name}\": {e}"), true, cx),
@@ -114,7 +114,7 @@ impl Workspace {
             }
             None => self.pinned.push(name.clone()),
         }
-        self.db.save_pinned(&self.pinned);
+        self.app.db.save_pinned(&self.pinned);
         self.select_remote(selected.as_deref(), cx);
         cx.notify();
     }
@@ -128,7 +128,7 @@ impl Workspace {
             let name = self.pinned.remove(fp);
             let ip = self.pinned.iter().position(|n| n == before).unwrap_or(self.pinned.len());
             self.pinned.insert(ip, name);
-            self.db.save_pinned(&self.pinned);
+            self.app.db.save_pinned(&self.pinned);
         }
         self.select_remote(selected.as_deref(), cx);
         cx.notify();
@@ -140,7 +140,7 @@ impl Workspace {
             let j = if up { i.checked_sub(1) } else { (i + 1 < self.pinned.len()).then_some(i + 1) };
             if let Some(j) = j {
                 self.pinned.swap(i, j);
-                self.db.save_pinned(&self.pinned);
+                self.app.db.save_pinned(&self.pinned);
             }
         }
         self.select_remote(selected.as_deref(), cx);

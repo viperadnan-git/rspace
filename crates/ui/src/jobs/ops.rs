@@ -46,7 +46,7 @@ impl Workspace {
             );
             let (from_remote, into_remote, into_dir) =
                 (src_remote.clone(), dst_remote.clone(), dst_dir.clone());
-            let service = self.service.clone();
+            let service = self.app.service.clone();
             self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| {
                 let (service, from_remote, path, into_remote, into_dir) = (
                     service.clone(),
@@ -102,7 +102,7 @@ impl Workspace {
         let path = info_path(&args);
         // A pending spinner toast that resolves into the result (promise-toast).
         let toast = self.toast_pending(info_pending_label(op, &args), cx);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         cx.spawn(async move |this, cx| {
             let res = service.query(method, params).await;
             this.update(cx, |this, cx| {
@@ -188,7 +188,7 @@ impl Workspace {
             })
             .collect();
         let command = rclone_cmd(op.cli_verb(is_dir), &parts.iter().map(String::as_str).collect::<Vec<_>>());
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         self.spawn_job(op.label(), targets, command, true, cx, move |group| {
             let (service, args) = (service.clone(), args.clone());
             async move { service.run_operation(op, args, group).await }
@@ -243,7 +243,7 @@ impl Workspace {
             TransferMode::Move.cli_verb(is_dir),
             &[&format!("{remote}:{from}"), &format!("{remote}:{to}")],
         );
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         self.spawn_job(
             "Rename",
             vec![source, destination],
@@ -266,7 +266,7 @@ impl Workspace {
         self.explorer.update(cx, |e, _| e.set_pending(name.clone()));
         let folder = JobTarget::new(name, remote.clone(), path.clone(), true);
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         self.spawn_job("New folder", vec![folder], command, true, cx, move |group| {
             let (service, remote, path) = (service.clone(), remote.clone(), path.clone());
             async move { service.mkdir(remote, path, group).await }
@@ -309,7 +309,7 @@ impl Workspace {
             let command = rclone_cmd(cli, &[&local, &format!("{r}:{dst_path}")]);
             // Local source has no remote location; only the destination is navigable.
             let destination = JobTarget::new(name, r.clone(), dst_path, is_dir);
-            let service = self.service.clone();
+            let service = self.app.service.clone();
             self.spawn_job("Upload", vec![destination], command, true, cx, move |group| {
                 let (service, local, r, d) = (service.clone(), local.clone(), r.clone(), d.clone());
                 async move { service.upload(local, r, d, is_dir, group).await }
@@ -372,7 +372,7 @@ impl Workspace {
         let item = JobTarget::new(entry.name, remote.clone(), path.clone(), is_dir);
         let command =
             rclone_cmd(if is_dir { "purge" } else { "deletefile" }, &[&format!("{remote}:{path}")]);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         self.spawn_job("Delete", vec![item], command, true, cx, move |group| {
             let (service, remote, path) = (service.clone(), remote.clone(), path.clone());
             async move { service.delete(remote, path, is_dir, group).await }
@@ -398,7 +398,7 @@ impl Workspace {
         let source = JobTarget::new(entry.name.clone(), remote.clone(), path.clone(), is_dir);
         let command =
             rclone_cmd(TransferMode::Copy.cli_verb(is_dir), &[&format!("{remote}:{path}"), &local]);
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         self.spawn_job("Download", vec![source], command, false, cx, move |group| {
             let (service, remote, path, dest) =
                 (service.clone(), remote.clone(), path.clone(), dest.clone());
@@ -448,7 +448,7 @@ impl Workspace {
                 mode.cli_verb(is_dir),
                 &[&format!("{src_remote}:{src_path}"), &format!("{dst_remote}:{dst_path}")],
             );
-            let service = self.service.clone();
+            let service = self.app.service.clone();
             self.spawn_job(verb, vec![source, destination], command, true, cx, move |group| {
                 let (service, src_remote, src_path, dst_remote, dst_dir) = (
                     service.clone(),

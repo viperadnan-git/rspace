@@ -415,7 +415,7 @@ impl RemoteConfigModal {
 impl Workspace {
     pub(crate) fn begin_add_remote(&mut self, cx: &mut Context<Self>) {
         let names = self.remotes.iter().map(|r| r.name.clone()).collect();
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         let modal = cx.new(|cx| {
             let mut m = RemoteConfigModal::new(ConfigMode::Add, None, service, names, cx);
             m.start(None, cx);
@@ -426,7 +426,7 @@ impl Workspace {
 
     pub(crate) fn begin_edit_remote(&mut self, name: String, cx: &mut Context<Self>) {
         let names = self.remotes.iter().map(|r| r.name.clone()).collect();
-        let service = self.service.clone();
+        let service = self.app.service.clone();
         let modal = cx.new(|cx| {
             let mut m = RemoteConfigModal::new(ConfigMode::Edit, Some(&name), service, names, cx);
             m.start(Some(name), cx);
@@ -452,7 +452,7 @@ impl Workspace {
         let busy = modal.clone();
         let on_dismiss = move |this: &mut Workspace, cx: &mut Context<Workspace>| {
             if busy.read(cx).is_busy() {
-                let service = this.service.clone();
+                let service = this.app.service.clone();
                 cx.spawn(async move |_, _| {
                     let _ = service.config_oauth_stop().await;
                 })

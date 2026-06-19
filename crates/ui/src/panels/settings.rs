@@ -329,8 +329,8 @@ impl Workspace {
     }
 
     fn cleanup_storage(&mut self, cx: &mut Context<Self>) {
-        self.db.clear_history();
-        delete_rotated_logs(&self.paths.logs_dir());
+        self.app.db.clear_history();
+        delete_rotated_logs(&self.app.paths.logs_dir());
         self.recent_remotes.clear();
         self.jobs.update(cx, |j, _| j.refresh_history());
         self.refresh_storage_size();
@@ -339,7 +339,7 @@ impl Workspace {
     }
 
     fn settings_info(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = self.paths.root().display().to_string();
+        let root = self.app.paths.root().display().to_string();
         v_flex()
             .gap_3()
             .pt_3()
