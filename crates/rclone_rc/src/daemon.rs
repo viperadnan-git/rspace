@@ -14,10 +14,6 @@ use crate::client::RcClient;
 #[cfg(any(unix, windows))]
 use crate::mount::SharedMounts;
 
-/// Shared, restartable handle to the daemon (held by the [`Service`] and the
-/// signal handler so both always act on the current child).
-///
-/// [`Service`]: crate::Service
 pub type SharedDaemon = Arc<Mutex<Daemon>>;
 
 #[derive(Debug, Error)]

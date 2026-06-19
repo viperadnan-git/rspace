@@ -17,7 +17,6 @@ use rspace_rclone_rc::Entry;
 
 use crate::theme::*;
 
-/// Hover tooltip surface, built via [`tooltip_text`].
 pub struct Tooltip {
     text: SharedString,
 }
@@ -62,7 +61,6 @@ pub fn file_icon(is_dir: bool) -> impl IntoElement {
 /// generic cloud. Add a provider by giving it an arm here.
 pub fn remote_icon(kind: &str) -> &'static str {
     match kind {
-        // Brand icons.
         "drive" => "icons/drive.svg",
         "dropbox" => "icons/dropbox.svg",
         "googlecloudstorage" => "icons/gcs.svg",
@@ -93,9 +91,7 @@ pub fn remote_icon(kind: &str) -> &'static str {
         "sftp" | "ftp" | "http" | "hdfs" | "nfs" | "webdav" => "icons/server.svg",
         "nextcloud" => "icons/nextcloud.svg",
         "owncloud" => "icons/owncloud.svg",
-        // Object storage (S3-compatible and friends).
         "qingstor" | "oracleobjectstorage" | "storj" | "sia" | "netstorage" => "icons/database.svg",
-        // Wrapper / composite backends.
         "crypt" => "icons/lock.svg",
         "hasher" => "icons/hasher.svg",
         "compress" => "icons/compress.svg",
@@ -103,7 +99,6 @@ pub fn remote_icon(kind: &str) -> &'static str {
         "union" | "combine" => "icons/union.svg",
         "alias" => "icons/alias.svg",
 
-        // Everything else (other consumer clouds, new backends).
         _ => "icons/cloud.svg",
     }
 }
@@ -119,9 +114,6 @@ pub fn list_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     }
 }
 
-/// A settings-sidebar nav entry: an inset, rounded row with a neutral fill on
-/// selection and a subtle hover (matching Zed's settings navbar). The container
-/// supplies the horizontal inset so the rounded highlight floats off the edges.
 pub fn nav_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     let base = h_flex().id(id).w_full().gap_2().items_center().px_2().py_1().rounded_md().cursor_pointer();
     if selected && focused {
@@ -133,18 +125,14 @@ pub fn nav_item(id: usize, selected: bool, focused: bool) -> Stateful<Div> {
     }
 }
 
-/// A full-width hairline separator.
 pub fn divider() -> impl IntoElement {
     div().h(px(1.0)).w_full().bg(rgb(BORDER_MUTED))
 }
 
-/// A small uppercase section label (e.g. "RECENT").
 pub fn section_header(label: impl Into<SharedString>) -> Div {
     div().px_3().py_1().text_xs().text_color(rgb(FG_SUBTLE)).child(label.into())
 }
 
-/// A picker/command-menu row: Zed-style inset selection pill (rounded, off the
-/// card edge). Caller fills the content (label left, key binding right).
 pub fn picker_item(id: usize, selected: bool) -> Stateful<Div> {
     let base = h_flex().id(id).w_full().justify_between().gap_2().px(px(6.0)).py_1().rounded_md().cursor_pointer();
     if selected {
@@ -181,7 +169,6 @@ pub fn image_view(image: Arc<Image>) -> impl IntoElement {
 /// an ellipsis when the row is too narrow (grows/shrinks in its flex parent).
 pub fn highlighted_label(text: &str, positions: &[usize], base: u32, hl: u32) -> impl IntoElement {
     let mut styled = StyledText::new(text.to_string());
-    // Skip the char→byte mapping entirely for the common unmatched case.
     if !positions.is_empty() {
         let byte_of: Vec<usize> = text.char_indices().map(|(b, _)| b).chain([text.len()]).collect();
         let style = HighlightStyle {
@@ -189,7 +176,6 @@ pub fn highlighted_label(text: &str, positions: &[usize], base: u32, hl: u32) ->
             font_weight: Some(FontWeight::MEDIUM),
             ..Default::default()
         };
-        // Char indices → byte ranges, merging consecutive matched chars into runs.
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
         for &ci in positions {
             if ci + 1 >= byte_of.len() {
@@ -206,7 +192,6 @@ pub fn highlighted_label(text: &str, positions: &[usize], base: u32, hl: u32) ->
     div().flex_1().min_w(px(0.0)).truncate().text_color(rgb(base)).child(styled)
 }
 
-/// A keyboard-shortcut chip (e.g. the binding shown on a command row).
 pub fn key_binding(keys: impl Into<SharedString>) -> impl IntoElement {
     div()
         .flex_shrink_0()
@@ -218,7 +203,6 @@ pub fn key_binding(keys: impl Into<SharedString>) -> impl IntoElement {
         .child(keys.into())
 }
 
-/// A square icon button: muted svg glyph, rounded hover background.
 pub fn icon_button(id: impl Into<gpui::ElementId>, icon: &'static str) -> Stateful<Div> {
     h_flex()
         .id(id)
@@ -265,7 +249,6 @@ pub fn focus_once(done: &mut bool, handle: &FocusHandle, window: &mut Window, cx
     }
 }
 
-/// Prompt for a single file and write its path into `input`; no-op on cancel.
 pub fn pick_file_into<V: 'static>(input: Entity<TextInput>, cx: &mut Context<V>) {
     let rx = cx.prompt_for_paths(PathPromptOptions {
         files: true,
@@ -293,8 +276,7 @@ pub fn focus_ring<E: Styled + InteractiveElement>(el: E) -> E {
     el.border_1().border_color(rgba(0x0000_0000)).focus_visible(|s| s.border_color(rgb(ACCENT)))
 }
 
-/// Visual variants of [`button`]. `Primary` = accent fill; `Soft` = muted fill
-/// (Choose…/Clean up/Check again); `Secondary` = ghost (no fill); `Danger` = red.
+/// `Primary` = accent fill; `Soft` = muted fill; `Secondary` = ghost; `Danger` = red.
 pub enum ButtonStyle {
     Primary,
     Soft,
@@ -302,9 +284,6 @@ pub enum ButtonStyle {
     Danger,
 }
 
-/// A labelled action button in one of the [`ButtonStyle`] variants.
-/// A text button with an optional leading icon and an optional fixed height.
-/// [`button`] is the common (label-only, default-height) shorthand.
 pub struct Button {
     id: &'static str,
     label: SharedString,
@@ -366,8 +345,6 @@ impl Button {
 }
 
 
-/// The rspace brand mark: the logo over the wordmark, as shown on the home
-/// (welcome) screen.
 pub fn brand_mark() -> impl IntoElement {
     v_flex()
         .items_center()
@@ -382,8 +359,6 @@ pub fn brand_mark() -> impl IntoElement {
         )
 }
 
-/// An inline text link with an optional leading icon: muted, brightening to
-/// accent on hover. The click receives the window (e.g. to move focus).
 pub fn text_link<V: 'static>(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -404,7 +379,6 @@ pub fn text_link<V: 'static>(
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
 }
 
-/// A small selectable pill (example values, segmented presets).
 pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
     let base = h_flex()
         .id(id)
@@ -469,7 +443,6 @@ pub fn nav_button(id: &'static str, glyph: &'static str, enabled: bool) -> State
     }
 }
 
-/// A labeled setting: title, description, and its control.
 pub fn setting_block(title: &str, desc: &str, control: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_2()
@@ -488,7 +461,6 @@ pub fn info_row(label: &str, value: &str) -> impl IntoElement {
         .child(div().min_w(px(0.0)).truncate().text_color(rgb(FG_SUBTLE)).child(value.to_string()))
 }
 
-/// An icon + count chip, used for the status-bar job tallies.
 pub fn count_badge(icon: &'static str, color: u32, n: usize) -> impl IntoElement {
     h_flex()
         .gap_1()
@@ -514,7 +486,6 @@ pub fn spinner(id: impl Into<gpui::ElementId>, size: Pixels, color: u32) -> impl
     )
 }
 
-/// A continuously rotating icon — inline activity indicator for running jobs.
 pub fn spinner_icon(
     id: impl Into<gpui::ElementId>,
     icon: &'static str,
@@ -545,7 +516,6 @@ pub fn sort_arrow(order: SortOrder) -> &'static str {
     }
 }
 
-/// Directories first, then by `field`/`order` within each group.
 pub fn sort_entries(entries: &mut [Entry], field: SortField, order: SortOrder) {
     entries.sort_by(|a, b| {
         let within = match field {
@@ -561,7 +531,6 @@ pub fn sort_entries(entries: &mut [Entry], field: SortField, order: SortOrder) {
     });
 }
 
-/// `rclone <verb> "<arg>" …` — the CLI shown by a task row's copy button.
 pub fn rclone_cmd(verb: &str, args: &[&str]) -> String {
     let mut s = format!("rclone {verb}");
     for a in args {
@@ -581,13 +550,11 @@ pub fn human_duration(ms: u64) -> String {
     }
 }
 
-/// Parent of a `/`-separated remote path (empty at the root).
 pub fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
-/// Join `name` under `dir`, avoiding a leading slash at the root.
-// Single source in rclone_rc::ops (the lower crate) so path-joining can't diverge.
+// single source in rclone_rc::ops so path-joining can't diverge between crates
 pub use rspace_rclone_rc::join as join_path;
 
 /// Best-effort `Mon D, YYYY  HH:MM` from rclone's RFC3339 mod time (UTC).
@@ -607,13 +574,10 @@ pub fn human_date(rfc3339: &str) -> String {
     format!("{mon} {}, {y}  {time}", d.trim_start_matches('0'))
 }
 
-/// A persisted layout width: the stored value or `default`, clamped to bounds.
 pub fn clamped_width(value: Option<f32>, default: f32, min: f32, max: f32) -> Pixels {
     px(value.unwrap_or(default).clamp(min, max))
 }
 
-/// A labeled form field: title (+ required marker), optional help, then the
-/// control. Reused by any form so fields render consistently.
 pub fn form_field(label: &str, help: &str, required: bool, control: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_1()
@@ -629,7 +593,6 @@ pub fn form_field(label: &str, help: &str, required: bool, control: impl IntoEle
         .child(control)
 }
 
-/// Friendly type label for the preview info card, e.g. `PNG` / `RS` / `File`.
 pub fn file_kind(name: &str) -> String {
     match name.rsplit_once('.') {
         Some((_, ext)) if !ext.is_empty() => ext.to_ascii_uppercase(),

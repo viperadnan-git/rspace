@@ -10,7 +10,6 @@ use crate::sort::{SortField, SortOrder};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Background refresh / stale-revalidate cadence, in seconds.
     pub refresh_secs: u64,
     /// Where downloads go. `None` = the platform default downloads folder.
     pub download_dir: Option<String>,
@@ -18,9 +17,7 @@ pub struct Settings {
     pub rclone_path: Option<String>,
     /// Explicit rclone config file (`RCLONE_CONFIG`). `None` = rclone's default.
     pub rclone_config_path: Option<String>,
-    /// Default column directory listings are sorted by.
     pub sort_field: SortField,
-    /// Default sort direction.
     pub sort_order: SortOrder,
 }
 
@@ -81,7 +78,6 @@ impl SettingsStore {
         &self.settings
     }
 
-    /// Mutate and persist in one step.
     pub fn update(&mut self, f: impl FnOnce(&mut Settings)) {
         f(&mut self.settings);
         let _ = self.settings.write(&self.path);

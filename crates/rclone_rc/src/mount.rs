@@ -53,7 +53,6 @@ impl CacheMode {
     }
 }
 
-/// Per-remote mount options, mapped to rclone mount/VFS flags.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MountConfig {
@@ -75,7 +74,6 @@ pub enum MountError {
     NotMounted(String),
 }
 
-/// One live `rclone nfsmount` process and where it is mounted.
 struct ActiveMount {
     mountpoint: PathBuf,
     child: Child,
@@ -140,7 +138,6 @@ impl Mounts {
         Ok(())
     }
 
-    /// Unmount `remote`.
     pub async fn unmount(&mut self, remote: &str) -> Result<(), MountError> {
         let Some(mut m) = self.active.remove(remote) else {
             return Err(MountError::NotMounted(remote.to_string()));
@@ -149,7 +146,6 @@ impl Mounts {
         Ok(())
     }
 
-    /// Unmount everything (on app shutdown).
     pub async fn unmount_all(&mut self) {
         for (_, mut m) in self.active.drain() {
             detach(&mut m).await;
@@ -206,7 +202,6 @@ pub fn reap_orphans(mount_root: &Path) {
     }
 }
 
-/// Mountpoints currently mounted under `root`, read from the OS mount table.
 #[cfg(unix)]
 fn mounted_under(root: &Path) -> Vec<PathBuf> {
     let Ok(out) = std::process::Command::new("mount").output() else {
@@ -233,7 +228,6 @@ fn mounted_under(_root: &Path) -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Poll until `mountpoint` becomes a mount (a path mount, macOS/Linux).
 #[cfg(unix)]
 async fn await_mounted(mountpoint: &Path, timeout: Duration) -> Result<(), MountError> {
     let deadline = Instant::now() + timeout;

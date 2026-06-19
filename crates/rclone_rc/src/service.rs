@@ -37,7 +37,6 @@ pub enum ServiceError {
     InvalidArgs(&'static str),
 }
 
-/// Whether a paste keeps the source (copy) or removes it (move/cut).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferMode {
     Copy,
@@ -52,7 +51,6 @@ impl TransferMode {
         }
     }
 
-    /// Literal-path method (no globbing) for a single file.
     fn file_method(self) -> &'static str {
         match self {
             Self::Copy => "operations/copyfile",
@@ -67,7 +65,6 @@ impl TransferMode {
         }
     }
 
-    /// rclone CLI subcommand equivalent, for displaying the operation.
     pub fn cli_verb(self, is_dir: bool) -> &'static str {
         self.operation().cli_verb(is_dir)
     }
@@ -106,7 +103,6 @@ impl Service {
         }
     }
 
-    /// Install termination-signal cleanup for the daemon and mounts.
     pub fn install_signal_cleanup(&self) {
         #[cfg(any(unix, windows))]
         crate::daemon::install_signal_cleanup(
@@ -116,7 +112,6 @@ impl Service {
         );
     }
 
-    /// Snapshot the current RC client (cheap clone; changes after a restart).
     fn client(&self) -> RcClient {
         self.client.read().unwrap().clone()
     }
@@ -140,7 +135,6 @@ impl Service {
         rx.await.map_err(|_| ServiceError::Cancelled)?
     }
 
-    /// Gracefully stop the daemon and tear down every mount (on app exit).
     pub async fn shutdown(&self) {
         self.mounts.lock().await.unmount_all().await;
         self.daemon.lock().await.shutdown().await;
@@ -167,13 +161,10 @@ impl Service {
         rx.await.map_err(|_| ServiceError::Cancelled)?
     }
 
-    /// rclone's resolved config/cache/temp paths (`config/paths`), as detected
-    /// per-OS by rclone itself.
     pub async fn config_paths(&self) -> Result<ConfigPaths, ServiceError> {
         self.run(|c| async move { c.config_paths().await }).await
     }
 
-    /// Unmount `remote`.
     pub async fn unmount_remote(&self, remote: String) -> Result<(), ServiceError> {
         let mounts = self.mounts.clone();
         let (tx, rx) = oneshot::channel();
@@ -190,7 +181,6 @@ impl Service {
     }
 
 
-    /// Run an RC call on the tokio runtime, awaiting its result over a oneshot.
     async fn run<T, Fut>(
         &self,
         call: impl FnOnce(RcClient) -> Fut + Send + 'static,
@@ -226,7 +216,6 @@ impl Service {
         rx.await.map_err(|_| ServiceError::Cancelled)?.map_err(Into::into)
     }
 
-    /// Liveness check against the rc daemon (`rc/noop`).
     pub async fn ping(&self) -> Result<(), ServiceError> {
         self.run(|c| async move { c.noop().await }).await
     }
@@ -239,7 +228,6 @@ impl Service {
         self.run(|c| async move { c.remotes().await }).await
     }
 
-    /// Delete a configured remote.
     pub async fn config_delete(&self, name: String) -> Result<(), ServiceError> {
         self.run(move |c| async move { c.config_delete(&name).await }).await
     }
@@ -249,12 +237,10 @@ impl Service {
         self.run(|c| async move { c.config_oauth_stop().await }).await
     }
 
-    /// Configurable backends and their option schemas.
     pub async fn config_providers(&self) -> Result<Vec<Provider>, ServiceError> {
         self.run(|c| async move { c.config_providers().await }).await
     }
 
-    /// Stored parameters of a remote, for editing.
     pub async fn config_get(
         &self,
         name: String,
@@ -262,7 +248,6 @@ impl Service {
         self.run(move |c| async move { c.config_get(&name).await }).await
     }
 
-    /// One step of interactive remote creation.
     pub async fn config_create(
         &self,
         name: String,
@@ -273,7 +258,6 @@ impl Service {
         self.run_cancellable(move |c| async move { c.config_create(&name, &kind, parameters, opt).await }).await
     }
 
-    /// One step of interactive remote editing.
     pub async fn config_update(
         &self,
         name: String,
@@ -283,7 +267,6 @@ impl Service {
         self.run_cancellable(move |c| async move { c.config_update(&name, parameters, opt).await }).await
     }
 
-    /// Download `remote:path` into the local `dest` dir as an async job.
     pub async fn download(
         &self,
         remote: String,
@@ -320,7 +303,6 @@ impl Service {
         self.submit(method, params, group).await
     }
 
-    /// Copy/move `src_remote:src_path` into the `dst_remote:dst_dir` directory.
     pub async fn paste(
         &self,
         src_remote: String,
@@ -338,8 +320,6 @@ impl Service {
         self.run_operation(mode.operation(), args, group).await
     }
 
-    /// Rename `remote:from` to `new_name` within its current directory, as an
-    /// async job.
     pub async fn move_to(
         &self,
         remote: String,
@@ -352,15 +332,12 @@ impl Service {
         self.run_operation(Operation::Rename, args, group).await
     }
 
-    /// Create directory `remote:path` as an async job.
     pub async fn mkdir(&self, remote: String, path: String, group: String) -> Result<u64, ServiceError> {
         let (parent, name) = split_parent(&path);
         let args = vec![ArgValue::Path { remote, path: parent, is_dir: true }, ArgValue::Name(name)];
         self.run_operation(Operation::MakeDir, args, group).await
     }
 
-    /// Upload a local file or directory `local` into `remote:dst_dir` as an
-    /// async job.
     pub async fn upload(
         &self,
         local: String,
@@ -392,7 +369,6 @@ impl Service {
         self.submit(method, params, group).await
     }
 
-    /// Read up to `max_bytes` of `remote:path`'s content (for previews).
     pub async fn read_file(
         &self,
         remote: String,
@@ -402,7 +378,6 @@ impl Service {
         self.run(move |c| async move { c.fetch_object(&remote, &path, max_bytes).await }).await
     }
 
-    /// Call a read-only RC method and return its raw JSON (for info ops).
     pub async fn query(
         &self,
         method: &'static str,
@@ -411,7 +386,6 @@ impl Service {
         self.run(move |c| async move { c.call::<serde_json::Value>(method, &params).await }).await
     }
 
-    /// Submit an async job in stats group `group`, returning the job id.
     async fn submit(
         &self,
         method: &'static str,
@@ -448,7 +422,6 @@ impl Service {
     }
 
     pub async fn list_dir(&self, remote: &str, path: &str) -> Result<Vec<Entry>, ServiceError> {
-        // "start" with no matching "done"/"failed" marks a listing still in flight.
         tracing::debug!(remote, path, "list dir start");
         let start = std::time::Instant::now();
         let (fs, owned_path) = (format!("{remote}:"), path.to_string());
@@ -461,9 +434,7 @@ impl Service {
         result
     }
 
-    /// Recursive word search (all query words, AND). rclone bounds the files
-    /// server-side but returns every directory, so the results are narrowed here
-    /// with the same [`Matcher`] used for the in-folder filter.
+    /// rclone bounds files server-side (longest word); client narrows dirs with [`Matcher`].
     pub async fn search(&self, remote: &str, path: &str, query: &str) -> Result<Vec<Entry>, ServiceError> {
         tracing::debug!(remote, path, query, "search start");
         let start = std::time::Instant::now();

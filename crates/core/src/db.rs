@@ -105,7 +105,6 @@ impl Db {
             .unwrap_or_default()
     }
 
-    /// Persist layout state (best-effort).
     pub fn save_ui(&self, ui: &UiState) {
         let Ok(json) = serde_json::to_string(ui) else {
             return;
@@ -118,7 +117,6 @@ impl Db {
         );
     }
 
-    /// Pinned remote names, in display order.
     pub fn load_pinned(&self) -> Vec<String> {
         let conn = self.data.lock().unwrap();
         let Ok(mut stmt) = conn.prepare("SELECT name FROM pinned ORDER BY position") else {
@@ -130,7 +128,6 @@ impl Db {
         rows.flatten().collect()
     }
 
-    /// Replace the pinned set with `names` (their order becomes the position).
     pub fn save_pinned(&self, names: &[String]) {
         let mut conn = self.data.lock().unwrap();
         let Ok(tx) = conn.transaction() else {
@@ -156,7 +153,6 @@ impl Db {
         rows.flatten().collect()
     }
 
-    /// Persist a remote's mount config JSON (best-effort upsert).
     pub fn save_mount_config(&self, name: &str, config: &str) {
         let conn = self.data.lock().unwrap();
         let _ = conn.execute(
@@ -166,7 +162,6 @@ impl Db {
         );
     }
 
-    /// Mark `name` as just opened (recency = `last_opened`).
     pub fn record_remote(&self, name: &str) {
         let conn = self.cache.lock().unwrap();
         let _ = conn.execute(
@@ -176,7 +171,6 @@ impl Db {
         );
     }
 
-    /// Most-recently-opened remote names, newest first (up to `limit`).
     pub fn recent_remotes(&self, limit: usize) -> Vec<String> {
         let conn = self.cache.lock().unwrap();
         let Ok(mut stmt) = conn.prepare("SELECT name FROM recent_remotes ORDER BY last_opened DESC LIMIT ?1")
@@ -189,7 +183,6 @@ impl Db {
         rows.flatten().collect()
     }
 
-    /// Count an invocation of `command` (bumps count + recency).
     pub fn record_command(&self, command: &str) {
         let conn = self.cache.lock().unwrap();
         let _ = conn.execute(
@@ -228,7 +221,6 @@ impl Db {
         );
     }
 
-    /// Recent finished jobs, newest first (up to `limit`).
     pub fn recent_jobs(&self, limit: usize) -> Vec<JobRecord> {
         let conn = self.cache.lock().unwrap();
         let Ok(mut stmt) = conn.prepare(
@@ -275,16 +267,13 @@ fn open_or_memory(path: &Path, init: fn(&Connection) -> rusqlite::Result<()>) ->
     }
 }
 
-/// Cap on retained job-log rows.
 const JOB_LOG_CAP: i64 = 200;
 
-/// A finished job as stored in the log.
 #[derive(Debug, Clone)]
 pub struct JobRecord {
     pub op: String,
     pub source: Option<String>,
     pub dest: Option<String>,
-    /// Whether the job succeeded (vs. failed).
     pub ok: bool,
     pub bytes: i64,
     pub finished_at: i64,
@@ -365,7 +354,6 @@ mod tests {
         assert!(db.recent_remotes(10).is_empty());
         assert!(db.command_rank().is_empty());
         assert!(db.recent_jobs(10).is_empty());
-        // Kept data survives.
         assert_eq!(db.load_pinned(), vec!["gdrive".to_string()]);
         assert!(db.load_ui().preview_open);
     }

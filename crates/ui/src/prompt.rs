@@ -81,7 +81,6 @@ impl Render for PromptModal {
                 spread_radius: px(1.0),
                 inset: true,
             }])
-            // File rows show an icon only for directories; match that here.
             .when(self.icon_dir, |r| r.child(file_icon(true)))
             .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.input.clone()))
     }

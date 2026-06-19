@@ -8,7 +8,6 @@
 
 use serde_json::{json, Value};
 
-/// A file operation the app can perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
     Copy,
@@ -24,7 +23,6 @@ pub enum Operation {
     SetTier,
 }
 
-/// What an argument resolves to — drives the palette's input mode for the stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgKind {
     /// An existing file or directory: remote + path (+ `is_dir`). Path-completed.
@@ -37,7 +35,6 @@ pub enum ArgKind {
     Name,
 }
 
-/// One required argument, in prompt order.
 #[derive(Debug, Clone, Copy)]
 pub struct ArgSpec {
     pub kind: ArgKind,
@@ -55,7 +52,6 @@ const RENAME_ARGS: &[ArgSpec] = &[arg(ArgKind::SourcePath, "Target"), arg(ArgKin
 const COPYURL_ARGS: &[ArgSpec] = &[arg(ArgKind::Name, "URL"), arg(ArgKind::DestDir, "Destination")];
 const SETTIER_ARGS: &[ArgSpec] = &[arg(ArgKind::SourcePath, "Target"), arg(ArgKind::Name, "Tier")];
 
-/// A resolved argument value supplied by the caller, matching an [`ArgSpec`].
 #[derive(Debug, Clone)]
 pub enum ArgValue {
     Path { remote: String, path: String, is_dir: bool },
@@ -79,7 +75,6 @@ impl Operation {
         }
     }
 
-    /// Required arguments, in the order the UI should collect them.
     pub fn args(self) -> &'static [ArgSpec] {
         match self {
             Operation::Copy | Operation::Move | Operation::Sync => TRANSFER_ARGS,
@@ -98,7 +93,6 @@ impl Operation {
         matches!(self, Operation::Delete | Operation::Cleanup)
     }
 
-    /// rclone CLI subcommand for display in the transfer queue.
     pub fn cli_verb(self, is_dir: bool) -> &'static str {
         match (self, is_dir) {
             (Operation::Copy, true) => "copy",
@@ -146,7 +140,6 @@ impl Operation {
                     }))
                 })
             }
-            // Make the destination dir mirror the source (one-way, deletes extras).
             Operation::Sync => {
                 let [src, dst] = args else { return None };
                 let (sr, sp, _) = src.as_path()?;
@@ -165,7 +158,6 @@ impl Operation {
                     ("operations/delete", json!({ "fs": format!("{r}:{parent}"), "_filter": { "IncludeRule": [only_file(&leaf)] } }))
                 })
             }
-            // Free space / clear old versions on the whole fs at the target path.
             Operation::Cleanup => {
                 let [target] = args else { return None };
                 let (r, p, _) = target.as_path()?;
@@ -198,7 +190,6 @@ impl Operation {
                     ("operations/movefile", json!({ "srcFs": src_fs, "srcRemote": src_leaf, "dstFs": dst_fs, "dstRemote": dst_leaf }))
                 })
             }
-            // Download a URL into the destination directory (name from the URL).
             Operation::CopyUrl => {
                 let [url, dst] = args else { return None };
                 let url = url.as_name()?;
@@ -208,7 +199,6 @@ impl Operation {
                     json!({ "url": url, "fs": format!("{r}:"), "remote": d, "autoFilename": true }),
                 ))
             }
-            // Set the storage tier (provider-specific, e.g. S3/Azure) on the target.
             Operation::SetTier => {
                 let [target, tier] = args else { return None };
                 let (r, p, _) = target.as_path()?;
@@ -284,7 +274,6 @@ impl InfoOp {
         })
     }
 
-    /// Read the relevant fields out of rclone's JSON response.
     pub fn parse(self, v: &Value) -> Option<InfoResult> {
         Some(match self {
             InfoOp::Size => InfoResult::Size {

@@ -23,7 +23,6 @@ pub const OVERLAY: u32 = 0x656c7626;
 pub const SELECT: u32 = 0x656c7659;
 pub const SELECT_MUTED: u32 = 0x656c7633;
 
-/// Faint horizontal divider between file-list rows (Finder-style).
 pub const SEPARATOR: u32 = 0x2d343d;
 /// File-list column default widths and drag bounds. `COL_SIZE`/`COL_MIN` fit
 /// the widest `human_size` value (e.g. "1023.9 MB") so it never wraps or clips.
@@ -42,7 +41,6 @@ pub const ROW_H: f32 = 28.0;
 
 pub const SIDEBAR_W: f32 = 204.0;
 pub const SIDEBAR_MIN: f32 = 160.0;
-/// Default and bounds for the resizable file-preview pane.
 pub const PREVIEW_W: f32 = 320.0;
 pub const PREVIEW_MIN: f32 = 220.0;
 pub const PREVIEW_MAX: f32 = 640.0;

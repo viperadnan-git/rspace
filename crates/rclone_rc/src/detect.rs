@@ -3,7 +3,6 @@ use std::process::Command;
 
 use thiserror::Error;
 
-/// Where users are sent when rclone is not installed.
 pub const INSTALL_URL: &str = "https://rclone.org/install/";
 
 const BIN: &str = if cfg!(windows) { "rclone.exe" } else { "rclone" };
@@ -63,7 +62,6 @@ fn known_locations() -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(BIN)).find(|c| c.is_file())
 }
 
-/// Run `rclone version` and return its first line, or `None` if it fails.
 fn version(path: &Path) -> Option<String> {
     let output = Command::new(path).arg("version").output().ok()?;
     if !output.status.success() {

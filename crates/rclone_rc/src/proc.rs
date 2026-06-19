@@ -50,7 +50,6 @@ pub(crate) fn cmdline_contains(pid: u32, needles: &[&str]) -> bool {
     needles.iter().all(|n| cmd.contains(&n.to_lowercase()))
 }
 
-/// Pids of every running process whose command line contains all `needles`.
 #[cfg(unix)]
 pub(crate) fn find_pids(needles: &[&str]) -> Vec<u32> {
     let Ok(out) = std::process::Command::new("ps").args(["-ax", "-o", "pid=,args="]).output()

@@ -6,7 +6,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-/// State of an async rclone job (`job/status`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct JobStatus {
     #[serde(default)]
@@ -15,12 +14,11 @@ pub struct JobStatus {
     pub success: bool,
     #[serde(default)]
     pub error: String,
-    /// Run time in seconds; set by rclone once finished.
+    /// seconds; set by rclone when finished
     #[serde(default)]
     pub duration: f64,
 }
 
-/// Transfer progress for a job's stats group (`core/stats`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Stats {
     #[serde(default)]
@@ -31,18 +29,15 @@ pub struct Stats {
     pub speed: f64,
     #[serde(default)]
     pub eta: Option<u64>,
-    /// Files transferred so far in this group.
     #[serde(default)]
     pub transfers: u64,
     /// Total files queued for this group (0 until rclone has scanned).
     #[serde(default, rename = "totalTransfers")]
     pub total_transfers: u64,
-    /// Live elapsed seconds since the stats group started.
     #[serde(default, rename = "elapsedTime")]
     pub elapsed_time: f64,
 }
 
-/// A configured remote and its backend type (e.g. `drive`, `s3`).
 #[derive(Debug, Clone)]
 pub struct RemoteInfo {
     pub name: String,
@@ -103,7 +98,6 @@ pub struct ConfigStep {
     pub error: String,
 }
 
-/// rclone's resolved on-disk paths (`config/paths`) — detected per-OS by rclone.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ConfigPaths {
     pub config: String,
@@ -116,7 +110,6 @@ pub struct ConfigPaths {
 pub struct Entry {
     #[serde(rename = "Name")]
     pub name: String,
-    /// Path relative to the remote root; used to descend into directories.
     #[serde(rename = "Path")]
     pub path: String,
     #[serde(rename = "Size")]
@@ -133,10 +126,7 @@ struct Listing {
     list: Vec<Entry>,
 }
 
-/// A reusable search matcher: split the query into lowercased words once, then
-/// test many names. `matches` is an AND gate (a name must contain every word),
-/// and `positions` gives the char indices to emphasize. Building the words once
-/// keeps per-entry matching allocation-light.
+/// Reusable AND matcher: query split+lowercased once, then tested per name.
 pub struct Matcher {
     words: Vec<String>,
 }
@@ -150,7 +140,6 @@ impl Matcher {
         self.words.is_empty()
     }
 
-    /// `name` contains every query word (case-insensitive). No words → no match.
     pub fn matches(&self, name: &str) -> bool {
         if self.words.is_empty() {
             return false;
@@ -159,7 +148,6 @@ impl Matcher {
         self.words.iter().all(|w| name.contains(w))
     }
 
-    /// Ascending char indices to emphasize: the union of each word's occurrences.
     pub fn positions(&self, text: &str) -> Vec<usize> {
         let t: Vec<char> = text.chars().collect();
         let mut hits = BTreeSet::new();
@@ -182,7 +170,6 @@ impl Matcher {
     }
 }
 
-/// Escape rclone glob metacharacters so a search term matches literally.
 fn glob_escape(query: &str) -> String {
     let mut out = String::with_capacity(query.len());
     for c in query.chars() {
@@ -202,8 +189,6 @@ pub enum RcError {
     Status { status: u16, message: String },
 }
 
-/// Pull rclone's human-readable `error` field out of an RC error body, falling
-/// back to the trimmed raw body when it isn't the expected JSON shape.
 fn rc_error_message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
@@ -296,13 +281,11 @@ impl RcClient {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    /// Liveness check (`rc/noop`).
     pub async fn noop(&self) -> Result<(), RcError> {
         let _: Value = self.call("rc/noop", &json!({})).await?;
         Ok(())
     }
 
-    /// Names of configured remotes.
     pub async fn list_remotes(&self) -> Result<Vec<String>, RcError> {
         #[derive(serde::Deserialize)]
         struct Remotes {
@@ -312,7 +295,6 @@ impl RcClient {
         Ok(r.remotes)
     }
 
-    /// Configured remotes with their backend types, sorted by name.
     pub async fn remotes(&self) -> Result<Vec<RemoteInfo>, RcError> {
         let dump: std::collections::BTreeMap<String, Value> =
             self.call("config/dump", &json!({})).await?;
@@ -327,7 +309,6 @@ impl RcClient {
         Ok(out)
     }
 
-    /// Delete a configured remote (`config/delete`).
     pub async fn config_delete(&self, name: &str) -> Result<(), RcError> {
         let _: Value = self.call("config/delete", &json!({ "name": name })).await?;
         Ok(())
@@ -344,7 +325,6 @@ impl RcClient {
         result.map(|_| ())
     }
 
-    /// All configurable backends and their option schemas (`config/providers`).
     pub async fn config_providers(&self) -> Result<Vec<Provider>, RcError> {
         #[derive(Deserialize)]
         struct Providers {
@@ -354,12 +334,10 @@ impl RcClient {
         Ok(r.providers)
     }
 
-    /// rclone's resolved config/cache/temp paths (`config/paths`).
     pub async fn config_paths(&self) -> Result<ConfigPaths, RcError> {
         self.call("config/paths", &json!({})).await
     }
 
-    /// The stored parameters of a configured remote (`config/get`), for editing.
     pub async fn config_get(&self, name: &str) -> Result<serde_json::Map<String, Value>, RcError> {
         self.call("config/get", &json!({ "name": name })).await
     }
@@ -381,7 +359,6 @@ impl RcClient {
         .await
     }
 
-    /// One step of interactive remote editing (`config/update`).
     pub async fn config_update(
         &self,
         name: &str,
@@ -399,13 +376,7 @@ impl RcClient {
         Ok(r.list)
     }
 
-    /// Recursive listing filtered to entries whose name contains `query`
-    /// (case-insensitive). rclone walks the subtree but returns only the
-    /// matches, so the response stays bounded by match count, not tree size.
-    /// Recursive search for entries matching the query. rclone's include can't
-    /// express word-AND, so the *files* are bounded server-side to the most
-    /// selective (longest) word — a superset of the AND match; rclone returns
-    /// every directory regardless, so the caller narrows with a [`Matcher`].
+    /// Server-side file bound on longest query word; caller narrows with [`Matcher`].
     pub async fn list_filtered(&self, fs: &str, remote: &str, query: &str) -> Result<Vec<Entry>, RcError> {
         let anchor = query.split_whitespace().max_by_key(|w| w.chars().count()).unwrap_or(query);
         let pattern = format!("*{}*", glob_escape(anchor));
@@ -451,12 +422,10 @@ impl RcClient {
         Ok(())
     }
 
-    /// Transfer stats for a job's stats group.
     pub async fn stats(&self, group: &str) -> Result<Stats, RcError> {
         self.call("core/stats", &json!({ "group": group })).await
     }
 
-    /// Ask the daemon to terminate.
     pub async fn quit(&self) -> Result<(), RcError> {
         let _: Value = self.call("core/quit", &json!({})).await?;
         Ok(())

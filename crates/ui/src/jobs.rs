@@ -129,9 +129,6 @@ impl Workspace {
         .detach();
     }
 
-    /// An info result as a toast: a label title, the full `remote:path` subject,
-    /// and a metrics line. Only About headers with the remote's icon + name.
-    /// (A public link is copied to the clipboard.)
     fn info_result_body(&mut self, remote: &str, path: &str, result: InfoResult, cx: &mut Context<Self>) -> ToastBody {
         let part = |o: Option<i64>| o.map(human_size).unwrap_or_else(|| "?".into());
         let full = format!("{remote}:{path}");
@@ -167,7 +164,6 @@ impl Workspace {
         }
     }
 
-    /// The provider icon for a remote by name (generic cloud if unknown).
     fn remote_icon_for(&self, name: &str) -> &'static str {
         self.remotes.iter().find(|r| r.name == name).map_or("icons/cloud.svg", |r| remote_icon(&r.kind))
     }
@@ -295,8 +291,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Upload local files/directories into the open remote's current directory
-    /// (shared by the Upload picker and OS drag-and-drop).
     pub(crate) fn upload_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote.clone() else {
             return;
@@ -382,7 +376,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The saved mount config for `remote`, or the default (Streaming).
     pub(crate) fn mount_config_for(&self, remote: &str) -> MountConfig {
         self.mount_configs.get(remote).cloned().unwrap_or_default()
     }
@@ -424,7 +417,6 @@ impl Workspace {
         self.track_mount(remote, true, ok_msg, pending, op, cx);
     }
 
-    /// Open a mounted remote in the OS file manager.
     pub(crate) fn reveal_mount(&self, remote: &str, cx: &mut Context<Self>) {
         if let Some(mountpoint) = mount_root().map(|r| r.join(remote)) {
             cx.open_with_system(&mountpoint);
@@ -449,7 +441,6 @@ impl Workspace {
         }
     }
 
-    /// Confirm deleting the current selection, then enqueue one job per item.
     pub(crate) fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote.clone() else {
             return;
@@ -479,7 +470,6 @@ impl Workspace {
         );
     }
 
-    /// Enqueue a single delete as an rclone job.
     fn delete_entry(&mut self, remote: String, entry: Entry, cx: &mut Context<Self>) {
         let (path, is_dir) = (entry.path.clone(), entry.is_dir);
         let item = JobTarget::new(entry.name, remote.clone(), path.clone(), is_dir);
@@ -519,7 +509,6 @@ impl Workspace {
         });
     }
 
-    /// Mark the selection for a copy or cut.
     pub(crate) fn set_clipboard(&mut self, mode: TransferMode, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote.clone() else {
             return;
@@ -606,7 +595,6 @@ impl Workspace {
         self.jobs.update(cx, |jobs, cx| jobs.retry(id, cx));
     }
 
-    /// Remove a single finished job; close the panel if it was the last.
     pub(crate) fn clear_job(&mut self, id: usize, cx: &mut Context<Self>) {
         self.jobs.update(cx, |jobs, cx| jobs.clear_job(id, cx));
         if self.jobs.read(cx).is_empty() {
@@ -615,7 +603,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Confirm, then cancel a running job (reuses [`ask_confirm`]).
     pub(crate) fn request_cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
         let Some(label) = self.jobs.read(cx).label_of(id) else {
             return;
@@ -630,7 +617,6 @@ impl Workspace {
         );
     }
 
-    /// Confirm, then drop finished jobs from the list (reuses [`ask_confirm`]).
     pub(crate) fn request_clear_finished(&mut self, cx: &mut Context<Self>) {
         let n = self.jobs.read(cx).finished_count();
         if n == 0 {
@@ -652,7 +638,6 @@ impl Workspace {
     }
 }
 
-/// The remote name an info op targets (its first path arg).
 fn info_remote(args: &[ArgValue]) -> String {
     args.iter()
         .find_map(|a| match a {

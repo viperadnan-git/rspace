@@ -5,7 +5,6 @@ use rspace_core::{mount_root, Db, Paths, SettingsStore};
 use rspace_rclone_rc::{detect, from_path, reap_mount_orphans, Daemon, Rclone, Service, INSTALL_URL};
 use rspace_ui::{run, RcloneStatus, Startup};
 
-/// The configured rclone path (validated) if set, else auto-detection.
 fn resolve_rclone(store: &SettingsStore) -> Option<Rclone> {
     if let Some(path) = store.get().rclone_path.as_deref() {
         if let Some(found) = from_path(path) {

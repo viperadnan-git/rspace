@@ -58,13 +58,11 @@ use query::{Query, Status};
 use theme::*;
 use widgets::*;
 
-/// Rows shown in the transfers history view.
 const JOB_HISTORY_LIMIT: usize = 50;
 /// Recent remotes fetched into the cache; the welcome screen filters these
 /// against the live config and shows the first few, so over-fetch to survive
 /// remotes that were since deleted.
 const RECENT_REMOTES_FETCH: usize = 20;
-/// Recent remotes shown on the welcome screen.
 const RECENT_REMOTES_SHOWN: usize = 5;
 
 actions!(
@@ -128,7 +126,6 @@ impl AssetSource for Assets {
                 include_bytes!("../../app/resources/logo.svg").as_slice(),
             )));
         }
-        // Each name maps `icons/<name>.svg` to the embedded bytes; add one word here.
         macro_rules! icons {
             ($($name:literal),* $(,)?) => {
                 match path {
@@ -171,7 +168,6 @@ pub struct Startup {
     pub db: Db,
 }
 
-/// Launch the desktop shell. Blocks until the app exits.
 pub fn run(startup: Startup) {
     application().with_assets(Assets).run(move |cx: &mut App| {
         bind_keys(cx);
@@ -236,7 +232,6 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("j", SelectNext, Some("Workspace && !modal && !TextInput")),
         KeyBinding::new("up", SelectPrev, Some("Workspace && !modal && !TextInput")),
         KeyBinding::new("k", SelectPrev, Some("Workspace && !modal && !TextInput")),
-        // Shift extends the selection (handler reads live modifiers).
         KeyBinding::new("shift-down", SelectNext, Some("Workspace && !modal && !TextInput")),
         KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal && !TextInput")),
         KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal && !TextInput")),
@@ -274,9 +269,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", ConfigConfirm, Some("RemoteConfig")),
         KeyBinding::new("tab", FocusNext, Some("RemoteConfig")),
         KeyBinding::new("shift-tab", FocusPrev, Some("RemoteConfig")),
-        // Confirm dialog: Enter accepts (Escape dismisses via the line above).
         KeyBinding::new("enter", ConfirmAccept, Some("Confirm")),
-        // Text-input dialog: Enter submits, Escape cancels.
         KeyBinding::new("enter", PromptSubmit, Some("Prompt")),
         KeyBinding::new("escape", PromptCancel, Some("Prompt")),
         KeyBinding::new("enter", MountSave, Some("MountOptions")),
@@ -512,7 +505,6 @@ enum Pane {
     Explorer,
 }
 
-/// Identifies which copy button is showing its "copied" check.
 #[derive(PartialEq, Clone, Copy)]
 enum CopySource {
     Path,
@@ -520,7 +512,6 @@ enum CopySource {
     JobCommand(usize),
 }
 
-/// Which rclone path override is being edited in Settings.
 #[derive(Clone, Copy, PartialEq)]
 enum RcloneField {
     Binary,
@@ -547,7 +538,6 @@ enum RcHealth {
 }
 
 impl RcHealth {
-    /// Status icon: a slashed server when unreachable, a plain one otherwise.
     fn icon(&self) -> &'static str {
         match self {
             RcHealth::Down(_) => "icons/server_network_off.svg",
@@ -560,7 +550,6 @@ impl RcHealth {
 struct Location {
     remote: String,
     path: String,
-    /// Name of the row selected here, restored by identity on return.
     selected: Option<String>,
 }
 
@@ -572,7 +561,6 @@ struct Clipboard {
     mode: TransferMode,
 }
 
-/// Which side pane a resize drag is adjusting.
 #[derive(Clone, Copy, PartialEq)]
 enum ResizeTarget {
     Sidebar,
@@ -588,7 +576,6 @@ impl Render for DragResize {
     }
 }
 
-/// A resizable file-list column (Name flex-grows and isn't resizable).
 #[derive(Clone, Copy, PartialEq)]
 enum Column {
     Date,
@@ -604,7 +591,6 @@ impl Render for DragColumn {
     }
 }
 
-/// A pinned remote being dragged to reorder; the name identifies the source.
 struct DraggedRemote {
     name: String,
 }
@@ -618,7 +604,6 @@ struct DraggedEntry {
     count: usize,
 }
 
-/// The floating label rendered under the cursor while dragging.
 struct DragLabel {
     text: SharedString,
 }
@@ -637,10 +622,8 @@ impl Render for DragLabel {
     }
 }
 
-/// Two-pane remote browser.
 struct Workspace {
     service: Service,
-    /// The rclone binary in use, for display in Settings.
     rclone_bin: String,
     version: String,
     focus: FocusHandle,
@@ -672,21 +655,17 @@ struct Workspace {
     open_remote: Option<String>,
     /// Empty = root.
     path: String,
-    /// Cursor (lead) row index.
     entry_sel: usize,
     /// Multi-selection by entry path; survives re-sort and refresh. Always
     /// contains the cursor's path unless explicitly toggled off.
     selected: HashSet<String>,
-    /// Anchor index for shift-range selection.
     sel_anchor: usize,
     entry_scroll: UniformListScrollHandle,
     /// A row to select by name once the next listing loads (e.g. the child
     /// folder after navigating up).
     pending_select: Option<String>,
     dir_query: Query<(String, String), Vec<Entry>>,
-    /// Explorer search: live current-dir filter, plus recursive search on submit.
     search_input: Entity<TextInput>,
-    /// Whether the search row is shown (toggled by the toolbar button / Cmd-F).
     search_open: bool,
     search: String,
     /// The query whose recursive results `search_query` currently holds.
@@ -698,62 +677,42 @@ struct Workspace {
     view_sig: Option<(String, usize)>,
     history: Vec<Location>,
     history_pos: usize,
-    /// Which copy button last fired, so only that one shows the check.
     copied: Option<CopySource>,
     sort_field: SortField,
     sort_order: SortOrder,
     paths: Paths,
-    /// User preferences (settings.json).
     store: SettingsStore,
-    /// App-managed state + history (state/rspace.db).
     db: Db,
     /// Cached layout state, mirrored to `db` on change via [`Self::save_ui`].
     ui: UiState,
-    /// Pinned remote names (display order); persisted to `db`'s pinned table.
     pinned: Vec<String>,
     /// Recently-opened remote names (newest first); refreshed on navigate, read
     /// by the welcome screen — kept out of the render path.
     recent_remotes: Vec<String>,
-    /// Cached job log for the transfers history view; refreshed on `Logged`.
     job_history: Vec<JobRecord>,
     /// Names of mounted remotes; refreshed after a mount/unmount, read by the
     /// sidebar and remote menu — kept out of the render path.
     mounted: HashSet<String>,
-    /// (total, clearable) storage bytes, computed when Settings opens.
     storage_size: Option<(u64, u64)>,
-    /// rclone's own paths (`config/paths`), fetched when Settings opens.
     rclone_paths: Option<ConfigPaths>,
-    /// Size of rclone's cache dir, computed once `rclone_paths` resolves.
     rclone_cache_size: Option<u64>,
     settings_open: bool,
-    /// Right-click context menu: the targeted entry and the cursor position.
     context: Option<(Entry, Point<Pixels>)>,
-    /// Right-click on empty list space: the cursor position.
     bg_menu: Option<Point<Pixels>>,
-    /// Whether the rcd status popover (status-bar daemon button) is open.
     rc_popover_open: bool,
-    /// Open command palette (⌘⇧P).
     command_palette: Option<Entity<Picker<CommandPaletteDelegate>>>,
     command_palette_sub: Option<gpui::Subscription>,
-    /// Pending confirmation modal (destructive or irreversible actions).
     confirm: Option<Entity<ConfirmModal>>,
-    /// Subscription to the open confirm modal's accept/dismiss events.
     confirm_sub: Option<gpui::Subscription>,
-    /// Pending text-input dialog (new folder, rename, …).
     prompt: Option<Entity<PromptModal>>,
-    /// Subscription to the open prompt's submit/cancel events.
     prompt_sub: Option<gpui::Subscription>,
-    /// Transient corner notifications (background-operation errors).
     toasts: Vec<Toast>,
     toast_seq: usize,
     jobs: Entity<Jobs>,
-    /// Numeric stepper for the refresh interval (Settings).
     refresh_field: Entity<NumberField>,
     jobs_open: bool,
     jobs_maximized: bool,
-    /// Right-side file-preview pane.
     preview_open: bool,
-    /// Preview of the cursor entry; rebuilt by `refresh_preview` as it moves.
     preview: Option<Preview>,
     /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
     preview_cache: Vec<(String, PreviewState)>,
@@ -981,23 +940,19 @@ impl Workspace {
         }
     }
 
-    /// The search box holds at least one word to match on (ignoring whitespace).
     fn has_query(&self) -> bool {
         self.search.split_whitespace().next().is_some()
     }
 
-    /// A full (subfolder) search was submitted and still matches the box.
     fn recursive_intent(&self) -> bool {
         self.searched.as_deref() == Some(self.search.as_str())
     }
 
-    /// True when the recursive results on hand match the current query.
     fn recursive_showing(&self) -> bool {
         self.recursive_intent() && self.search_query.data().is_some()
     }
 
-    /// Rebuild the filtered current-folder view, but only when the query or the
-    /// directory's entries changed — it's invoked every frame.
+    /// Per-frame; skips rebuild when query and dir entries are unchanged.
     fn rebuild_search_view(&mut self) {
         if self.recursive_showing() || !self.has_query() {
             return;
@@ -1006,7 +961,6 @@ impl Workspace {
         if self.view_sig.as_ref().is_some_and(|(q, n)| q == &self.search && *n == dir_len) {
             return;
         }
-        // Same matcher as the recursive search (all query words must match).
         let matcher = Matcher::new(&self.search);
         self.view = self
             .dir_query
@@ -1020,8 +974,6 @@ impl Workspace {
         self.run_search(cx);
     }
 
-    /// The Subfolders toggle button: turn the full search off (back to the
-    /// current-folder filter) if it's on, else run it — mirroring Enter.
     fn toggle_subfolder_search(&mut self, cx: &mut Context<Self>) {
         if self.recursive_intent() {
             self.searched = None;
@@ -1031,8 +983,6 @@ impl Workspace {
         }
     }
 
-    /// Run a full subfolder search for the current query (Enter / the ⏎ hint).
-    /// Typing alone only filters the current folder; this is the deeper search.
     fn run_search(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.open_remote.clone() else {
             return;
@@ -1058,7 +1008,6 @@ impl Workspace {
         );
     }
 
-    /// Show/hide the search row; focus the field on open, restore list focus on close.
     fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_open = !self.search_open;
         if self.search_open {
@@ -1083,7 +1032,6 @@ impl Workspace {
         }
     }
 
-    /// Clear the query text (the search box × button), back to the full listing.
     fn clear_search(&mut self, cx: &mut Context<Self>) {
         self.searched = None;
         self.search.clear();
@@ -1091,11 +1039,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Clear the search when changing directory (search is per-folder).
     fn reset_search(&mut self, cx: &mut Context<Self>) {
         self.search_open = false;
         self.searched = None;
-        // A new directory invalidates the cached filtered view.
         self.view_sig = None;
         if !self.search.is_empty() {
             self.search.clear();
@@ -1125,7 +1071,6 @@ impl Workspace {
         self.force_reload_entries(cx);
     }
 
-    /// Force a refetch of the open directory, bypassing the stale gate.
     fn force_reload_entries(&mut self, cx: &mut Context<Self>) {
         let service = self.service.clone();
         let (field, order) = (self.sort_field, self.sort_order);
@@ -1186,7 +1131,6 @@ impl Workspace {
         self.open_settings(cx);
     }
 
-    /// Open Settings, computing the storage figures once (off the render path).
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = true;
         self.refresh_storage_size();
@@ -1194,7 +1138,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// (total, clearable) bytes for the app's own dir — bounded, so sized inline.
     fn refresh_storage_size(&mut self) {
         self.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
     }
@@ -1303,7 +1246,6 @@ impl Workspace {
             s.sort_field = field;
             s.sort_order = order;
         });
-        // Keep the selected item highlighted across the re-sort.
         self.pending_select = self.entries().get(self.entry_sel).map(|e| e.name.clone());
         self.dir_query.update_current(move |entries| sort_entries(entries, field, order));
         cx.notify();
@@ -1377,7 +1319,6 @@ impl Workspace {
         v
     }
 
-    /// Pin or unpin `name`, keeping the keyboard selection on the same remote.
     fn toggle_pin(&mut self, name: String, cx: &mut Context<Self>) {
         let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
         match self.pinned.iter().position(|n| n == &name) {
@@ -1391,7 +1332,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Move pinned `from` to sit before pinned `before` (drop-to-reorder).
     fn reorder_pinned(&mut self, from: &str, before: &str, cx: &mut Context<Self>) {
         if from == before {
             return;
@@ -1407,7 +1347,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Shift a pinned remote one slot up or down within the pinned group.
     fn move_pinned(&mut self, name: &str, up: bool, cx: &mut Context<Self>) {
         let selected = self.ordered_remotes().get(self.remote_sel).map(|r| r.name.clone());
         if let Some(i) = self.pinned.iter().position(|n| n == name) {
@@ -1442,14 +1381,11 @@ impl Workspace {
             let remote = self.open_remote.clone().unwrap_or_default();
             self.navigate(remote, path, None, cx);
         } else {
-            // Opening a file selects it (so the preview has a target) and shows
-            // it in the preview pane.
             self.select_only(ix);
             self.open_preview(cx);
         }
     }
 
-    /// Close the open remote and return to the landing (welcome) view.
     fn go_home(&mut self, cx: &mut Context<Self>) {
         if self.open_remote.is_none() {
             return;
@@ -1473,9 +1409,7 @@ impl Workspace {
     /// Push a new location onto history, selecting `want` (by name) on arrival.
     /// Saves the current row first so going back restores it.
     fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
-        // Search is per-folder; clear it on any directory change.
         self.reset_search(cx);
-        // Record as recently-opened only when switching remotes, not per folder.
         if self.open_remote.as_deref() != Some(remote.as_str()) {
             self.db.record_remote(&remote);
             self.recent_remotes = self.db.recent_remotes(RECENT_REMOTES_FETCH);
@@ -1496,8 +1430,6 @@ impl Workspace {
         self.load_entries(cx);
     }
 
-    /// Reveal a job target in the explorer: open a folder directly, or open a
-    /// file's containing directory with the file selected.
     pub(crate) fn reveal_target(&mut self, target: JobTarget, cx: &mut Context<Self>) {
         self.jobs_open = false;
         self.pane = Pane::Explorer;
@@ -1513,7 +1445,6 @@ impl Workspace {
     /// from the table's right content edge (the Name column flex-grows to fill).
     fn on_column_drag(&mut self, e: &DragMoveEvent<DragColumn>, _: &mut Window, cx: &mut Context<Self>) {
         let x = f32::from(e.event.position.x);
-        // Table content edge: body bounds minus the rows' horizontal padding.
         let right = f32::from(e.bounds.right()) - TABLE_PAD;
         // Column order is Name (flex), Size, Date — Date is flush right; Size is
         // flush to its left. Anchor each from the content edge so the dragged
@@ -1538,7 +1469,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Save any pane or column width a resize changed (called on mouse release).
     fn persist_pane_widths(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         let (sidebar, preview, date, size) = (
             f32::from(self.sidebar_width),
@@ -1557,7 +1487,6 @@ impl Workspace {
         }
     }
 
-    /// Persist the cached [`UiState`] to the database (best-effort).
     fn save_ui(&self) {
         self.db.save_ui(&self.ui);
     }
@@ -1625,7 +1554,6 @@ impl Workspace {
         if len > 0 && self.entry_sel >= len {
             self.entry_sel = len - 1;
         }
-        // Drop any selected paths that no longer exist in the listing.
         if !self.selected.is_empty() {
             let valid: HashSet<String> = self.entries().iter().map(|e| e.path.clone()).collect();
             self.selected.retain(|p| valid.contains(p));
@@ -1703,7 +1631,6 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
-    /// Download every selected entry to the configured folder, one job each.
     fn action_back(&mut self, _: &GoBack, _window: &mut Window, cx: &mut Context<Self>) {
         self.go_back(cx);
     }
@@ -1719,8 +1646,6 @@ impl Workspace {
         }
     }
 
-    /// Keep the selected row of the active pane in view (scrolls only when
-    /// off-screen).
     fn scroll_to_selection(&self) {
         match self.pane {
             Pane::Sidebar => {
@@ -1736,7 +1661,6 @@ impl Workspace {
         self.entries().get(ix).map(|e| e.path.clone())
     }
 
-    /// Selected entries in display order; falls back to the cursor row.
     fn selected_entries(&self) -> Vec<Entry> {
         // No selection means no operands — keyboard copy/cut/delete/download
         // no-op rather than silently acting on the cursor row.
@@ -1746,7 +1670,6 @@ impl Workspace {
         self.entries().iter().filter(|e| self.selected.contains(&e.path)).cloned().collect()
     }
 
-    /// Cursor becomes the sole selection (plain click / arrow).
     fn select_only(&mut self, ix: usize) {
         self.entry_sel = ix;
         self.sel_anchor = ix;
@@ -1756,7 +1679,6 @@ impl Workspace {
         }
     }
 
-    /// Toggle `ix`'s membership (cmd-click); cursor and anchor move to it.
     fn toggle_at(&mut self, ix: usize) {
         self.entry_sel = ix;
         self.sel_anchor = ix;
@@ -1767,7 +1689,6 @@ impl Workspace {
         }
     }
 
-    /// Select the inclusive anchor..=ix range (shift-click / shift-arrow).
     fn select_range_to(&mut self, ix: usize) {
         let (lo, hi) = (self.sel_anchor.min(ix), self.sel_anchor.max(ix));
         let paths: Vec<String> = self
@@ -1802,7 +1723,6 @@ impl Workspace {
                 }
             }
             Pane::Explorer => {
-                // From no selection, the first Down selects the first row.
                 if self.selected.is_empty() {
                     self.select_only(0);
                 } else {
@@ -1827,7 +1747,6 @@ impl Workspace {
                 if len == 0 {
                     return;
                 }
-                // From no selection, the first Up selects the last row.
                 if self.selected.is_empty() {
                     self.select_only(len - 1);
                     cx.notify();
@@ -1904,8 +1823,6 @@ impl Workspace {
         }
     }
 
-    /// A copy-to-clipboard button: copy/check icon, tooltip, and a check-flash
-    /// scoped to `source`. Shared by the breadcrumb, error card, and task rows.
     fn copy_button(
         &self,
         id: impl Into<gpui::ElementId>,
@@ -1935,7 +1852,6 @@ impl Workspace {
             )
     }
 
-    /// Copy `text` and flash the check on `source`'s button for 1.2s.
     fn copy_with_feedback(&mut self, source: CopySource, text: String, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;
@@ -1972,7 +1888,6 @@ impl Render for Workspace {
             || self.command_palette.is_some()
             || self.mount_options.is_some()
         {
-            // modal entities own their focus
         } else if self.settings_open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
             // input once, then leave it be (re-focusing each frame would trap it).
@@ -1981,7 +1896,6 @@ impl Render for Workspace {
                 focus_once(&mut self.rclone_edit_focus, &handle, window, cx);
             }
         } else if self.search_input.read(cx).focus_handle(cx).is_focused(window) {
-            // The explorer search box owns the keyboard while it's focused.
         } else if !self.focus.is_focused(window) {
             self.focus.focus(window, cx);
         }
@@ -2034,7 +1948,6 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            // Persist pane widths once the resize drag releases, not per move.
             .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_pane_widths))
             .size_full()
             .bg(rgb(CANVAS))
@@ -2050,7 +1963,6 @@ impl Render for Workspace {
                     .min_h(px(0.0))
                     .when(!zoomed, |el| {
                         el.child(
-                            // Plain flex_row, not h_flex: panes stretch to full height.
                             div()
                                 .flex()
                                 .flex_row()
@@ -2058,7 +1970,6 @@ impl Render for Workspace {
                                 .min_h(px(0.0))
                                 .w_full()
                                 .child(self.render_sidebar(cx))
-                                // The explorer owns the preview pane (file-list view only).
                                 .child(self.render_explorer(cx)),
                         )
                     })
@@ -2103,7 +2014,6 @@ impl Render for Workspace {
                 ))
             })
             .when(self.settings_open, |el| el.child(self.render_settings(cx)))
-            // Last among the modals so a confirm (e.g. from Settings) is topmost.
             .when_some(self.confirm.clone(), |el, modal| {
                 el.child(self.modal_overlay(
                     true,

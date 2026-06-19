@@ -89,7 +89,6 @@ impl Workspace {
             let label = if ellipsis { "…".to_string() } else { label };
             let is_last = idx == n - 1;
             let remote = remote.clone();
-            // Dropping entries on a crumb moves them into that ancestor directory.
             let (remote_for_drop, drop_dir) = (remote.clone(), path.clone());
             let crumb = div()
                 .id(SharedString::from(format!("crumb-{pos}")))
@@ -110,10 +109,7 @@ impl Workspace {
         row.child(self.copy_button("copy-path", CopySource::Path, self.copy_text(), "Copy path", cx).ml_1())
     }
 
-    // Overlay on the sidebar's right border; takes no layout space, so
-    // `deferred` paints/hit-tests it over the next pane.
-    /// A draggable resize strip on a pane edge (the preview's left, the sidebar's
-    /// right); double-click resets to `default`.
+    // deferred: paints over layout without consuming space
     pub(crate) fn resize_handle(
         &self,
         id: &'static str,
@@ -199,7 +195,6 @@ impl Workspace {
                 r.child(svg().path("icons/pin.svg").size(px(11.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
             });
 
-        // Dropping entries on a remote moves them into that remote's root.
         row = self.entry_drop_target(row, remote.name.clone(), String::new(), cx);
 
         if pinned {
@@ -262,9 +257,6 @@ impl Workspace {
             )
     }
 
-    /// Inline text field for new-folder / rename: a bare [`TextInput`] in a
-    /// row styled to sit in the file list.
-    /// A clickable file-list column header (toggles/sets the sort like Finder).
     fn col_head(
         &self,
         field: SortField,
@@ -287,8 +279,6 @@ impl Workspace {
             .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))))
             .when_some(resize, |x, col| x.relative().child(self.column_resize_handle(col, cx)));
         match width {
-            // Fixed columns keep their width (don't shrink), matching the rows so
-            // headers and cells stay aligned; the Name column flexes and truncates.
             Some(w) => base.px_2().w(w).flex_shrink_0().overflow_hidden(),
             None => base.pr_2().flex_1().min_w(px(0.0)),
         }
@@ -346,9 +336,6 @@ impl Workspace {
             ))
     }
 
-    /// Explorer search row: a bare input embedded in a list-styled row (like the
-    /// rename editor) — live current-dir filter, with a Recursive toggle that
-    /// searches all subfolders on Enter.
     fn search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .key_context("ExplorerSearch")
@@ -370,8 +357,6 @@ impl Workspace {
                     .text_color(rgb(FG_SUBTLE)),
             )
             .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.search_input.clone()))
-            // Typing filters this folder live; ⏎ (or clicking the hint) runs a full
-            // subfolder search. The hint shows active while those results are up.
             .when(!self.search.is_empty(), |el| {
                 let active = self.recursive_intent();
                 el.child(
@@ -380,7 +365,6 @@ impl Workspace {
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_search(cx))),
                 )
                 .child(
-                    // Accent fill when active (subfolder results up), muted otherwise.
                     Button::new(
                         "search-subfolders",
                         "Subfolders",
@@ -428,7 +412,6 @@ impl Workspace {
                     range
                         .filter_map(|ix| this.entries().get(ix).map(|e| (ix, e.clone())))
                         .map(|(ix, entry)| {
-                            // Renaming this row: swap in the inline editor.
                             let renaming = this.prompt.as_ref().is_some_and(|p| {
                                 p.read(cx).target.as_deref() == Some(entry.path.as_str())
                             });
@@ -452,12 +435,8 @@ impl Workspace {
                             };
                             let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
-                                // Fixed row height (no vertical padding) shared with
-                                // the inline editor, so renaming never shifts the row.
                                 .h(px(ROW_H))
                                 .py(px(0.0))
-                                // Flush columns (no inter-column gap) so cells line up
-                                // with the header and the resize dividers.
                                 .gap_0()
                                 .border_b_1()
                                 .border_color(rgb(SEPARATOR))
@@ -469,7 +448,6 @@ impl Workspace {
                                     };
                                     app.new(|_| DragLabel { text })
                                 })
-                                // Folders accept a drop: move (or copy with Option) into them.
                                 .when(is_dir, |r| {
                                     let dst = this.open_remote.clone().unwrap_or_default();
                                     this.entry_drop_target(r, dst, drop_path, cx)
@@ -478,8 +456,6 @@ impl Workspace {
                                     this.pane = Pane::Explorer;
                                     this.context = None;
                                     this.prompt = None;
-                                    // Interacting with the list returns the keyboard
-                                    // from the search box to the workspace.
                                     this.focus.focus(window, cx);
                                     if ev.click_count() >= 2 {
                                         this.select_only(ix);
@@ -508,7 +484,6 @@ impl Workspace {
                                         cx.stop_propagation();
                                         this.pane = Pane::Explorer;
                                         this.bg_menu = None;
-                                        // Right-click outside the selection narrows to that row.
                                         if !this.selected.contains(&ctx_entry.path) {
                                             this.select_only(ix);
                                         }
@@ -520,9 +495,6 @@ impl Workspace {
                                     h_flex()
                                         .id(SharedString::from(format!("name-{ix}")))
                                         .gap_2()
-                                        // Flex with basis 0 so the name column fills the
-                                        // remainder and truncates, instead of pushing the
-                                        // fixed Size/Date columns out.
                                         .flex_1()
                                         .min_w(px(0.0))
                                         .pr_2()
@@ -567,11 +539,9 @@ impl Workspace {
             .into_any_element()
         };
 
-        // A new-folder edit (no rename target) leads the list.
         let new_item = making_new && self.open_remote.is_some();
         let show_table = self.open_remote.is_some()
             && !matches!(self.dir_query.status(), Status::Loading | Status::Error(_));
-        // Right-click on empty space opens the background menu.
         let body_area = v_flex()
             .flex_1()
             .min_h(px(0.0))
@@ -581,10 +551,6 @@ impl Workspace {
             .when(show_table && self.search_open, |el| el.child(self.search_bar(cx)))
             .when(show_table, |el| el.child(self.column_header(cx)))
             .when(new_item, |el| el.child(self.prompt.as_ref().unwrap().clone()))
-            // The body fills the space left by the fixed header rows. It's a flex
-            // container (so the list's `flex_1` resolves) that is itself `flex_1`,
-            // so full-height states (empty/loading/error) fill the remainder instead
-            // of overflowing and shrinking the header.
             .child(v_flex().flex_1().min_h(px(0.0)).min_w(px(0.0)).child(body))
             .when(
             self.open_remote.is_some(),
@@ -715,9 +681,6 @@ impl Workspace {
         }
     }
 
-    /// Start screen before a remote is open: brand mark, a one-line prompt, and
-    /// the command-palette hint (plus a first-run Add-remote button). Minimal,
-    /// Zed-style — the remotes themselves live in the sidebar.
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let palette_key: &str = if cfg!(target_os = "macos") { "\u{2318}K" } else { "Ctrl K" };
         let has_remotes = !self.remotes.is_empty();
@@ -775,7 +738,6 @@ impl Workspace {
             })
     }
 
-    /// A compact recent-remote quick-open chip on the start screen.
     fn recent_remote_row(&self, ix: usize, remote: RemoteInfo, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = remote.name.clone();
         h_flex()
@@ -796,7 +758,6 @@ impl Workspace {
             .child(div().text_xs().text_color(rgb(FG)).child(remote.name.clone()))
     }
 
-    /// The brand mark plus the "rspace" wordmark.
     fn render_brand(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .id("brand-home")
@@ -831,11 +792,7 @@ impl Workspace {
     }
 
 
-    /// Dim full-screen backdrop holding a centered `card`; clicking outside runs
-    /// `dismiss`. The card supplies its own `stop_propagation`.
-    /// Dimmed full-screen backdrop with click-to-dismiss. `deferred_layer` draws
-    /// it on a top z-layer (simple modals); a non-deferred overlay keeps its
-    /// focusable controls in the tab-stop tree for native Tab (form modals).
+    /// Dim backdrop holding a centered card; clicking outside dismisses.
     pub(crate) fn modal_overlay(
         &self,
         deferred_layer: bool,
