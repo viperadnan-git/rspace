@@ -1,13 +1,16 @@
 //! File-preview pane: classify by extension, fetch over `--rc-serve` (capped,
 //! cached), and render an image / text view, or a rich info card otherwise.
 //!
+//! A focusless child view: it observes the explorer's cursor and keeps its
+//! subject in sync. The workspace owns only the pane's visibility/width.
+//!
 //! Adding a format: give it an arm in [`classify`] and a render branch in
-//! [`Workspace::render_preview`]. Adding a whole new kind: add a [`PreviewKind`]
+//! [`PreviewPane::render`]. Adding a whole new kind: add a [`PreviewKind`]
 //! variant (drives the fetch) and a [`PreviewState`] variant (drives rendering).
 
 use std::sync::Arc;
 
-use gpui::{Image, ImageFormat};
+use gpui::{Image, ImageFormat, WeakEntity};
 
 use super::*;
 
@@ -65,7 +68,7 @@ pub(crate) enum PreviewState {
 
 /// On-demand directory size (rclone walks the tree, so it's opt-in per dir).
 #[derive(Clone)]
-pub(crate) enum DirSize {
+enum DirSize {
     Idle,
     Loading,
     Done(String),
@@ -74,11 +77,11 @@ pub(crate) enum DirSize {
 /// The preview subject: a selected entry, or the current directory/remote when
 /// nothing is selected. Identity is `(remote, entry.path)` — qualified by remote
 /// so an async result can't bind to a same-named path on a different remote.
-pub(crate) struct Preview {
-    pub remote: String,
-    pub entry: Entry,
-    pub state: PreviewState,
-    pub dir_size: DirSize,
+struct Preview {
+    remote: String,
+    entry: Entry,
+    state: PreviewState,
+    dir_size: DirSize,
 }
 
 impl Preview {
@@ -87,54 +90,52 @@ impl Preview {
     }
 }
 
-impl Workspace {
-    pub(crate) fn toggle_preview(&mut self, _: &TogglePreview, _: &mut Window, cx: &mut Context<Self>) {
-        // The preview belongs to the file-list view; ignore the toggle on the
-        // welcome screen (no remote open).
-        if self.open_remote.is_none() {
-            return;
-        }
-        self.preview_open = !self.preview_open;
-        self.ui.preview_open = self.preview_open;
-        self.save_ui();
-        self.refresh_preview(cx);
-        cx.notify();
+/// The preview pane: tracks the explorer cursor, fetches/caches content, renders.
+pub(crate) struct PreviewPane {
+    workspace: WeakEntity<Workspace>,
+    explorer: Entity<Explorer>,
+    service: Service,
+    current: Option<Preview>,
+    /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
+    cache: Vec<(String, PreviewState)>,
+}
+
+impl PreviewPane {
+    pub(crate) fn new(
+        workspace: WeakEntity<Workspace>,
+        explorer: Entity<Explorer>,
+        service: Service,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Track the cursor: every selection/navigation change notifies the
+        // explorer, so observing it keeps the subject in sync.
+        cx.observe(&explorer, |this, _, cx| this.refresh(cx)).detach();
+        Self { workspace, explorer, service, current: None, cache: Vec::new() }
     }
 
-    /// Open the preview pane (persisting the layout) and show the current entry.
-    pub(crate) fn open_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.preview_open {
-            self.preview_open = true;
-            self.ui.preview_open = true;
-            self.save_ui();
-        }
-        self.refresh_preview(cx);
-        cx.notify();
+    /// The open `(remote, path)`, read from the explorer (the source of what's
+    /// shown) — never the workspace, which may be mid-update when `refresh` runs.
+    fn location(&self, cx: &App) -> Option<(String, String)> {
+        self.explorer.read(cx).location()
     }
 
     /// Keep the preview subject in sync: the selected entry, or the current
     /// directory/remote when nothing is selected (the cursor is not a selection).
-    /// Cheap no-op when the pane is closed or already showing the subject.
-    pub(crate) fn refresh_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.preview_open {
-            return;
-        }
-        let Some(remote) = self.open_remote.as_deref() else {
-            self.preview = None;
+    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        let Some((remote, path)) = self.location(cx) else {
+            self.current = None;
             return;
         };
-        // The selected cursor entry, or the open folder/remote when nothing is
-        // selected (the cursor is not a selection).
         let cursor = self.explorer.read(cx).cursor_entry();
-        let subject_path = cursor.as_ref().map_or(self.path.clone(), |e| e.path.clone());
-        if self.preview.as_ref().is_some_and(|p| p.is(remote, &subject_path)) {
+        let subject_path = cursor.as_ref().map_or(path.clone(), |e| e.path.clone());
+        if self.current.as_ref().is_some_and(|p| p.is(&remote, &subject_path)) {
             return;
         }
-        let remote = remote.to_string();
-        let entry = cursor.unwrap_or_else(|| self.location_entry());
+        let entry = cursor.unwrap_or_else(|| location_entry(&remote, &path));
         let key = format!("{remote}:{}", entry.path);
-        if let Some(state) = self.preview_cache_get(&key) {
-            self.preview = Some(Preview { remote, entry, state, dir_size: DirSize::Idle });
+        if let Some(state) = self.cache_get(&key) {
+            self.current = Some(Preview { remote, entry, state, dir_size: DirSize::Idle });
+            cx.notify();
             return;
         }
         let state = match classify(&entry.name) {
@@ -142,32 +143,21 @@ impl Workspace {
             None => PreviewState::Info,
             Some(PreviewKind::Image(_)) if entry.size as u64 > IMAGE_MAX => PreviewState::TooLarge,
             Some(kind) => {
-                self.spawn_preview_fetch(remote.clone(), entry.path.clone(), kind, cx);
+                self.spawn_fetch(remote.clone(), entry.path.clone(), kind, cx);
                 PreviewState::Loading
             }
         };
-        self.preview = Some(Preview { remote, entry, state, dir_size: DirSize::Idle });
-    }
-
-    /// A synthetic directory entry for the current location — the open folder, or
-    /// the remote root (empty path) — used as the preview subject with no
-    /// selection.
-    fn location_entry(&self) -> Entry {
-        let name = if self.path.is_empty() {
-            self.open_remote.clone().unwrap_or_default()
-        } else {
-            self.path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(self.path.as_str()).to_string()
-        };
-        Entry { name, path: self.path.clone(), size: 0, mod_time: String::new(), is_dir: true }
+        self.current = Some(Preview { remote, entry, state, dir_size: DirSize::Idle });
+        cx.notify();
     }
 
     /// Walk the selected directory to total its size (rclone `operations/size`),
     /// shown inline in the info card. Opt-in since it can be expensive.
     fn calculate_dir_size(&mut self, cx: &mut Context<Self>) {
-        let (Some(remote), Some(preview)) = (self.open_remote.clone(), self.preview.as_mut()) else {
+        let Some(preview) = self.current.as_mut() else {
             return;
         };
-        let path = preview.entry.path.clone();
+        let (remote, path) = (preview.remote.clone(), preview.entry.path.clone());
         preview.dir_size = DirSize::Loading;
         cx.notify();
         let args = vec![ArgValue::Path { remote: remote.clone(), path: path.clone(), is_dir: true }];
@@ -178,7 +168,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let res = service.query(method, params).await;
             this.update(cx, |this, cx| {
-                if let Some(preview) = this.preview.as_mut().filter(|p| p.is(&remote, &path)) {
+                if let Some(preview) = this.current.as_mut().filter(|p| p.is(&remote, &path)) {
                     preview.dir_size = match res.ok().and_then(|v| InfoOp::Size.parse(&v)) {
                         Some(InfoResult::Size { count, bytes }) => {
                             DirSize::Done(format!("{count} items \u{b7} {}", human_size(bytes)))
@@ -193,13 +183,7 @@ impl Workspace {
         .detach();
     }
 
-    fn spawn_preview_fetch(
-        &self,
-        remote: String,
-        path: String,
-        kind: PreviewKind,
-        cx: &mut Context<Self>,
-    ) {
+    fn spawn_fetch(&self, remote: String, path: String, kind: PreviewKind, cx: &mut Context<Self>) {
         let cap = match kind {
             PreviewKind::Image(_) => IMAGE_MAX,
             PreviewKind::Text => TEXT_MAX,
@@ -208,12 +192,12 @@ impl Workspace {
         let (fetch_remote, fetch_path) = (remote.clone(), path.clone());
         cx.spawn(async move |this, cx| {
             let bytes = service.read_file(fetch_remote, fetch_path, cap).await;
-            this.update(cx, |this, cx| this.on_preview_loaded(remote, path, kind, bytes, cx)).ok();
+            this.update(cx, |this, cx| this.on_loaded(remote, path, kind, bytes, cx)).ok();
         })
         .detach();
     }
 
-    fn on_preview_loaded(
+    fn on_loaded(
         &mut self,
         remote: String,
         path: String,
@@ -228,91 +212,51 @@ impl Workspace {
                 PreviewKind::Text => PreviewState::Text(String::from_utf8_lossy(&bytes).into_owned().into()),
             },
         };
-        if self.preview_open {
-            if let Some(preview) = self.preview.as_mut().filter(|p| p.is(&remote, &path)) {
-                preview.state = state.clone();
-                cx.notify();
-            }
+        if let Some(preview) = self.current.as_mut().filter(|p| p.is(&remote, &path)) {
+            preview.state = state.clone();
+            cx.notify();
         }
-        self.preview_cache_put(format!("{remote}:{path}"), state);
+        self.cache_put(format!("{remote}:{path}"), state);
     }
 
     /// LRU fetch: promote to most-recent on hit.
-    fn preview_cache_get(&mut self, key: &str) -> Option<PreviewState> {
-        let pos = self.preview_cache.iter().position(|(k, _)| k == key)?;
-        let entry = self.preview_cache.remove(pos);
-        self.preview_cache.push(entry.clone());
+    fn cache_get(&mut self, key: &str) -> Option<PreviewState> {
+        let pos = self.cache.iter().position(|(k, _)| k == key)?;
+        let entry = self.cache.remove(pos);
+        self.cache.push(entry.clone());
         Some(entry.1)
     }
 
-    fn preview_cache_put(&mut self, key: String, state: PreviewState) {
-        if let Some(pos) = self.preview_cache.iter().position(|(k, _)| *k == key) {
-            self.preview_cache.remove(pos);
+    fn cache_put(&mut self, key: String, state: PreviewState) {
+        if let Some(pos) = self.cache.iter().position(|(k, _)| *k == key) {
+            self.cache.remove(pos);
         }
-        self.preview_cache.push((key, state));
-        if self.preview_cache.len() > CACHE_CAP {
-            self.preview_cache.remove(0);
+        self.cache.push((key, state));
+        if self.cache.len() > CACHE_CAP {
+            self.cache.remove(0);
         }
-    }
-
-    pub(crate) fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Driven solely by the subject (`self.preview`), never the cursor: with
-        // nothing selected the subject is the current directory/remote.
-        let content = match self.preview.as_ref().map(|p| (&p.entry, &p.state)) {
-            None => loading_view().into_any_element(),
-            Some((_, PreviewState::Image(image))) => image_view(image.clone()).into_any_element(),
-            Some((_, PreviewState::Text(text))) => div()
-                .id("preview-text")
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_scroll()
-                .p_3()
-                .text_xs()
-                .text_color(rgb(FG))
-                .child(text.clone())
-                .into_any_element(),
-            Some((entry, PreviewState::Info)) => self.preview_glyph(entry).into_any_element(),
-            Some((_, PreviewState::TooLarge)) => {
-                centered("File too large to preview", FG_SUBTLE).into_any_element()
-            }
-            Some((_, PreviewState::Error(message))) => {
-                v_flex().flex_1().justify_center().items_center().p_3().gap_2().child(
-                    div().text_xs().text_color(rgb(DANGER)).child(message.clone()),
-                ).into_any_element()
-            }
-            Some((_, PreviewState::Loading)) => loading_view().into_any_element(),
-        };
-
-        v_flex()
-            .relative()
-            .w(self.preview_width)
-            .min_h(px(0.0))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(rgb(INSET))
-            .border_l_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle("preview-resize", ResizeTarget::Preview, PREVIEW_W, cx))
-            .child(content)
-            .when_some(self.preview.as_ref().map(|p| p.entry.clone()), |el, entry| {
-                el.child(self.preview_info(&entry, cx))
-            })
     }
 
     /// Backend type of the open remote (`RemoteInfo::kind`), or empty if unknown.
-    fn open_remote_kind(&self) -> String {
-        self.open_remote
-            .as_deref()
-            .and_then(|name| self.remotes.iter().find(|r| r.name == name))
-            .map(|r| r.kind.clone())
+    fn open_remote_kind(&self, cx: &App) -> String {
+        self.workspace
+            .upgrade()
+            .map(|ws| {
+                let ws = ws.read(cx);
+                ws.open_remote
+                    .as_deref()
+                    .and_then(|name| ws.remotes.iter().find(|r| r.name == name))
+                    .map(|r| r.kind.clone())
+                    .unwrap_or_default()
+            })
             .unwrap_or_default()
     }
 
     /// A big type glyph, shown when there's nothing to render (remote / dir /
     /// unsupported). The remote root uses the backend's brand icon.
-    fn preview_glyph(&self, entry: &Entry) -> impl IntoElement {
+    fn glyph(&self, entry: &Entry, cx: &App) -> impl IntoElement {
         let icon = match (entry.is_dir, entry.path.is_empty()) {
-            (true, true) => remote_icon(&self.open_remote_kind()),
+            (true, true) => remote_icon(&self.open_remote_kind(cx)),
             (true, false) => "icons/folder.svg",
             (false, _) => "icons/file.svg",
         };
@@ -323,11 +267,9 @@ impl Workspace {
 
     /// Metadata footer: name, size · type, modified, and (for dirs) an on-demand
     /// size row.
-    fn preview_info(&self, entry: &Entry, cx: &mut Context<Self>) -> impl IntoElement {
-        // The location subject at the remote root (empty path) is the remote
-        // itself — label it with its backend type.
+    fn info(&self, entry: &Entry, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = match (entry.is_dir, entry.path.is_empty()) {
-            (true, true) => match self.open_remote_kind() {
+            (true, true) => match self.open_remote_kind(cx) {
                 k if k.is_empty() => "Remote".to_string(),
                 k => format!("Remote · {k}"),
             },
@@ -354,10 +296,9 @@ impl Workspace {
             .when(entry.is_dir, |el| el.child(self.dir_size_row(cx)))
     }
 
-    /// The dir-size affordance: a "Calculate size" link, a spinner while walking,
-    /// or the result.
+    /// The dir-size affordance: a "Calculate size" link, a spinner, or the result.
     fn dir_size_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        match self.preview.as_ref().map(|p| &p.dir_size) {
+        match self.current.as_ref().map(|p| &p.dir_size) {
             Some(DirSize::Done(text)) => {
                 div().text_xs().text_color(rgb(FG_SUBTLE)).child(text.clone()).into_any_element()
             }
@@ -371,5 +312,100 @@ impl Workspace {
             }, cx)
             .into_any_element(),
         }
+    }
+}
+
+/// A synthetic directory entry for the current location — the open folder, or the
+/// remote root (empty path) — used as the preview subject with no selection.
+fn location_entry(remote: &str, path: &str) -> Entry {
+    let name = if path.is_empty() {
+        remote.to_string()
+    } else {
+        path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path).to_string()
+    };
+    Entry { name, path: path.to_string(), size: 0, mod_time: String::new(), is_dir: true }
+}
+
+impl Render for PreviewPane {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Driven solely by the subject (`current`), never the cursor: with nothing
+        // selected the subject is the current directory/remote.
+        let content = match self.current.as_ref().map(|p| (&p.entry, &p.state)) {
+            None => loading_view().into_any_element(),
+            Some((_, PreviewState::Image(image))) => image_view(image.clone()).into_any_element(),
+            Some((_, PreviewState::Text(text))) => div()
+                .id("preview-text")
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_scroll()
+                .p_3()
+                .text_xs()
+                .text_color(rgb(FG))
+                .child(text.clone())
+                .into_any_element(),
+            Some((entry, PreviewState::Info)) => self.glyph(entry, cx).into_any_element(),
+            Some((_, PreviewState::TooLarge)) => {
+                centered("File too large to preview", FG_SUBTLE).into_any_element()
+            }
+            Some((_, PreviewState::Error(message))) => v_flex()
+                .flex_1()
+                .justify_center()
+                .items_center()
+                .p_3()
+                .gap_2()
+                .child(div().text_xs().text_color(rgb(DANGER)).child(message.clone()))
+                .into_any_element(),
+            Some((_, PreviewState::Loading)) => loading_view().into_any_element(),
+        };
+        let entry = self.current.as_ref().map(|p| p.entry.clone());
+        v_flex()
+            .size_full()
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .child(content)
+            .when_some(entry, |el, entry| el.child(self.info(&entry, cx)))
+    }
+}
+
+impl Workspace {
+    pub(crate) fn toggle_preview(&mut self, _: &TogglePreview, _: &mut Window, cx: &mut Context<Self>) {
+        // The preview belongs to the file-list view; ignore on the welcome screen.
+        if self.open_remote.is_none() {
+            return;
+        }
+        self.set_preview_open(!self.preview_open, cx);
+    }
+
+    /// Open the preview pane (persisting the layout) and show the current entry.
+    pub(crate) fn open_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.preview_open {
+            self.set_preview_open(true, cx);
+        } else {
+            self.preview.update(cx, |p, cx| p.refresh(cx));
+        }
+    }
+
+    fn set_preview_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.preview_open = open;
+        self.ui.preview_open = open;
+        self.save_ui();
+        if open {
+            self.preview.update(cx, |p, cx| p.refresh(cx));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .relative()
+            .w(self.preview_width)
+            .min_h(px(0.0))
+            .flex_shrink_0()
+            .overflow_hidden()
+            .bg(rgb(INSET))
+            .border_l_1()
+            .border_color(rgb(BORDER_MUTED))
+            .child(self.resize_handle("preview-resize", ResizeTarget::Preview, PREVIEW_W, cx))
+            .child(self.preview.clone())
     }
 }

@@ -46,7 +46,7 @@ use rspace_rclone_rc::{
     Operation, Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
 };
 
-use preview::{Preview, PreviewState};
+use preview::PreviewPane;
 use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
 use picker::Picker;
@@ -313,9 +313,8 @@ struct Workspace {
     jobs_open: bool,
     jobs_maximized: bool,
     preview_open: bool,
-    preview: Option<Preview>,
-    /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
-    preview_cache: Vec<(String, PreviewState)>,
+    /// The preview pane (owns its subject, fetch, and cache).
+    preview: Entity<PreviewPane>,
     rc_health: RcHealth,
     clipboard: Option<Clipboard>,
 }
@@ -367,6 +366,8 @@ impl Workspace {
         let sidebar = cx.new(|cx| Sidebar::new(weak.clone(), cx));
         sidebar.focus_handle(cx).focus(window, cx);
         let sidebar_sub = cx.subscribe(&sidebar, Self::on_sidebar_event);
+        let preview =
+            cx.new(|cx| PreviewPane::new(weak.clone(), explorer.clone(), service.clone(), cx));
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
@@ -435,8 +436,7 @@ impl Workspace {
             jobs_open: false,
             jobs_maximized,
             preview_open,
-            preview: None,
-            preview_cache: Vec::new(),
+            preview,
             rc_health: RcHealth::Unknown,
             clipboard: None,
         };

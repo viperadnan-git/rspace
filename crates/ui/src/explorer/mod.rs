@@ -154,6 +154,11 @@ impl Explorer {
         self.dir_query.is_fetching()
     }
 
+    /// The open `(remote, path)`, or `None` on the welcome screen.
+    pub(crate) fn location(&self) -> Option<(String, String)> {
+        self.remote.clone().map(|r| (r, self.path.clone()))
+    }
+
     pub(crate) fn search_open(&self) -> bool {
         self.search_open
     }

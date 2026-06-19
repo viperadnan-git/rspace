@@ -4,7 +4,6 @@ use super::*;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.refresh_preview(cx);
         // Restore focus only when it has been lost (e.g. a modal closed) — route
         // it to the active pane. Modals, the inline prompt, the settings panel,
         // and the explorer (incl. its search input) each own their own focus.

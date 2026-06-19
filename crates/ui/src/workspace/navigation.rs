@@ -50,7 +50,6 @@ impl Workspace {
         }
         self.open_remote = None;
         self.path = String::new();
-        self.preview = None;
         self.prompt = None;
         self.context = None;
         self.bg_menu = None;
