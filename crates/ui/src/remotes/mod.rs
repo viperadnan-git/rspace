@@ -9,6 +9,8 @@ use gpui::{ClickEvent, Entity, EventEmitter, Focusable};
 use serde_json::{Map, Value};
 
 use super::*;
+
+actions!(remote_config, [ConfigNext, ConfigPrev, ConfigConfirm, FocusNext, FocusPrev]);
 use crate::text_input::TextInput;
 
 #[derive(Clone, Copy, PartialEq)]

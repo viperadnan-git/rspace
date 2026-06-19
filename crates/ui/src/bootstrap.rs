@@ -2,6 +2,15 @@
 
 use super::*;
 
+// Component-owned actions, declared in their modules; bound centrally here.
+use crate::confirm::ConfirmAccept;
+use crate::explorer::{CloseSearch, SearchSubmit};
+use crate::mount_options::{MountCancel, MountSave};
+use crate::number_field::NumberCommit;
+use crate::prompt::{PromptCancel, PromptSubmit};
+use crate::remotes::{ConfigConfirm, ConfigNext, ConfigPrev, FocusNext, FocusPrev};
+use crate::status_screen::SetupSubmit;
+
 struct Assets;
 
 impl AssetSource for Assets {

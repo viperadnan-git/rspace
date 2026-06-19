@@ -4,6 +4,8 @@
 use gpui::{Entity, EventEmitter};
 
 use super::*;
+
+actions!(prompt, [PromptSubmit, PromptCancel]);
 use crate::text_input::TextInput;
 
 pub(crate) enum PromptEvent {

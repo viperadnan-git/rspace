@@ -2,6 +2,8 @@
 
 use super::*;
 
+actions!(setup, [SetupSubmit]);
+
 const REPO_URL: &str = "https://github.com/viperadnan-git/rspace";
 
 /// Re-exec the app so a freshly-saved rclone path takes effect from a clean

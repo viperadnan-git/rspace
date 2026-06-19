@@ -10,6 +10,8 @@ use gpui::{EventEmitter, WeakEntity};
 
 use super::*;
 
+actions!(explorer, [SearchSubmit, CloseSearch]);
+
 mod view;
 
 /// Signals to the owning [`Workspace`]. Emitted from listeners/actions, handled

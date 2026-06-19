@@ -5,6 +5,8 @@ use gpui::{EventEmitter, FocusHandle, Focusable};
 
 use super::*;
 
+actions!(confirm, [ConfirmAccept]);
+
 pub(crate) enum ConfirmEvent {
     Accepted,
     Dismissed,

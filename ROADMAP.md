@@ -196,6 +196,10 @@ rspace/
   paid-developer / native-integration class as File Provider. Revisit together.
 - **Developer ID signing + notarization** — needs the paid Apple account; until
   then the app ships ad-hoc-signed and users clear the quarantine flag.
+- **Tabs / split panes** — browse multiple folders/remotes at once, in tabs or a
+  split, à la Zed's `Pane`/`Item` model. Deferred UI enhancement; the
+  focusable-pane refactor (explorer/sidebar/preview as entities) is the
+  groundwork it would build on.
 
 ## Open questions (track, don't guess)
 - NFS mount write reliability on macOS for common apps (cache mode + flags).

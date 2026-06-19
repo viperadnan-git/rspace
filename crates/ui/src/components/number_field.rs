@@ -4,6 +4,8 @@
 use gpui::{ClickEvent, Entity, EventEmitter, FocusHandle, Focusable};
 
 use super::*;
+
+actions!(number_field, [NumberCommit]);
 use crate::text_input::TextInput;
 
 pub(crate) enum NumberFieldEvent {

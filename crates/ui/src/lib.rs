@@ -99,25 +99,12 @@ actions!(
         NewFile,
         Rename,
         TogglePreview,
-        ConfigNext,
-        ConfigPrev,
-        ConfigConfirm,
-        FocusNext,
-        FocusPrev,
-        PromptSubmit,
-        PromptCancel,
         TogglePalette,
         AddRemote,
         OpenSettings,
         RestartDaemon,
         ToggleTransfers,
-        MountSave,
-        MountCancel,
-        SetupSubmit,
-        NumberCommit,
-        SearchSubmit,
-        ToggleSearch,
-        CloseSearch
+        ToggleSearch
     ]
 );
 

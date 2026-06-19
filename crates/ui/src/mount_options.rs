@@ -5,6 +5,8 @@
 use gpui::{ClickEvent, Entity, EventEmitter, FocusHandle, Focusable};
 
 use super::*;
+
+actions!(mount_options, [MountSave, MountCancel]);
 use crate::text_input::TextInput;
 use rspace_rclone_rc::{CacheMode, MountConfig};
 
