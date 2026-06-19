@@ -3,39 +3,15 @@
 use super::*;
 
 impl Workspace {
-    pub(crate) fn on_column_drag(&mut self, e: &DragMoveEvent<DragColumn>, _: &mut Window, cx: &mut Context<Self>) {
-        let x = f32::from(e.event.position.x);
-        let right = f32::from(e.bounds.right()) - TABLE_PAD;
-        // Column order is Name (flex), Size, Date — Date is flush right; Size is
-        // flush to its left. Anchor each from the content edge so the dragged
-        // divider tracks the cursor exactly.
-        let date_w = f32::from(self.col_date_width);
-        let (raw, current) = match e.drag(cx).0 {
-            Column::Date => (right - x, &mut self.col_date_width),
-            Column::Size => (right - date_w - x, &mut self.col_size_width),
+    /// Snapshot the panes' current widths into `ui` and persist (on resize-end).
+    /// The panes own the live widths; this is the persistence buffer.
+    pub(crate) fn persist_pane_widths(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let sidebar = f32::from(self.sidebar.read(cx).width());
+        let preview = f32::from(self.preview.read(cx).width());
+        let (date, size) = {
+            let e = self.explorer.read(cx);
+            (f32::from(e.col_date_width()), f32::from(e.col_size_width()))
         };
-        let width = px(raw.clamp(COL_MIN, COL_MAX));
-        if width != *current {
-            *current = width;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn reset_column(&mut self, column: Column, cx: &mut Context<Self>) {
-        match column {
-            Column::Date => self.col_date_width = px(COL_DATE),
-            Column::Size => self.col_size_width = px(COL_SIZE),
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn persist_pane_widths(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
-        let (sidebar, preview, date, size) = (
-            f32::from(self.sidebar_width),
-            f32::from(self.preview_width),
-            f32::from(self.col_date_width),
-            f32::from(self.col_size_width),
-        );
         let unchanged = (self.ui.sidebar_width, self.ui.preview_width, self.ui.col_date_width, self.ui.col_size_width)
             == (Some(sidebar), Some(preview), Some(date), Some(size));
         if !unchanged {

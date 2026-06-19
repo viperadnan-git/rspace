@@ -55,19 +55,17 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::action_toggle_transfers))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragResize>, window, cx| {
                 let x = f32::from(e.event.position.x);
-                let (width, current) = match e.drag(cx).0 {
+                match e.drag(cx).0 {
                     ResizeTarget::Sidebar => {
-                        (px(x.clamp(SIDEBAR_MIN, SIDEBAR_MAX)), &mut this.sidebar_width)
+                        let w = px(x.clamp(SIDEBAR_MIN, SIDEBAR_MAX));
+                        this.sidebar.update(cx, |s, cx| s.set_width(w, cx));
                     }
                     ResizeTarget::Preview => {
                         // Pane is docked right: width grows as the cursor nears the edge.
                         let from_right = f32::from(window.viewport_size().width) - x;
-                        (px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX)), &mut this.preview_width)
+                        let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
+                        this.preview.update(cx, |p, cx| p.set_width(w, cx));
                     }
-                };
-                if width != *current {
-                    *current = width;
-                    cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_pane_widths))

@@ -270,10 +270,6 @@ struct Workspace {
     /// Per-remote mount config (cache mode, read-only, limits); cached from the
     /// DB, edited via the mount-options modal, read when mounting.
     mount_configs: HashMap<String, MountConfig>,
-    sidebar_width: Pixels,
-    preview_width: Pixels,
-    col_date_width: Pixels,
-    col_size_width: Pixels,
     open_remote: Option<String>,
     /// Empty = root.
     path: String,
@@ -354,14 +350,23 @@ impl Workspace {
         let (sort_field, sort_order, refresh_secs) =
             (settings.sort_field, settings.sort_order, settings.refresh_secs);
         let explorer = cx.new(|cx| {
-            Explorer::new(weak.clone(), service.clone(), sort_field, sort_order, refresh_secs, window, cx)
+            Explorer::new(
+                weak.clone(),
+                service.clone(),
+                (sort_field, sort_order),
+                refresh_secs,
+                (col_date_width, col_size_width),
+                window,
+                cx,
+            )
         });
         let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
-        let sidebar = cx.new(|cx| Sidebar::new(weak.clone(), cx));
+        let sidebar = cx.new(|cx| Sidebar::new(weak.clone(), sidebar_width, cx));
         sidebar.focus_handle(cx).focus(window, cx);
         let sidebar_sub = cx.subscribe(&sidebar, Self::on_sidebar_event);
-        let preview =
-            cx.new(|cx| PreviewPane::new(weak.clone(), explorer.clone(), service.clone(), cx));
+        let preview = cx.new(|cx| {
+            PreviewPane::new(weak.clone(), explorer.clone(), service.clone(), preview_width, cx)
+        });
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
@@ -401,10 +406,6 @@ impl Workspace {
                 rclone_cache_size: None,
             },
             mount_configs,
-            sidebar_width,
-            preview_width,
-            col_date_width,
-            col_size_width,
             open_remote: None,
             path: String::new(),
             explorer,

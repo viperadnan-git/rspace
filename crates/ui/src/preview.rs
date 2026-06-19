@@ -98,6 +98,8 @@ pub(crate) struct PreviewPane {
     current: Option<Preview>,
     /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
     cache: Vec<(String, PreviewState)>,
+    /// Pane width (resizable; persisted by the workspace).
+    width: Pixels,
 }
 
 impl PreviewPane {
@@ -105,12 +107,28 @@ impl PreviewPane {
         workspace: WeakEntity<Workspace>,
         explorer: Entity<Explorer>,
         service: Service,
+        width: Pixels,
         cx: &mut Context<Self>,
     ) -> Self {
         // Track the cursor: every selection/navigation change notifies the
         // explorer, so observing it keeps the subject in sync.
         cx.observe(&explorer, |this, _, cx| this.refresh(cx)).detach();
-        Self { workspace, explorer, service, current: None, cache: Vec::new() }
+        Self { workspace, explorer, service, current: None, cache: Vec::new(), width }
+    }
+
+    pub(crate) fn width(&self) -> Pixels {
+        self.width
+    }
+
+    pub(crate) fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.width != width {
+            self.width = width;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn reset_width(&mut self, cx: &mut Context<Self>) {
+        self.set_width(px(PREVIEW_W), cx);
     }
 
     /// The open `(remote, path)`, read from the explorer (the source of what's
@@ -398,14 +416,14 @@ impl Workspace {
     pub(crate) fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .relative()
-            .w(self.preview_width)
+            .w(self.preview.read(cx).width())
             .min_h(px(0.0))
             .flex_shrink_0()
             .overflow_hidden()
             .bg(rgb(INSET))
             .border_l_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle("preview-resize", ResizeTarget::Preview, PREVIEW_W, cx))
+            .child(self.resize_handle("preview-resize", ResizeTarget::Preview, cx))
             .child(self.preview.clone())
     }
 }

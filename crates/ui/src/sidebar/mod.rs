@@ -28,6 +28,8 @@ pub(crate) struct Sidebar {
     /// Cursor row into the ordered remote list (drives the highlight).
     remote_sel: usize,
     remote_scroll: UniformListScrollHandle,
+    /// Pane width (resizable; persisted by the workspace).
+    width: Pixels,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -39,13 +41,29 @@ impl Focusable for Sidebar {
 }
 
 impl Sidebar {
-    pub(crate) fn new(workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(workspace: WeakEntity<Workspace>, width: Pixels, cx: &mut Context<Self>) -> Self {
         Self {
             workspace,
             focus: cx.focus_handle(),
             remote_sel: 0,
             remote_scroll: UniformListScrollHandle::new(),
+            width,
         }
+    }
+
+    pub(crate) fn width(&self) -> Pixels {
+        self.width
+    }
+
+    pub(crate) fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.width != width {
+            self.width = width;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn reset_width(&mut self, cx: &mut Context<Self>) {
+        self.set_width(px(SIDEBAR_W), cx);
     }
 
     /// The remote list in display order (pinned first), read from the workspace.

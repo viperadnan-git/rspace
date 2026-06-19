@@ -78,9 +78,7 @@ impl Explorer {
                 })
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if e.click_count() >= 2 {
-                        this.workspace
-                            .update(cx, |ws, cx| ws.reset_column(col, cx))
-                            .ok();
+                        this.reset_column(col, cx);
                     }
                 }))
                 .child(div().w(px(1.0)).h(px(13.0)).bg(rgb(BORDER_MUTED))),
@@ -186,14 +184,8 @@ impl Render for Explorer {
         self.rebuild_search_view();
         self.resolve_selection();
 
-        let (size_w, date_w, prompt) = self
-            .workspace
-            .upgrade()
-            .map(|ws| {
-                let ws = ws.read(cx);
-                (ws.col_size_width, ws.col_date_width, ws.prompt())
-            })
-            .unwrap_or((px(COL_SIZE), px(COL_DATE), None));
+        let (size_w, date_w) = (self.col_size_width, self.col_date_width);
+        let prompt = self.workspace.upgrade().and_then(|ws| ws.read(cx).prompt());
         let count = self.entries().len();
         let making_new = prompt.as_ref().is_some_and(|p| p.read(cx).target.is_none());
         let focused = self.focus.is_focused(window);
@@ -358,7 +350,7 @@ impl Render for Explorer {
             .min_w(px(0.0))
             .overflow_hidden()
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragColumn>, window, cx| {
-                this.workspace.update(cx, |ws, cx| ws.on_column_drag(e, window, cx)).ok();
+                this.on_column_drag(e, window, cx);
             }))
             .when(show_table && self.search_open, |el| el.child(self.search_bar(cx)))
             .when(show_table, |el| el.child(self.column_header(size_w, date_w, cx)))

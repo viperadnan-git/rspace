@@ -64,6 +64,9 @@ pub(crate) struct Explorer {
     /// A row to select by name once the next listing loads (e.g. the child
     /// folder after navigating up, or the renamed item).
     pending_select: Option<String>,
+    /// Size / Date column widths (resizable; persisted by the workspace).
+    col_date_width: Pixels,
+    col_size_width: Pixels,
 }
 
 impl EventEmitter<ExplorerEvent> for Explorer {}
@@ -78,12 +81,14 @@ impl Explorer {
     pub(crate) fn new(
         workspace: WeakEntity<Workspace>,
         service: Service,
-        sort_field: SortField,
-        sort_order: SortOrder,
+        sort: (SortField, SortOrder),
         refresh_secs: u64,
+        cols: (Pixels, Pixels),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (sort_field, sort_order) = sort;
+        let (col_date_width, col_size_width) = cols;
         let stale = Duration::from_secs(refresh_secs.max(1));
         let search_input = cx.new(|cx| TextInput::new(cx, "Search this folder").bare());
         // Only react to actual text changes — the input also notifies on caret
@@ -125,6 +130,8 @@ impl Explorer {
             sel_anchor: 0,
             entry_scroll: UniformListScrollHandle::new(),
             pending_select: None,
+            col_date_width,
+            col_size_width,
         }
     }
 
@@ -157,6 +164,39 @@ impl Explorer {
     /// The open `(remote, path)`, or `None` on the welcome screen.
     pub(crate) fn location(&self) -> Option<(String, String)> {
         self.remote.clone().map(|r| (r, self.path.clone()))
+    }
+
+    pub(crate) fn col_date_width(&self) -> Pixels {
+        self.col_date_width
+    }
+
+    pub(crate) fn col_size_width(&self) -> Pixels {
+        self.col_size_width
+    }
+
+    /// Resize a column by dragging its left divider. Widths are measured from the
+    /// table's right content edge (the Name column flex-grows to fill).
+    pub(crate) fn on_column_drag(&mut self, e: &DragMoveEvent<DragColumn>, _: &mut Window, cx: &mut Context<Self>) {
+        let x = f32::from(e.event.position.x);
+        let right = f32::from(e.bounds.right()) - TABLE_PAD;
+        let date_w = f32::from(self.col_date_width);
+        let (raw, current) = match e.drag(cx).0 {
+            Column::Date => (right - x, &mut self.col_date_width),
+            Column::Size => (right - date_w - x, &mut self.col_size_width),
+        };
+        let width = px(raw.clamp(COL_MIN, COL_MAX));
+        if width != *current {
+            *current = width;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn reset_column(&mut self, column: Column, cx: &mut Context<Self>) {
+        match column {
+            Column::Date => self.col_date_width = px(COL_DATE),
+            Column::Size => self.col_size_width = px(COL_SIZE),
+        }
+        cx.notify();
     }
 
     pub(crate) fn search_open(&self) -> bool {

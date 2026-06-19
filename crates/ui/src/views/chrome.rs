@@ -7,7 +7,6 @@ impl Workspace {
         &self,
         id: &'static str,
         target: ResizeTarget,
-        default: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let edge = px(-RESIZE_HANDLE_W / 2.0);
@@ -30,10 +29,9 @@ impl Workspace {
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if e.click_count() >= 2 {
                         match target {
-                            ResizeTarget::Sidebar => this.sidebar_width = px(default),
-                            ResizeTarget::Preview => this.preview_width = px(default),
+                            ResizeTarget::Sidebar => this.sidebar.update(cx, |s, cx| s.reset_width(cx)),
+                            ResizeTarget::Preview => this.preview.update(cx, |p, cx| p.reset_width(cx)),
                         }
-                        cx.notify();
                     }
                 })),
         )
