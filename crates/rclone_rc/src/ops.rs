@@ -359,3 +359,21 @@ mod tests {
         assert_eq!(fs_leaf("r", "file.txt"), ("r:".into(), "file.txt".into()));
     }
 }
+
+#[cfg(test)]
+mod path_tests {
+    use super::{join, split_parent};
+
+    #[test]
+    fn join_handles_root() {
+        assert_eq!(join("", "a"), "a");
+        assert_eq!(join("a/b", "c"), "a/b/c");
+    }
+
+    #[test]
+    fn split_parent_splits_last_slash() {
+        assert_eq!(split_parent("a/b/c"), ("a/b".to_string(), "c".to_string()));
+        assert_eq!(split_parent("a"), (String::new(), "a".to_string()));
+        assert_eq!(split_parent(""), (String::new(), String::new()));
+    }
+}

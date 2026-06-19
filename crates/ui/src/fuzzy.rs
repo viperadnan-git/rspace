@@ -44,3 +44,33 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
     score -= *positions.first().unwrap_or(&0) as i32 / 4;
     Some(Match { score, positions })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::fuzzy_match;
+
+    #[test]
+    fn requires_in_order_subsequence() {
+        assert!(fuzzy_match("fb", "foobar").is_some());
+        assert!(fuzzy_match("bf", "foobar").is_none());
+        assert!(fuzzy_match("xyz", "foobar").is_none());
+    }
+
+    #[test]
+    fn reports_match_positions() {
+        let m = fuzzy_match("fb", "foobar").unwrap();
+        assert_eq!(m.positions, vec![0, 3]);
+    }
+
+    #[test]
+    fn empty_query_matches_everything() {
+        let m = fuzzy_match("", "foobar").unwrap();
+        assert_eq!(m.score, 0);
+        assert!(m.positions.is_empty());
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(fuzzy_match("FOO", "foobar").is_some());
+    }
+}

@@ -92,3 +92,65 @@ pub fn human_size(bytes: i64) -> String {
         format!("{size:.1} {}", UNITS[unit])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, size: i64, is_dir: bool) -> Entry {
+        Entry { name: name.into(), path: name.into(), size, mod_time: String::new(), is_dir }
+    }
+
+    #[test]
+    fn human_size_scales_by_unit() {
+        assert_eq!(human_size(-1), "—");
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(1024 * 1024), "1.0 MB");
+    }
+
+    #[test]
+    fn human_duration_ranges() {
+        assert_eq!(human_duration(500), "500ms");
+        assert_eq!(human_duration(1500), "1.5s");
+        assert_eq!(human_duration(65_000), "1m05s");
+    }
+
+    #[test]
+    fn parent_of_strips_last_segment() {
+        assert_eq!(parent_of("a/b/c"), "a/b");
+        assert_eq!(parent_of("a"), "");
+        assert_eq!(parent_of(""), "");
+    }
+
+    #[test]
+    fn file_kind_from_extension() {
+        assert_eq!(file_kind("foo.RS"), "RS");
+        assert_eq!(file_kind("foo.tar.gz"), "GZ");
+        assert_eq!(file_kind("README"), "File");
+        assert_eq!(file_kind("trailing."), "File");
+    }
+
+    #[test]
+    fn human_date_formats_rfc3339() {
+        assert_eq!(human_date("2026-06-19T10:25:37Z"), "Jun 19, 2026  10:25");
+        assert_eq!(human_date("short"), "");
+    }
+
+    #[test]
+    fn sort_entries_dirs_first_then_field() {
+        let mut v = vec![entry("b.txt", 10, false), entry("dir", 0, true), entry("a.txt", 30, false)];
+        sort_entries(&mut v, SortField::Name, SortOrder::Asc);
+        assert_eq!(v.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["dir", "a.txt", "b.txt"]);
+        sort_entries(&mut v, SortField::Size, SortOrder::Desc);
+        assert_eq!(v.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["dir", "a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn sort_arrow_glyphs() {
+        assert_eq!(sort_arrow(SortOrder::Asc), "↑");
+        assert_eq!(sort_arrow(SortOrder::Desc), "↓");
+    }
+}

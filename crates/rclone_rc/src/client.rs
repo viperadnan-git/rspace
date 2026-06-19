@@ -431,3 +431,23 @@ impl RcClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod matcher_tests {
+    use super::Matcher;
+
+    #[test]
+    fn matches_all_words_case_insensitive() {
+        let m = Matcher::new("Foo Bar");
+        assert!(m.matches("a foobar baz"));
+        assert!(m.matches("BAR foo"));
+        assert!(!m.matches("foo only"));
+        assert!(!Matcher::new("").matches("anything"));
+    }
+
+    #[test]
+    fn positions_marks_matched_runs() {
+        assert_eq!(Matcher::new("ba").positions("abate"), vec![1, 2]);
+        assert!(Matcher::new("zz").positions("abate").is_empty());
+    }
+}
