@@ -54,10 +54,7 @@ impl Workspace {
 
     /// Close every transient popover.
     pub(crate) fn close_menus(&mut self) {
-        self.context = None;
-        self.remote_menu = None;
-        self.bg_menu = None;
-        self.rc_popover_open = false;
+        self.menus = Menus::default();
     }
 
     /// The elevated popover card: occludes content behind it and dismisses on an
@@ -103,7 +100,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (entry, pos) = self.context.clone().unwrap();
+        let (entry, pos) = self.menus.context.clone().unwrap();
         let remote = self.open_remote.clone().unwrap_or_default();
         let mut items: Vec<AnyElement> = Vec::new();
 
@@ -167,7 +164,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_remote_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (name, pos) = self.remote_menu.clone().unwrap();
+        let (name, pos) = self.menus.remote_menu.clone().unwrap();
         let pinned = self.is_pinned(&name);
         let mut items: Vec<AnyElement> = Vec::new();
 
@@ -255,7 +252,7 @@ impl Workspace {
     }
 
     pub(crate) fn render_bg_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let pos = self.bg_menu.unwrap();
+        let pos = self.menus.bg_menu.unwrap();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
             self.menu_item("New folder", "icons/folder.svg", cx, |this, cx| this.begin_new_folder(cx))

@@ -92,7 +92,7 @@ impl Workspace {
     /// Read-only history of finished jobs (from the db), shown when no transfers
     /// are live. Empty → the idle placeholder.
     fn render_job_history(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.job_history.is_empty() {
+        if self.jobs.read(cx).history().is_empty() {
             return centered("No transfers", FG_SUBTLE).into_any_element();
         }
         v_flex()
@@ -102,9 +102,9 @@ impl Workspace {
             .child(
                 uniform_list(
                     "transfer-history",
-                    self.job_history.len(),
-                    cx.processor(|this, range: Range<usize>, _window, _cx| {
-                        range.filter_map(|i| this.job_history.get(i).map(job_history_row)).collect::<Vec<_>>()
+                    self.jobs.read(cx).history().len(),
+                    cx.processor(|this, range: Range<usize>, _window, cx| {
+                        range.filter_map(|i| this.jobs.read(cx).history().get(i).map(job_history_row)).collect::<Vec<_>>()
                     }),
                 )
                 .flex_1(),

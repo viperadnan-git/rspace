@@ -51,8 +51,8 @@ impl Workspace {
         self.open_remote = None;
         self.path = String::new();
         self.prompt = None;
-        self.context = None;
-        self.bg_menu = None;
+        self.menus.context = None;
+        self.menus.bg_menu = None;
         self.history.clear();
         self.history_pos = 0;
         self.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));

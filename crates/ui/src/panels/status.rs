@@ -49,7 +49,7 @@ impl Workspace {
     /// error), opening the rcd popover anchored to this button. The tooltip is
     /// suppressed while the popover is open, like Zed's status-bar buttons.
     fn rc_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self.rc_popover_open;
+        let open = self.menus.rc_popover_open;
         // Static cases stay zero-alloc; only the rare `Down` message formats.
         let (color, tip): (u32, SharedString) = match &self.rc_health {
             RcHealth::Up => (FG_MUTED, "rclone rc daemon connected".into()),
@@ -78,7 +78,7 @@ impl Workspace {
                     // Only reachable while closed — the open backdrop intercepts clicks.
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.close_menus();
-                        this.rc_popover_open = true;
+                        this.menus.rc_popover_open = true;
                         cx.notify();
                     })),
             )

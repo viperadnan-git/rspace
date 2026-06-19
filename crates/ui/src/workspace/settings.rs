@@ -148,9 +148,9 @@ impl Workspace {
 
     pub(crate) fn close_settings(&mut self, _: &CloseSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.open
-            || self.context.is_some()
-            || self.remote_menu.is_some()
-            || self.bg_menu.is_some()
+            || self.menus.context.is_some()
+            || self.menus.remote_menu.is_some()
+            || self.menus.bg_menu.is_some()
             || self.modal.is_some()
             || self.prompt.is_some()
             || self.jobs_open

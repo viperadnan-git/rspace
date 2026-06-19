@@ -78,17 +78,29 @@ pub(crate) struct Jobs {
     db: Db,
     items: Vec<Job>,
     seq: usize,
+    /// Recent finished jobs (newest first), read by the transfers panel.
+    history: Vec<JobRecord>,
 }
 
 impl EventEmitter<JobsEvent> for Jobs {}
 
 impl Jobs {
     pub(crate) fn new(service: Service, db: Db) -> Self {
-        Self { service, db, items: Vec::new(), seq: 0 }
+        let history = db.recent_jobs(JOB_HISTORY_LIMIT);
+        Self { service, db, items: Vec::new(), seq: 0, history }
     }
 
     pub(crate) fn items(&self) -> &[Job] {
         &self.items
+    }
+
+    pub(crate) fn history(&self) -> &[JobRecord] {
+        &self.history
+    }
+
+    /// Re-read the persisted job history (after a new finish or a cleanup).
+    pub(crate) fn refresh_history(&mut self) {
+        self.history = self.db.recent_jobs(JOB_HISTORY_LIMIT);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -167,6 +179,7 @@ impl Jobs {
                         }
                         if let Some((op, src, dst, ok, bytes, label, err)) = finished {
                             this.db.record_job(&op, src.as_deref(), dst.as_deref(), ok, bytes);
+                            this.refresh_history();
                             cx.emit(JobsEvent::Finished { label: label.into(), ok, error: err.map(Into::into) });
                         }
                         if reload {

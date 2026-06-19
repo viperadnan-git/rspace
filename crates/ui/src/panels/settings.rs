@@ -332,7 +332,7 @@ impl Workspace {
         self.db.clear_history();
         delete_rotated_logs(&self.paths.logs_dir());
         self.recent_remotes.clear();
-        self.job_history.clear();
+        self.jobs.update(cx, |j, _| j.refresh_history());
         self.refresh_storage_size();
         self.toast("Cleaned up", false, cx);
         cx.notify();

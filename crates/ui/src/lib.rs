@@ -185,6 +185,19 @@ struct SettingsView {
     rclone_cache_size: Option<u64>,
 }
 
+/// Transient overlay menus, reset as a unit by [`Workspace::close_menus`].
+#[derive(Default)]
+struct Menus {
+    /// Entry context menu: the entry and the cursor position.
+    context: Option<(Entry, Point<Pixels>)>,
+    /// Background (empty-space) menu position.
+    bg_menu: Option<Point<Pixels>>,
+    /// Remote right-click menu: the remote name and the cursor position.
+    remote_menu: Option<(String, Point<Pixels>)>,
+    /// The rc-daemon health popover (status bar).
+    rc_popover_open: bool,
+}
+
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
 #[derive(Clone)]
 struct Clipboard {
@@ -264,8 +277,9 @@ struct Workspace {
     /// The remotes sidebar pane (owns the cursor/scroll/focus).
     sidebar: Entity<Sidebar>,
     _sidebar_sub: gpui::Subscription,
-    /// Right-click menu on a remote: the remote name and the cursor position.
-    remote_menu: Option<(String, Point<Pixels>)>,
+    /// Transient right-click menus + the daemon popover (all reset together by
+    /// [`Self::close_menus`]).
+    menus: Menus,
     /// The settings panel and its local state (visibility, rclone-override edit,
     /// fetched storage/cache info, refresh-interval field).
     settings: SettingsView,
@@ -296,13 +310,9 @@ struct Workspace {
     /// Recently-opened remote names (newest first); refreshed on navigate, read
     /// by the welcome screen — kept out of the render path.
     recent_remotes: Vec<String>,
-    job_history: Vec<JobRecord>,
     /// Names of mounted remotes; refreshed after a mount/unmount, read by the
     /// sidebar and remote menu — kept out of the render path.
     mounted: HashSet<String>,
-    context: Option<(Entry, Point<Pixels>)>,
-    bg_menu: Option<Point<Pixels>>,
-    rc_popover_open: bool,
     /// The single active modal overlay (palette, remote config, mount options,
     /// confirm). At most one is open; see [`ActiveModal`].
     modal: Option<ActiveModal>,
@@ -334,7 +344,6 @@ impl Workspace {
         let ui = db.load_ui();
         let pinned = db.load_pinned();
         let recent_remotes = db.recent_remotes(RECENT_REMOTES_FETCH);
-        let job_history = db.recent_jobs(JOB_HISTORY_LIMIT);
         let mount_configs = db
             .load_mount_configs()
             .into_iter()
@@ -371,7 +380,6 @@ impl Workspace {
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
-                this.job_history = this.db.recent_jobs(JOB_HISTORY_LIMIT);
                 if *ok {
                     this.toast(label.clone(), false, cx);
                 } else {
@@ -394,7 +402,7 @@ impl Workspace {
             remotes: Vec::new(),
             sidebar,
             _sidebar_sub: sidebar_sub,
-            remote_menu: None,
+            menus: Menus::default(),
             settings: SettingsView {
                 open: false,
                 rclone_edit: None,
@@ -423,11 +431,7 @@ impl Workspace {
             ui,
             pinned,
             recent_remotes,
-            job_history,
             mounted: HashSet::new(),
-            context: None,
-            bg_menu: None,
-            rc_popover_open: false,
             modal: None,
             prompt: None,
             prompt_sub: None,
@@ -456,13 +460,13 @@ impl Workspace {
             }
             ExplorerEvent::OpenFile => self.open_preview(cx),
             ExplorerEvent::Context(entry, pos) => {
-                self.bg_menu = None;
-                self.context = Some((entry.clone(), *pos));
+                self.menus.bg_menu = None;
+                self.menus.context = Some((entry.clone(), *pos));
                 cx.notify();
             }
             ExplorerEvent::Background(pos) => {
-                self.context = None;
-                self.bg_menu = Some(*pos);
+                self.menus.context = None;
+                self.menus.bg_menu = Some(*pos);
                 cx.notify();
             }
             ExplorerEvent::Upload(paths) => self.upload_paths(paths.clone(), cx),
@@ -484,7 +488,7 @@ impl Workspace {
         match event {
             SidebarEvent::Open(ix) => self.load_remote(*ix, cx),
             SidebarEvent::Menu(name, pos) => {
-                self.remote_menu = Some((name.clone(), *pos));
+                self.menus.remote_menu = Some((name.clone(), *pos));
                 cx.notify();
             }
             SidebarEvent::Add => self.begin_add_remote(cx),
