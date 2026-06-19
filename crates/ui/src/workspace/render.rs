@@ -11,12 +11,12 @@ impl Render for Workspace {
         let explorer_focused = self.explorer.focus_handle(cx).contains_focused(window, cx);
         let sidebar_focused = self.sidebar.focus_handle(cx).contains_focused(window, cx);
         if self.modal.is_some() || self.prompt.is_some() {
-        } else if self.settings_open {
+        } else if self.settings.open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
             // input once, then leave it be (re-focusing each frame would trap it).
-            if let Some((_, input)) = self.rclone_edit.clone() {
+            if let Some((_, input)) = self.settings.rclone_edit.clone() {
                 let handle = input.read(cx).focus_handle(cx);
-                focus_once(&mut self.rclone_edit_focus, &handle, window, cx);
+                focus_once(&mut self.settings.rclone_edit_focus, &handle, window, cx);
             }
         } else if !explorer_focused && !sidebar_focused && !self.focus.is_focused(window) {
             // Focus lost (e.g. a modal closed): route to the active pane.
@@ -103,7 +103,7 @@ impl Render for Workspace {
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
             .when(self.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
-            .when(self.settings_open, |el| el.child(self.render_settings(cx)))
+            .when(self.settings.open, |el| el.child(self.render_settings(cx)))
             .children(self.render_modal(cx))
             .child(self.toasts.clone())
     }

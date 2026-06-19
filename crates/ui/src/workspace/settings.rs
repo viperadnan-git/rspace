@@ -44,14 +44,14 @@ impl Workspace {
     }
 
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        self.settings_open = true;
+        self.settings.open = true;
         self.refresh_storage_size();
         self.fetch_rclone_info(cx);
         cx.notify();
     }
 
     pub(crate) fn refresh_storage_size(&mut self) {
-        self.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
+        self.settings.storage_size = Some((dir_size(self.paths.root()), dir_size(&self.paths.cache_dir())));
     }
 
     /// Resolve rclone's own paths (`config/paths`, fetched once) and size its
@@ -61,7 +61,7 @@ impl Workspace {
         let service = self.service.clone();
         // Resolve paths only once (they don't change at runtime); the size walk
         // runs every open so it stays fresh.
-        let cache = self.rclone_paths.as_ref().map(|p| p.cache.clone());
+        let cache = self.settings.rclone_paths.as_ref().map(|p| p.cache.clone());
         cx.spawn(async move |this, cx| {
             let (cache, fetched) = match cache {
                 Some(cache) => (cache, None),
@@ -72,9 +72,9 @@ impl Workspace {
             };
             let size = cx.background_executor().spawn(async move { dir_size(Path::new(&cache)) }).await;
             this.update(cx, |this, cx| {
-                this.rclone_cache_size = Some(size);
+                this.settings.rclone_cache_size = Some(size);
                 if let Some(paths) = fetched {
-                    this.rclone_paths = Some(paths);
+                    this.settings.rclone_paths = Some(paths);
                 }
                 cx.notify();
             })
@@ -147,7 +147,7 @@ impl Workspace {
     }
 
     pub(crate) fn close_settings(&mut self, _: &CloseSettings, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open
+        if self.settings.open
             || self.context.is_some()
             || self.remote_menu.is_some()
             || self.bg_menu.is_some()
@@ -155,7 +155,7 @@ impl Workspace {
             || self.prompt.is_some()
             || self.jobs_open
         {
-            self.settings_open = false;
+            self.settings.open = false;
             self.jobs_open = false;
             self.prompt = None;
             self.close_modal(cx);

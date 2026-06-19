@@ -21,7 +21,7 @@ impl Workspace {
                     .child(
                         icon_button("settings-close", "icons/x.svg").on_click(cx.listener(
                             |this, _: &ClickEvent, _, cx| {
-                                this.settings_open = false;
+                                this.settings.open = false;
                                 cx.notify();
                             },
                         )),
@@ -48,7 +48,7 @@ impl Workspace {
             true,
             false,
             |this, cx| {
-                this.settings_open = false;
+                this.settings.open = false;
                 cx.notify();
             },
             card,
@@ -83,14 +83,14 @@ impl Workspace {
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(self.refresh_field.clone())
+                .child(self.settings.refresh_field.clone())
                 .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("seconds")),
         )
     }
 
 
     fn storage_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (total, clearable) = self.storage_size.unwrap_or_default();
+        let (total, clearable) = self.settings.storage_size.unwrap_or_default();
         let summary = format!("{} · {} clearable", human_size(total as i64), human_size(clearable as i64));
         setting_block(
             "Storage",
@@ -107,9 +107,9 @@ impl Workspace {
     /// size and a clear action. Paths are clickable and open with the OS default.
     fn rclone_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let binary = Some(self.rclone_bin.clone()).filter(|s| !s.is_empty());
-        let config = self.rclone_paths.as_ref().map(|p| p.config.clone());
-        let cache = self.rclone_paths.as_ref().map(|p| p.cache.clone());
-        let cache_label = match self.rclone_cache_size {
+        let config = self.settings.rclone_paths.as_ref().map(|p| p.config.clone());
+        let cache = self.settings.rclone_paths.as_ref().map(|p| p.cache.clone());
+        let cache_label = match self.settings.rclone_cache_size {
             Some(b) => SharedString::from(format!("Cache · {}", human_size(b as i64))),
             None => "Cache".into(),
         };
@@ -158,7 +158,7 @@ impl Workspace {
                 ("rclone-config", "change-config", "reset-config", "browse-config", "cancel-config", "save-config")
             }
         };
-        let editing = self.rclone_edit.as_ref().filter(|(f, _)| *f == field).map(|(_, i)| i.clone());
+        let editing = self.settings.rclone_edit.as_ref().filter(|(f, _)| *f == field).map(|(_, i)| i.clone());
         if let Some(input) = editing {
             return h_flex()
                 .w_full()
@@ -198,19 +198,19 @@ impl Workspace {
         if !current.is_empty() {
             input.update(cx, |i, cx| i.set_text(current, cx));
         }
-        self.rclone_edit = Some((field, input));
-        self.rclone_edit_focus = true;
+        self.settings.rclone_edit = Some((field, input));
+        self.settings.rclone_edit_focus = true;
         cx.notify();
     }
 
     fn cancel_rclone_edit(&mut self, cx: &mut Context<Self>) {
-        self.rclone_edit = None;
+        self.settings.rclone_edit = None;
         cx.notify();
     }
 
     /// Save the edited override (validating the binary), then relaunch.
     fn confirm_rclone_edit(&mut self, cx: &mut Context<Self>) {
-        let Some((field, input)) = self.rclone_edit.as_ref() else {
+        let Some((field, input)) = self.settings.rclone_edit.as_ref() else {
             return;
         };
         let field = *field;
@@ -229,7 +229,7 @@ impl Workspace {
 
     /// Fill the edit input from a file picker (the user still confirms).
     fn browse_rclone_edit(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, input)) = self.rclone_edit.as_ref() {
+        if let Some((_, input)) = self.settings.rclone_edit.as_ref() {
             pick_file_into(input.clone(), cx);
         }
     }
@@ -290,7 +290,7 @@ impl Workspace {
             self.toast("Unmount all remotes before clearing the cache", true, cx);
             return;
         }
-        if self.rclone_paths.is_none() {
+        if self.settings.rclone_paths.is_none() {
             return;
         }
         self.ask_confirm(
@@ -308,11 +308,11 @@ impl Workspace {
             self.toast("Unmount all remotes before clearing the cache", true, cx);
             return;
         }
-        let Some(cache) = self.rclone_paths.as_ref().map(|p| p.cache.clone()) else {
+        let Some(cache) = self.settings.rclone_paths.as_ref().map(|p| p.cache.clone()) else {
             return;
         };
         let _ = std::fs::remove_dir_all(&cache);
-        self.rclone_cache_size = Some(0);
+        self.settings.rclone_cache_size = Some(0);
         self.toast("rclone cache cleared", false, cx);
     }
 

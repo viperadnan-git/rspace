@@ -170,6 +170,21 @@ struct Location {
     selected: Option<String>,
 }
 
+/// Settings-panel state, grouped off the workspace. The panel is rendered by
+/// `panels::settings` and orchestrated by `workspace::settings`.
+struct SettingsView {
+    open: bool,
+    /// In-progress rclone binary/config override edit (field + input).
+    rclone_edit: Option<(RcloneField, Entity<TextInput>)>,
+    /// Focus the rclone edit input once when it opens (not every frame, which
+    /// would trap focus in it).
+    rclone_edit_focus: bool,
+    refresh_field: Entity<NumberField>,
+    storage_size: Option<(u64, u64)>,
+    rclone_paths: Option<ConfigPaths>,
+    rclone_cache_size: Option<u64>,
+}
+
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
 #[derive(Clone)]
 struct Clipboard {
@@ -251,11 +266,9 @@ struct Workspace {
     _sidebar_sub: gpui::Subscription,
     /// Right-click menu on a remote: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
-    /// In-progress rclone binary/config override edit in Settings (field + input).
-    rclone_edit: Option<(RcloneField, Entity<TextInput>)>,
-    /// Focus the rclone edit input once when it opens (not every frame, which
-    /// would trap focus in it).
-    rclone_edit_focus: bool,
+    /// The settings panel and its local state (visibility, rclone-override edit,
+    /// fetched storage/cache info, refresh-interval field).
+    settings: SettingsView,
     /// Per-remote mount config (cache mode, read-only, limits); cached from the
     /// DB, edited via the mount-options modal, read when mounting.
     mount_configs: HashMap<String, MountConfig>,
@@ -287,10 +300,6 @@ struct Workspace {
     /// Names of mounted remotes; refreshed after a mount/unmount, read by the
     /// sidebar and remote menu — kept out of the render path.
     mounted: HashSet<String>,
-    storage_size: Option<(u64, u64)>,
-    rclone_paths: Option<ConfigPaths>,
-    rclone_cache_size: Option<u64>,
-    settings_open: bool,
     context: Option<(Entry, Point<Pixels>)>,
     bg_menu: Option<Point<Pixels>>,
     rc_popover_open: bool,
@@ -301,7 +310,6 @@ struct Workspace {
     prompt_sub: Option<gpui::Subscription>,
     toasts: Entity<Toasts>,
     jobs: Entity<Jobs>,
-    refresh_field: Entity<NumberField>,
     jobs_open: bool,
     jobs_maximized: bool,
     preview_open: bool,
@@ -386,8 +394,15 @@ impl Workspace {
             sidebar,
             _sidebar_sub: sidebar_sub,
             remote_menu: None,
-            rclone_edit: None,
-            rclone_edit_focus: false,
+            settings: SettingsView {
+                open: false,
+                rclone_edit: None,
+                rclone_edit_focus: false,
+                refresh_field,
+                storage_size: None,
+                rclone_paths: None,
+                rclone_cache_size: None,
+            },
             mount_configs,
             sidebar_width,
             preview_width,
@@ -409,10 +424,6 @@ impl Workspace {
             recent_remotes,
             job_history,
             mounted: HashSet::new(),
-            storage_size: None,
-            rclone_paths: None,
-            rclone_cache_size: None,
-            settings_open: false,
             context: None,
             bg_menu: None,
             rc_popover_open: false,
@@ -421,7 +432,6 @@ impl Workspace {
             prompt_sub: None,
             toasts,
             jobs,
-            refresh_field,
             jobs_open: false,
             jobs_maximized,
             preview_open,
