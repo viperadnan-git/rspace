@@ -2,6 +2,9 @@
 //! messages (errors/confirmations), a `Pending` spinner that stays until
 //! resolved (the promise-toast lifecycle for async ops), and a rich `Info`
 //! card (icon + title + labelled rows) for read-only info-op results.
+//!
+//! Owns its own stack and dismiss timers as a self-contained layer (Zed's
+//! `ToastLayer`); the workspace holds it as `Entity<Toasts>` and delegates.
 
 use std::time::Duration;
 
@@ -14,13 +17,13 @@ const TOAST_TTL: Duration = Duration::from_secs(6);
 /// Info results linger longer — there's more to read.
 const INFO_TTL: Duration = Duration::from_secs(10);
 
-pub(crate) struct Toast {
+struct Toast {
     id: usize,
     body: ToastBody,
 }
 
-/// A toast's content. `Pending` has no TTL until [`Workspace::resolve_toast`]
-/// swaps in a result.
+/// A toast's content. `Pending` has no TTL until [`Toasts::resolve`] swaps in a
+/// result.
 pub(crate) enum ToastBody {
     Message { message: SharedString, danger: bool },
     Pending { label: SharedString },
@@ -35,33 +38,49 @@ pub(crate) enum ToastBody {
     },
 }
 
-impl Workspace {
+pub(crate) struct Toasts {
+    items: Vec<Toast>,
+    seq: usize,
+    /// Dismiss timers pause while the window is unfocused (Sonner-style), so a
+    /// toast can't expire while the user isn't looking.
+    window_active: bool,
+}
+
+impl Toasts {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_window_activation(window, |this, window, _| {
+            this.window_active = window.is_window_active();
+        })
+        .detach();
+        Self { items: Vec::new(), seq: 0, window_active: true }
+    }
+
     /// Show a transient message; auto-dismisses after [`TOAST_TTL`].
     pub(crate) fn toast(&mut self, message: impl Into<SharedString>, danger: bool, cx: &mut Context<Self>) {
-        self.push_toast(ToastBody::Message { message: message.into(), danger }, Some(TOAST_TTL), cx);
+        self.push(ToastBody::Message { message: message.into(), danger }, Some(TOAST_TTL), cx);
     }
 
     /// Show a message that stays until the user dismisses it (no auto-dismiss).
     pub(crate) fn toast_sticky(&mut self, message: impl Into<SharedString>, danger: bool, cx: &mut Context<Self>) {
-        self.push_toast(ToastBody::Message { message: message.into(), danger }, None, cx);
+        self.push(ToastBody::Message { message: message.into(), danger }, None, cx);
     }
 
-    /// Show a spinner toast that stays until [`Self::resolve_toast`]; returns
-    /// its id so the caller can resolve it when its async work completes.
+    /// Show a spinner toast that stays until [`Self::resolve`]; returns its id so
+    /// the caller can resolve it when its async work completes.
     pub(crate) fn toast_pending(&mut self, label: impl Into<SharedString>, cx: &mut Context<Self>) -> usize {
-        self.push_toast(ToastBody::Pending { label: label.into() }, None, cx)
+        self.push(ToastBody::Pending { label: label.into() }, None, cx)
     }
 
     /// Replace a pending toast's content with its result. When `auto_dismiss`,
     /// it fades after a TTL; otherwise it stays until the user dismisses it.
     /// Falls back to a fresh toast if the pending one was dismissed.
-    pub(crate) fn resolve_toast(&mut self, id: usize, body: ToastBody, auto_dismiss: bool, cx: &mut Context<Self>) {
+    pub(crate) fn resolve(&mut self, id: usize, body: ToastBody, auto_dismiss: bool, cx: &mut Context<Self>) {
         let ttl = auto_dismiss
             .then(|| if matches!(body, ToastBody::Info { .. }) { INFO_TTL } else { TOAST_TTL });
-        match self.toasts.iter_mut().find(|t| t.id == id) {
+        match self.items.iter_mut().find(|t| t.id == id) {
             Some(t) => t.body = body,
             None => {
-                self.push_toast(body, ttl, cx);
+                self.push(body, ttl, cx);
                 return;
             }
         }
@@ -71,10 +90,10 @@ impl Workspace {
         cx.notify();
     }
 
-    fn push_toast(&mut self, body: ToastBody, ttl: Option<Duration>, cx: &mut Context<Self>) -> usize {
-        let id = self.toast_seq;
-        self.toast_seq += 1;
-        self.toasts.push(Toast { id, body });
+    fn push(&mut self, body: ToastBody, ttl: Option<Duration>, cx: &mut Context<Self>) -> usize {
+        let id = self.seq;
+        self.seq += 1;
+        self.items.push(Toast { id, body });
         if let Some(ttl) = ttl {
             self.schedule_dismiss(id, ttl, cx);
         }
@@ -83,16 +102,14 @@ impl Workspace {
     }
 
     fn schedule_dismiss(&self, id: usize, ttl: Duration, cx: &mut Context<Self>) {
-        // Count down only while the window is focused (Sonner-style): a toast
-        // never expires while the user is looking elsewhere. Poll in small ticks
-        // and accumulate active time until it reaches the TTL.
+        // Poll in small ticks and accumulate active time until it reaches the TTL.
         cx.spawn(async move |this, cx| {
             let tick = Duration::from_millis(200);
             let mut active_elapsed = Duration::ZERO;
             while active_elapsed < ttl {
                 cx.background_executor().timer(tick).await;
                 let Ok((present, active)) = this.update(cx, |this, _| {
-                    (this.toasts.iter().any(|t| t.id == id), this.window_active)
+                    (this.items.iter().any(|t| t.id == id), this.window_active)
                 }) else {
                     return;
                 };
@@ -103,28 +120,17 @@ impl Workspace {
                     active_elapsed += tick;
                 }
             }
-            this.update(cx, |this, cx| this.dismiss_toast(id, cx)).ok();
+            this.update(cx, |this, cx| this.dismiss(id, cx)).ok();
         })
         .detach();
     }
 
-    fn dismiss_toast(&mut self, id: usize, cx: &mut Context<Self>) {
-        self.toasts.retain(|t| t.id != id);
+    fn dismiss(&mut self, id: usize, cx: &mut Context<Self>) {
+        self.items.retain(|t| t.id != id);
         cx.notify();
     }
 
-    pub(crate) fn render_toasts(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Deferred above the modal overlays (priority 3) so toasts surface on top
-        // of Settings/confirm dialogs rather than behind them.
-        deferred(
-            div().absolute().bottom_4().right_4().child(
-                v_flex().gap_2().items_end().children(self.toasts.iter().map(|t| self.toast_card(t, cx))),
-            ),
-        )
-        .priority(4)
-    }
-
-    fn toast_card(&self, toast: &Toast, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn card(&self, toast: &Toast, cx: &mut Context<Self>) -> gpui::AnyElement {
         let id = toast.id;
         let card = h_flex()
             .id(("toast", id))
@@ -141,7 +147,7 @@ impl Workspace {
             .text_sm()
             .text_color(rgb(FG));
         let dismiss = icon_button(("toast-x", id), "icons/x.svg")
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_toast(id, cx)));
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss(id, cx)));
         match &toast.body {
             ToastBody::Pending { label } => card
                 .child(spinner(("toast-spin", id), px(14.0), FG_MUTED))
@@ -194,5 +200,18 @@ impl Workspace {
                 .child(dismiss)
                 .into_any_element(),
         }
+    }
+}
+
+impl Render for Toasts {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Deferred above the modal overlays (priority 3) so toasts surface on top
+        // of Settings/confirm dialogs rather than behind them.
+        deferred(
+            div().absolute().bottom_4().right_4().child(
+                v_flex().gap_2().items_end().children(self.items.iter().map(|t| self.card(t, cx))),
+            ),
+        )
+        .priority(4)
     }
 }

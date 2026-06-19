@@ -49,10 +49,9 @@ use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
 use picker::Picker;
 use prompt::PromptModal;
-use toast::{Toast, ToastBody};
+use toast::{ToastBody, Toasts};
+use workspace::modal::ActiveModal;
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
-use remotes::RemoteConfigModal;
-use mount_options::MountOptionsModal;
 use number_field::{NumberField, NumberFieldEvent};
 use text_input::TextInput;
 use query::{Query, Status};
@@ -253,13 +252,6 @@ struct Workspace {
     remote_scroll: UniformListScrollHandle,
     /// Right-click menu on a remote: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
-    /// Open add/edit-remote modal (schema-driven, backend-agnostic).
-    remote_config: Option<Entity<RemoteConfigModal>>,
-    /// Subscription to the open modal's dismiss/saved events.
-    remote_config_sub: Option<gpui::Subscription>,
-    /// Open per-remote mount-options modal + its event subscription.
-    mount_options: Option<Entity<MountOptionsModal>>,
-    mount_options_sub: Option<gpui::Subscription>,
     /// In-progress rclone binary/config override edit in Settings (field + input).
     rclone_edit: Option<(RcloneField, Entity<TextInput>)>,
     /// Focus the rclone edit input once when it opens (not every frame, which
@@ -322,14 +314,12 @@ struct Workspace {
     context: Option<(Entry, Point<Pixels>)>,
     bg_menu: Option<Point<Pixels>>,
     rc_popover_open: bool,
-    command_palette: Option<Entity<Picker<CommandPaletteDelegate>>>,
-    command_palette_sub: Option<gpui::Subscription>,
-    confirm: Option<Entity<ConfirmModal>>,
-    confirm_sub: Option<gpui::Subscription>,
+    /// The single active modal overlay (palette, remote config, mount options,
+    /// confirm). At most one is open; see [`ActiveModal`].
+    modal: Option<ActiveModal>,
     prompt: Option<Entity<PromptModal>>,
     prompt_sub: Option<gpui::Subscription>,
-    toasts: Vec<Toast>,
-    toast_seq: usize,
+    toasts: Entity<Toasts>,
     jobs: Entity<Jobs>,
     refresh_field: Entity<NumberField>,
     jobs_open: bool,
@@ -340,9 +330,6 @@ struct Workspace {
     preview_cache: Vec<(String, PreviewState)>,
     rc_health: RcHealth,
     clipboard: Option<Clipboard>,
-    /// Whether the OS window is focused; toast dismiss timers pause when not
-    /// (Sonner-style), so a toast can't expire while the user isn't looking.
-    window_active: bool,
 }
 
 impl Workspace {
@@ -394,10 +381,7 @@ impl Workspace {
             }
         })
         .detach();
-        cx.observe_window_activation(window, |this, window, _| {
-            this.window_active = window.is_window_active();
-        })
-        .detach();
+        let toasts = cx.new(|cx| Toasts::new(window, cx));
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
@@ -426,12 +410,8 @@ impl Workspace {
             remote_sel: 0,
             remote_scroll: UniformListScrollHandle::new(),
             remote_menu: None,
-            remote_config: None,
-            remote_config_sub: None,
-            mount_options: None,
             rclone_edit: None,
             rclone_edit_focus: false,
-            mount_options_sub: None,
             mount_configs,
             sidebar_width,
             preview_width,
@@ -473,14 +453,10 @@ impl Workspace {
             context: None,
             bg_menu: None,
             rc_popover_open: false,
-            command_palette: None,
-            command_palette_sub: None,
-            confirm: None,
-            confirm_sub: None,
+            modal: None,
             prompt: None,
             prompt_sub: None,
-            toasts: Vec::new(),
-            toast_seq: 0,
+            toasts,
             jobs,
             refresh_field,
             jobs_open: false,
@@ -490,7 +466,6 @@ impl Workspace {
             preview_cache: Vec::new(),
             rc_health: RcHealth::Unknown,
             clipboard: None,
-            window_active: true,
         };
         this.load_remotes(cx);
         Self::poll_health(window, cx);

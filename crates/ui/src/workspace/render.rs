@@ -10,12 +10,7 @@ impl Render for Workspace {
         // Keep focus on the open dialog, else on the workspace — so each owns the
         // keyboard while shown, and focus returns here when it closes. The modal
         // entities (remote config, confirm) steer their own focus.
-        if self.remote_config.is_some()
-            || self.confirm.is_some()
-            || self.prompt.is_some()
-            || self.command_palette.is_some()
-            || self.mount_options.is_some()
-        {
+        if self.modal.is_some() || self.prompt.is_some() {
         } else if self.settings_open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
             // input once, then leave it be (re-focusing each frame would trap it).
@@ -108,52 +103,8 @@ impl Render for Workspace {
             .when(self.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
             .when(self.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
-            .when_some(self.command_palette.clone(), |el, palette| {
-                el.child(self.modal_overlay(
-                    true,
-                    true,
-                    |this, cx| {
-                        this.command_palette = None;
-                        cx.notify();
-                    },
-                    palette,
-                    cx,
-                ))
-            })
-            .when_some(self.remote_config.clone(), |el, modal| {
-                el.child(self.modal_overlay(
-                    false,
-                    false,
-                    |this, cx| this.close_remote_config(cx),
-                    modal,
-                    cx,
-                ))
-            })
-            .when_some(self.mount_options.clone(), |el, modal| {
-                el.child(self.modal_overlay(
-                    false,
-                    false,
-                    |this, cx| {
-                        this.mount_options = None;
-                        cx.notify();
-                    },
-                    modal,
-                    cx,
-                ))
-            })
             .when(self.settings_open, |el| el.child(self.render_settings(cx)))
-            .when_some(self.confirm.clone(), |el, modal| {
-                el.child(self.modal_overlay(
-                    true,
-                    false,
-                    |this, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    },
-                    modal,
-                    cx,
-                ))
-            })
-            .when(!self.toasts.is_empty(), |el| el.child(self.render_toasts(cx)))
+            .children(self.render_modal(cx))
+            .child(self.toasts.clone())
     }
 }

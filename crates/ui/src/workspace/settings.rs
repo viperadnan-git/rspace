@@ -4,15 +4,11 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn toggle_palette(&mut self, _: &TogglePalette, window: &mut Window, cx: &mut Context<Self>) {
-        if self.command_palette.take().is_some() {
-            cx.notify();
+        if self.modal_is::<Picker<CommandPaletteDelegate>>() {
+            self.close_modal(cx);
             return;
         }
-        if self.confirm.is_some()
-            || self.prompt.is_some()
-            || self.remote_config.is_some()
-            || self.mount_options.is_some()
-        {
+        if self.modal.is_some() || self.prompt.is_some() {
             return;
         }
         let previous_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
@@ -35,12 +31,8 @@ impl Workspace {
             );
             Picker::new(delegate, window, cx)
         });
-        self.command_palette_sub = Some(cx.subscribe(&palette, |this, _, _: &DismissEvent, cx| {
-            this.command_palette = None;
-            cx.notify();
-        }));
-        self.command_palette = Some(palette);
-        cx.notify();
+        let sub = cx.subscribe(&palette, |this, _, _: &DismissEvent, cx| this.close_modal(cx));
+        self.show_modal(ActiveModal::new(palette).align_top().deferred().subscribe(sub), cx);
     }
 
     pub(crate) fn action_add_remote(&mut self, _: &AddRemote, _: &mut Window, cx: &mut Context<Self>) {
@@ -112,17 +104,16 @@ impl Workspace {
         let modal =
             cx.new(|cx| ConfirmModal::new(title, message, confirm_label, danger, cx));
         let mut action = Some(action);
-        self.confirm_sub = Some(cx.subscribe(&modal, move |this, _, event, cx| {
-            this.confirm = None;
+        let sub = cx.subscribe(&modal, move |this, _, event, cx| {
+            this.modal = None;
             if let confirm::ConfirmEvent::Accepted = event {
                 if let Some(action) = action.take() {
                     action(this, cx);
                 }
             }
             cx.notify();
-        }));
-        self.confirm = Some(modal);
-        cx.notify();
+        });
+        self.show_modal(ActiveModal::new(modal).deferred().subscribe(sub), cx);
     }
 
     /// Start an inline edit; `action` runs with the entered text on submit.
@@ -160,20 +151,14 @@ impl Workspace {
             || self.context.is_some()
             || self.remote_menu.is_some()
             || self.bg_menu.is_some()
-            || self.command_palette.is_some()
-            || self.confirm.is_some()
+            || self.modal.is_some()
             || self.prompt.is_some()
-            || self.remote_config.is_some()
-            || self.mount_options.is_some()
             || self.jobs_open
         {
             self.settings_open = false;
             self.jobs_open = false;
-            self.command_palette = None;
-            self.confirm = None;
             self.prompt = None;
-            self.mount_options = None;
-            self.close_remote_config(cx);
+            self.close_modal(cx);
             self.close_menus();
             cx.notify();
         } else if self.pane == Pane::Explorer && self.selected.len() > 1 {

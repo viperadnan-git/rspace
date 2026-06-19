@@ -93,18 +93,17 @@ impl Workspace {
     pub(crate) fn begin_mount_options(&mut self, remote: String, cx: &mut Context<Self>) {
         let config = self.mount_config_for(&remote);
         let modal = cx.new(|cx| MountOptionsModal::new(remote.clone(), config, cx));
-        self.mount_options_sub = Some(cx.subscribe(&modal, move |this, _, event, cx| {
+        let sub = cx.subscribe(&modal, move |this, _, event, cx| {
             match event {
                 MountOptionsEvent::Save(config) => {
                     this.apply_mount_config(remote.clone(), config.clone(), cx);
-                    this.mount_options = None;
+                    this.modal = None;
                 }
-                MountOptionsEvent::Dismiss => this.mount_options = None,
+                MountOptionsEvent::Dismiss => this.modal = None,
             }
             cx.notify();
-        }));
-        self.mount_options = Some(modal);
-        cx.notify();
+        });
+        self.show_modal(ActiveModal::new(modal).subscribe(sub), cx);
     }
 }
 

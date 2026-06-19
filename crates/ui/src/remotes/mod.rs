@@ -438,30 +438,26 @@ impl Workspace {
         modal: Entity<RemoteConfigModal>,
         cx: &mut Context<Self>,
     ) {
-        self.remote_config_sub = Some(cx.subscribe(&modal, |this, _, event, cx| match event {
+        let sub = cx.subscribe(&modal, |this, _, event, cx| match event {
             RemoteConfigEvent::Saved => {
-                this.remote_config = None;
+                this.modal = None;
                 this.load_remotes(cx);
             }
-            RemoteConfigEvent::Dismiss => this.close_remote_config(cx),
-        }));
-        self.remote_config = Some(modal);
-        cx.notify();
-    }
-
-    /// Close the modal. If a config step was in flight, also stop rclone's OAuth
-    /// webserver so an abandoned interactive auth doesn't keep its port bound.
-    pub(crate) fn close_remote_config(&mut self, cx: &mut Context<Self>) {
-        if let Some(modal) = self.remote_config.take() {
-            if modal.read(cx).is_busy() {
-                let service = self.service.clone();
+            RemoteConfigEvent::Dismiss => this.close_modal(cx),
+        });
+        // On dismiss with a config step in flight, stop rclone's OAuth webserver
+        // so an abandoned interactive auth doesn't keep its port bound.
+        let busy = modal.clone();
+        let on_dismiss = move |this: &mut Workspace, cx: &mut Context<Workspace>| {
+            if busy.read(cx).is_busy() {
+                let service = this.service.clone();
                 cx.spawn(async move |_, _| {
                     let _ = service.config_oauth_stop().await;
                 })
                 .detach();
             }
-        }
-        cx.notify();
+        };
+        self.show_modal(ActiveModal::new(modal).on_dismiss(on_dismiss).subscribe(sub), cx);
     }
 }
 
