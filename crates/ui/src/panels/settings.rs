@@ -5,7 +5,7 @@ use super::*;
 impl Workspace {
     pub(crate) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let card = modal_card("settings-card", &self.focus, cx)
-            .w(px(480.0))
+            .w(rem(480.0))
             .max_h(relative(0.85))
             .gap_0()
             .child(
@@ -36,6 +36,7 @@ impl Workspace {
                     .pt_4()
                     .gap_5()
                     .child(self.refresh_setting(cx))
+                    .child(self.ui_font_setting(cx))
                     .child(divider())
                     .child(self.download_setting(cx))
                     .child(divider())
@@ -85,6 +86,18 @@ impl Workspace {
                 .items_center()
                 .child(self.settings.refresh_field.clone())
                 .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("seconds")),
+        )
+    }
+
+    fn ui_font_setting(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        setting_block(
+            "UI font size",
+            "Base interface font size; everything scales from it. Also \u{2318}+ / \u{2318}- / \u{2318}0.",
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(self.settings.ui_font_field.clone())
+                .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("px")),
         )
     }
 

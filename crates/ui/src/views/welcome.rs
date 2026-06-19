@@ -41,7 +41,7 @@ impl Workspace {
                         .flex_wrap()
                         .justify_center()
                         .gap_1p5()
-                        .max_w(px(360.0))
+                        .max_w(rem(360.0))
                         .children(recent.into_iter().enumerate().map(|(ix, r)| self.recent_remote_row(ix, r, cx))),
                 )
             })
@@ -76,7 +76,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.navigate(name.clone(), String::new(), None, cx)
             }))
-            .child(svg().path(remote_icon(&remote.kind)).size(px(12.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
+            .child(svg().path(remote_icon(&remote.kind)).size(rem(12.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
             .child(div().text_xs().text_color(rgb(FG)).child(remote.name.clone()))
     }
 

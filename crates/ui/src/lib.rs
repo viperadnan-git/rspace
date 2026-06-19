@@ -104,7 +104,10 @@ actions!(
         OpenSettings,
         RestartDaemon,
         ToggleTransfers,
-        ToggleSearch
+        ToggleSearch,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset
     ]
 );
 
@@ -152,6 +155,8 @@ struct SettingsView {
     /// would trap focus in it).
     rclone_edit_focus: bool,
     refresh_field: Entity<NumberField>,
+    /// UI font-size stepper in px (mirrors `ui_font_size`).
+    ui_font_field: Entity<NumberField>,
     storage_size: Option<(u64, u64)>,
     rclone_paths: Option<ConfigPaths>,
     rclone_cache_size: Option<u64>,
@@ -338,6 +343,15 @@ impl Workspace {
             this.set_refresh(*secs, cx);
         })
         .detach();
+        let font_px = store.get().ui_font_size.round() as u64;
+        let ui_font_field =
+            cx.new(|cx| NumberField::new(font_px, UI_FONT_MIN as u64, UI_FONT_MAX as u64, 1, cx));
+        cx.subscribe(&ui_font_field, |this, _, ev, cx| {
+            let NumberFieldEvent::Changed(px) = ev;
+            this.store.update(|s| s.ui_font_size = (*px as f32).clamp(UI_FONT_MIN, UI_FONT_MAX));
+            cx.notify();
+        })
+        .detach();
         let toasts = cx.new(|cx| Toasts::new(window, cx));
         let weak = cx.entity().downgrade();
         let settings = store.get();
@@ -396,6 +410,7 @@ impl Workspace {
                 rclone_edit: None,
                 rclone_edit_focus: false,
                 refresh_field,
+                ui_font_field,
                 storage_size: None,
                 rclone_paths: None,
                 rclone_cache_size: None,

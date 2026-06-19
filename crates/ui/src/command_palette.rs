@@ -343,7 +343,7 @@ impl CommandPaletteDelegate {
 
 /// A 15px svg glyph for a palette row icon.
 fn glyph(path: &'static str, color: u32) -> impl IntoElement {
-    gpui::svg().path(path).size(px(15.0)).flex_shrink_0().text_color(rgb(color))
+    gpui::svg().path(path).size(rem(15.0)).flex_shrink_0().text_color(rgb(color))
 }
 
 /// A palette row's icon + label, shrinkable so the label truncates.

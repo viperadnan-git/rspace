@@ -38,7 +38,7 @@ impl Workspace {
         let outer = if maximized {
             v_flex().flex_1().min_h(px(0.0))
         } else {
-            v_flex().h(px(260.0)).flex_shrink_0()
+            v_flex().h(rem(260.0)).flex_shrink_0()
         };
         outer
             .bg(rgb(INSET))
@@ -126,7 +126,7 @@ impl Workspace {
         div()
             .id(SharedString::from(format!("target-{job_id}-{index}")))
             .min_w(px(0.0))
-            .max_w(px(220.0))
+            .max_w(rem(220.0))
             .px_1()
             .rounded_md()
             .truncate()
@@ -151,9 +151,9 @@ impl Workspace {
         let percent = format!("{}%", (pct * 100.0).round() as u32);
         // Title-line status icon: spinner while running, check / alert when settled.
         let icon: AnyElement = if job.error.is_some() {
-            svg().path("icons/alert.svg").size(px(14.0)).text_color(rgb(DANGER)).into_any_element()
+            svg().path("icons/alert.svg").size(rem(14.0)).text_color(rgb(DANGER)).into_any_element()
         } else if job.done {
-            svg().path("icons/check.svg").size(px(14.0)).text_color(rgb(SUCCESS)).into_any_element()
+            svg().path("icons/check.svg").size(rem(14.0)).text_color(rgb(SUCCESS)).into_any_element()
         } else {
             spinner(SharedString::from(format!("spin-{id}")), px(14.0), ACCENT).into_any_element()
         };
@@ -252,8 +252,8 @@ impl Workspace {
                         .child(
                             div()
                                 .flex_grow(1.0)
-                                .min_w(px(140.0))
-                                .max_w(px(320.0))
+                                .min_w(rem(140.0))
+                                .max_w(rem(320.0))
                                 .h(px(4.0))
                                 .rounded_full()
                                 .bg(rgba(OVERLAY))
@@ -262,7 +262,7 @@ impl Workspace {
                                 ),
                         )
                         .child(
-                            div().w(px(34.0)).flex_shrink_0().text_xs().text_color(rgb(FG_MUTED)).child(percent),
+                            div().w(rem(34.0)).flex_shrink_0().text_xs().text_color(rgb(FG_MUTED)).child(percent),
                         ),
                 )
             })
@@ -316,7 +316,7 @@ fn job_history_row(job: &JobRecord) -> Div {
         .items_center()
         .border_t_1()
         .border_color(rgb(SEPARATOR))
-        .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(rgb(if ok { SUCCESS } else { DANGER })))
+        .child(div().size(rem(6.0)).flex_shrink_0().rounded_full().bg(rgb(if ok { SUCCESS } else { DANGER })))
         .child(div().flex_shrink_0().text_color(rgb(FG)).child(job.op.clone()))
         .child(div().flex_1().min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(path))
         .child(div().flex_shrink_0().text_xs().text_color(rgb(FG_SUBTLE)).child(meta))

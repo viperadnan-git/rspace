@@ -134,7 +134,7 @@ impl Toasts {
         let id = toast.id;
         let card = h_flex()
             .id(("toast", id))
-            .max_w(px(360.0))
+            .max_w(rem(360.0))
             .px_3()
             .py_2()
             .gap_2()
@@ -157,7 +157,7 @@ impl Toasts {
                 .child(
                     svg()
                         .path(if *danger { "icons/alert.svg" } else { "icons/check.svg" })
-                        .size(px(15.0))
+                        .size(rem(15.0))
                         .flex_shrink_0()
                         .text_color(rgb(if *danger { DANGER } else { SUCCESS })),
                 )
@@ -179,7 +179,7 @@ impl Toasts {
                                 // Cap-center nudge: the title line box centers on its em center,
                                 // above the cap center (ascent padding; gpui has no leading-trim).
                                 .children((*icon).map(|i| {
-                                    svg().path(i).size(px(15.0)).flex_shrink_0().mt(px(1.0)).text_color(rgb(FG_MUTED))
+                                    svg().path(i).size(rem(15.0)).flex_shrink_0().mt(px(1.0)).text_color(rgb(FG_MUTED))
                                 }))
                                 .child(
                                     div()

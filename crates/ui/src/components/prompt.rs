@@ -74,7 +74,7 @@ impl Render for PromptModal {
             // one row. The highlight is a 4-sided inset ring (painted inside, no
             // layout cost); no bottom border, which would otherwise overlap and clip
             // the ring's bottom edge.
-            .h(px(ROW_H))
+            .h(rem(ROW_H))
             .bg(rgba(SELECT))
             .shadow(vec![gpui::BoxShadow {
                 color: rgb(ACCENT).into(),

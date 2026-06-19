@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, img, percentage, prelude::*, px, rgb, rgba, svg, Animation, AnimationExt as _, AnyView,
-    App, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, FontWeight, HighlightStyle,
-    Image, MouseButton, MouseDownEvent, ObjectFit, PathPromptOptions, Pixels, Render, SharedString,
-    Stateful, StyledText, Transformation, Window,
+    div, img, percentage, prelude::*, px, rems, rgb, rgba, svg, Animation, AnimationExt as _,
+    AnyView, App, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
+    HighlightStyle, Image, MouseButton, MouseDownEvent, ObjectFit, PathPromptOptions, Pixels, Rems,
+    Render, SharedString, Stateful, StyledText, Transformation, Window,
 };
 
 use crate::text_input::TextInput;
@@ -17,6 +17,13 @@ use crate::theme::*;
 
 mod format;
 pub use format::*;
+
+/// A length expressed in rems for a px value at the base rem size, so it scales
+/// with the UI zoom. Use for content sizing (icons, control heights, widths);
+/// keep `px()` for hairlines and the user-resizable pane widths.
+pub fn rem(at_base: f32) -> Rems {
+    rems(at_base / BASE_REM)
+}
 
 pub struct Tooltip {
     text: SharedString,
@@ -54,7 +61,7 @@ pub fn v_flex() -> Div {
 
 pub fn file_icon(is_dir: bool) -> impl IntoElement {
     let path = if is_dir { "icons/folder.svg" } else { "icons/file.svg" };
-    svg().path(path).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))
+    svg().path(path).size(rem(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))
 }
 
 /// Glyph for an rclone backend type, keyed by `RemoteInfo::kind`. Brand icons
@@ -207,14 +214,14 @@ pub fn key_binding(keys: impl Into<SharedString>) -> impl IntoElement {
 pub fn icon_button(id: impl Into<gpui::ElementId>, icon: &'static str) -> Stateful<Div> {
     h_flex()
         .id(id)
-        .size(px(22.0))
+        .size(rem(22.0))
         .flex_shrink_0()
         .justify_center()
         .rounded_md()
         .cursor_pointer()
         .text_color(rgb(FG_MUTED))
         .hover(|s| s.bg(rgba(OVERLAY)))
-        .child(svg().path(icon).size(px(14.0)).text_color(rgb(FG_MUTED)))
+        .child(svg().path(icon).size(rem(14.0)).text_color(rgb(FG_MUTED)))
 }
 
 /// Base for a centered modal card: elevated surface that swallows clicks so they
@@ -290,21 +297,15 @@ pub struct Button {
     label: SharedString,
     style: ButtonStyle,
     icon: Option<&'static str>,
-    height: Option<Pixels>,
 }
 
 impl Button {
     pub fn new(id: &'static str, label: impl Into<SharedString>, style: ButtonStyle) -> Self {
-        Self { id, label: label.into(), style, icon: None, height: None }
+        Self { id, label: label.into(), style, icon: None }
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
-        self
-    }
-
-    pub fn height(mut self, height: Pixels) -> Self {
-        self.height = Some(height);
         self
     }
 
@@ -324,15 +325,14 @@ impl Button {
             .gap_1p5()
             .items_center()
             .px_3()
-            .when_some(self.height, |b, h| b.h(h))
-            .when(self.height.is_none(), |b| b.py_1())
+            .py_1()
             .rounded_md()
             .cursor_pointer()
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(fg))
             .when_some(self.icon, |b, icon| {
-                b.child(svg().path(icon).size(px(14.0)).flex_shrink_0().text_color(rgb(fg)))
+                b.child(svg().path(icon).size(rem(14.0)).flex_shrink_0().text_color(rgb(fg)))
             })
             .child(self.label)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
@@ -350,10 +350,10 @@ pub fn brand_mark() -> impl IntoElement {
     v_flex()
         .items_center()
         .gap_2()
-        .child(svg().path("logo.svg").size(px(56.0)).text_color(rgb(FG)))
+        .child(svg().path("logo.svg").size(rem(56.0)).text_color(rgb(FG)))
         .child(
             div()
-                .text_size(px(20.0))
+                .text_size(rem(20.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(FG))
                 .child("rspace"),
@@ -375,7 +375,7 @@ pub fn text_link<V: 'static>(
         .cursor_pointer()
         .text_color(rgb(FG_MUTED))
         .hover(|s| s.text_color(rgb(ACCENT)))
-        .children(icon.map(|i| svg().path(i).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))))
+        .children(icon.map(|i| svg().path(i).size(rem(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED))))
         .child(label.into())
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
 }
@@ -411,8 +411,8 @@ pub fn switch<V: 'static>(
 ) -> Stateful<Div> {
     let mut el = h_flex()
         .id(id)
-        .w(px(30.0))
-        .h(px(18.0))
+        .w(rem(30.0))
+        .h(rem(18.0))
         .px(px(2.0))
         .items_center()
         .rounded_full()
@@ -422,7 +422,7 @@ pub fn switch<V: 'static>(
         .border_color(rgb(if on { ACCENT } else { BORDER_MUTED }))
         .when(on, |el| el.justify_end())
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_toggle(this, cx)))
-        .child(div().size(px(12.0)).rounded_full().bg(rgb(if on { 0xffffff } else { FG_MUTED })));
+        .child(div().size(rem(12.0)).rounded_full().bg(rgb(if on { 0xffffff } else { FG_MUTED })));
     if let Some(focus) = focus {
         el = el.track_focus(focus).tab_index(0).focus_visible(|s| s.border_color(rgb(ACCENT)));
     }
@@ -432,7 +432,7 @@ pub fn switch<V: 'static>(
 pub fn nav_button(id: &'static str, glyph: &'static str, enabled: bool) -> Stateful<Div> {
     let b = h_flex()
         .id(id)
-        .size(px(24.0))
+        .size(rem(24.0))
         .justify_center()
         .rounded_md()
         .text_color(if enabled { rgb(FG) } else { rgb(FG_SUBTLE) })
@@ -466,7 +466,7 @@ pub fn count_badge(icon: &'static str, color: u32, n: usize) -> impl IntoElement
     h_flex()
         .gap_1()
         .text_color(rgb(color))
-        .child(svg().path(icon).size(px(13.0)).text_color(rgb(color)))
+        .child(svg().path(icon).size(rem(13.0)).text_color(rgb(color)))
         .child(n.to_string())
 }
 

@@ -176,6 +176,10 @@ fn bind_keys(cx: &mut App) {
         // Toggle works while the search field is focused too, so it can close it.
         KeyBinding::new("secondary-f", ToggleSearch, Some("Workspace && !modal")),
         KeyBinding::new("escape", CloseSearch, Some("ExplorerSearch")),
+        KeyBinding::new("secondary-=", ZoomIn, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-+", ZoomIn, Some("Workspace && !modal")),
+        KeyBinding::new("secondary--", ZoomOut, Some("Workspace && !modal")),
+        KeyBinding::new("secondary-0", ZoomReset, Some("Workspace && !modal")),
     ]);
     // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns it.
     #[cfg(target_os = "macos")]

@@ -45,6 +45,9 @@ impl Workspace {
 
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.open = true;
+        // Sync the font-size field to the live value (also changed by the zoom keys).
+        let font_px = self.ui_font_size().round() as u64;
+        self.settings.ui_font_field.update(cx, |f, cx| f.set_value(font_px, cx));
         self.refresh_storage_size();
         self.fetch_rclone_info(cx);
         cx.notify();

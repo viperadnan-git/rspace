@@ -4,6 +4,8 @@ use super::*;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The UI font size is the rem size: it scales all rem-based text + sizing.
+        window.set_rem_size(px(self.ui_font_size()));
         // Restore focus only when it has been lost (e.g. a modal closed) — route
         // it to the active pane. Modals, the inline prompt, the settings panel,
         // and the explorer (incl. its search input) each own their own focus.
@@ -53,6 +55,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::action_open_settings))
             .on_action(cx.listener(Self::action_restart_daemon))
             .on_action(cx.listener(Self::action_toggle_transfers))
+            .on_action(cx.listener(Self::zoom_in))
+            .on_action(cx.listener(Self::zoom_out))
+            .on_action(cx.listener(Self::zoom_reset))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragResize>, window, cx| {
                 let x = f32::from(e.event.position.x);
                 match e.drag(cx).0 {

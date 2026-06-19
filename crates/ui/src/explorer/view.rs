@@ -106,14 +106,14 @@ impl Explorer {
             .on_action(cx.listener(Self::search_submit))
             .on_action(cx.listener(Self::close_search))
             .w_full()
-            .h(px(34.0))
+            .py_1p5()
             .flex_shrink_0()
             .gap_2()
             .px_3()
             .items_center()
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(svg().path("icons/search.svg").size(px(14.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
+            .child(svg().path("icons/search.svg").size(rem(14.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
             .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.search_input.clone()))
             .when(!self.search.is_empty(), |el| {
                 let active = self.recursive_intent();
@@ -129,7 +129,6 @@ impl Explorer {
                         if active { ButtonStyle::Primary } else { ButtonStyle::Soft },
                     )
                     .icon("icons/corner_down_left.svg")
-                    .height(px(24.0))
                     .build(|this, cx| this.toggle_subfolder_search(cx), cx)
                     .text_xs()
                     .tooltip(tooltip_text("Search all subfolders (Enter)")),
@@ -142,15 +141,15 @@ impl Explorer {
         let copy = message.clone();
         v_flex().size_full().justify_center().items_center().p_8().child(
             v_flex()
-                .max_w(px(440.0))
+                .max_w(rem(440.0))
                 .items_center()
                 .gap_3()
-                .child(svg().path("icons/alert.svg").size(px(28.0)).text_color(rgb(DANGER)))
+                .child(svg().path("icons/alert.svg").size(rem(28.0)).text_color(rgb(DANGER)))
                 .child(div().text_color(rgb(FG)).child("Failed to load"))
                 .child(
                     div()
                         .w_full()
-                        .max_h(px(180.0))
+                        .max_h(rem(180.0))
                         .overflow_hidden()
                         .px_3()
                         .py_2()
@@ -240,7 +239,7 @@ impl Render for Explorer {
                             };
                             let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
-                                .h(px(ROW_H))
+                                .h(rem(ROW_H))
                                 .py(px(0.0))
                                 .gap_0()
                                 .border_b_1()

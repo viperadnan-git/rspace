@@ -195,7 +195,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::confirm))
             // Swallow clicks so they don't fall through to the dismiss backdrop.
             .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
-            .w(px(544.0))
+            .w(rem(544.0))
             .rounded_lg()
             .bg(rgb(ELEVATED))
             .border_1()
@@ -204,7 +204,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .overflow_hidden()
             .child(
                 h_flex()
-                    .h(px(36.0))
+                    .py_2()
                     .px(px(10.0))
                     .gap_2()
                     .items_center()
@@ -217,7 +217,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .child(divider())
             .when(count > 0, |el| {
                 el.child(
-                    v_flex().flex_grow(1.0).max_h(px(384.0)).overflow_hidden().child(
+                    v_flex().flex_grow(1.0).max_h(rem(384.0)).overflow_hidden().child(
                         uniform_list(
                             "picker-list",
                             count,

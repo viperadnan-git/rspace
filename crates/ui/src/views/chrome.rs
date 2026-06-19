@@ -47,14 +47,16 @@ impl Workspace {
             .hover(|s| s.bg(rgba(OVERLAY)))
             .tooltip(tooltip_text("Home"))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.go_home(window, cx)))
-            .child(svg().path("logo.svg").size(px(15.0)).text_color(rgb(FG)))
+            .child(svg().path("logo.svg").size(rem(15.0)).text_color(rgb(FG)))
             .child(div().text_sm().font_weight(gpui::FontWeight::BOLD).text_color(rgb(FG)).child("rspace"))
     }
 
     pub(crate) fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let lead = if window.is_fullscreen() { 12.0 } else { TITLE_BAR_LEAD };
         h_flex()
-            .h(px(TITLE_BAR_H))
+            // Floor matches the macOS traffic-light strip; grows with content when zoomed.
+            .min_h(px(TITLE_BAR_H))
+            .py_1()
             .flex_shrink_0()
             .w_full()
             .pl(px(lead))

@@ -30,8 +30,8 @@ impl Render for RemoteConfigModal {
             .on_action(cx.listener(Self::config_confirm))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_prev))
-            .w(px(520.0))
-            .h(px(520.0))
+            .w(rem(520.0))
+            .h(rem(520.0))
             .gap_3()
             .child(
                 h_flex()
@@ -72,7 +72,7 @@ impl RemoteConfigModal {
                                 this.pick_backend(kind.clone(), cx)
                             }))
                             .child(
-                                svg().path(remote_icon(&name)).size(px(16.0)).flex_shrink_0().text_color(rgb(FG_MUTED)),
+                                svg().path(remote_icon(&name)).size(rem(16.0)).flex_shrink_0().text_color(rgb(FG_MUTED)),
                             )
                             .child(div().flex_shrink_0().text_sm().text_color(rgb(FG)).child(name))
                             .child(

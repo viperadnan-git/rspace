@@ -62,7 +62,7 @@ impl Workspace {
         let icon: AnyElement = if matches!(health, RcHealth::Restarting) {
             spinner("rc-spin", px(15.0), FG_MUTED).into_any_element()
         } else {
-            svg().path(health.icon()).size(px(15.0)).flex_shrink_0().text_color(rgb(color)).into_any_element()
+            svg().path(health.icon()).size(rem(15.0)).flex_shrink_0().text_color(rgb(color)).into_any_element()
         };
         div()
             .relative()
@@ -134,7 +134,7 @@ impl Workspace {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(svg().path(health.icon()).size(px(14.0)).flex_shrink_0().text_color(rgb(color)))
+                        .child(svg().path(health.icon()).size(rem(14.0)).flex_shrink_0().text_color(rgb(color)))
                         .child(div().text_color(rgb(FG)).child("rclone daemon")),
                 )
                 .child(div().text_xs().text_color(rgb(FG_MUTED)).child(subtitle))
@@ -167,7 +167,7 @@ impl Workspace {
             })
             .into_any_element(),
         );
-        self.popover_surface("rc-popover", items, cx).w(px(220.0))
+        self.popover_surface("rc-popover", items, cx).w(rem(220.0))
     }
 
     fn jobs_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {

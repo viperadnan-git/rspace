@@ -121,17 +121,17 @@ impl Render for StatusScreen {
             .gap_1p5()
             .child(
                 div()
-                    .text_size(px(21.0))
+                    .text_size(rem(21.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(FG))
                     .child(heading),
             )
-            .child(div().max_w(px(300.0)).text_sm().text_center().text_color(rgb(FG_MUTED)).child(sub));
+            .child(div().max_w(rem(300.0)).text_sm().text_center().text_color(rgb(FG_MUTED)).child(sub));
 
         let install_url = rspace_rclone_rc::INSTALL_URL.to_string();
         let actions = v_flex()
             .w_full()
-            .max_w(px(340.0))
+            .max_w(rem(340.0))
             .items_center()
             .gap_4()
             .when(missing, |el| {

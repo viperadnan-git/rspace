@@ -56,6 +56,15 @@ impl NumberField {
         cx.notify();
     }
 
+    /// Set the displayed value without emitting — to mirror external state
+    /// (e.g. a value also changed by a keybinding) into the field on open.
+    pub(crate) fn set_value(&mut self, value: u64, cx: &mut Context<Self>) {
+        let value = value.clamp(self.min, self.max);
+        self.value = value;
+        self.input.update(cx, |i, cx| i.set_text(value.to_string(), cx));
+        cx.notify();
+    }
+
     fn step_by(&mut self, delta: i64, cx: &mut Context<Self>) {
         let next = (self.typed(cx) as i64 + delta).clamp(self.min as i64, self.max as i64) as u64;
         self.set(next, cx);
@@ -69,7 +78,7 @@ impl NumberField {
     fn stepper(&self, id: &'static str, glyph: &'static str, delta: i64, cx: &mut Context<Self>) -> Stateful<Div> {
         h_flex()
             .id(id)
-            .size(px(24.0))
+            .size(rem(24.0))
             .justify_center()
             .items_center()
             .cursor_pointer()
@@ -87,7 +96,7 @@ impl Render for NumberField {
             .key_context("NumberField")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::commit))
-            .h(px(26.0))
+            .h(rem(26.0))
             .items_center()
             .rounded_md()
             .bg(rgb(INSET))
@@ -97,7 +106,7 @@ impl Render for NumberField {
             .text_sm()
             .child(self.stepper("num-dec", "\u{2212}", -(self.step as i64), cx))
             .child(rule())
-            .child(div().w(px(40.0)).px_1().child(self.input.clone()))
+            .child(div().w(rem(40.0)).px_1().child(self.input.clone()))
             .child(rule())
             .child(self.stepper("num-inc", "+", self.step as i64, cx))
     }

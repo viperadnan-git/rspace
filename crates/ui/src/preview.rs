@@ -279,7 +279,7 @@ impl PreviewPane {
             (false, _) => "icons/file.svg",
         };
         v_flex().flex_1().justify_center().items_center().p_3().child(
-            svg().path(icon).size(px(64.0)).text_color(rgb(FG_SUBTLE)),
+            svg().path(icon).size(rem(64.0)).text_color(rgb(FG_SUBTLE)),
         )
     }
 

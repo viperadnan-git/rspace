@@ -26,7 +26,7 @@ impl Sidebar {
                     cx.emit(SidebarEvent::Menu(menu_name.clone(), ev.position));
                 }),
             )
-            .child(svg().path(remote_icon(&remote.kind)).size(px(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
+            .child(svg().path(remote_icon(&remote.kind)).size(rem(15.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
             .child(
                 div()
                     .flex_grow(1.0)
@@ -36,10 +36,10 @@ impl Sidebar {
                     .child(remote.name.clone()),
             )
             .when(mounted, |r| {
-                r.child(svg().path("icons/hard_drive.svg").size(px(11.0)).flex_shrink_0().text_color(rgb(ACCENT)))
+                r.child(svg().path("icons/hard_drive.svg").size(rem(11.0)).flex_shrink_0().text_color(rgb(ACCENT)))
             })
             .when(pinned, |r| {
-                r.child(svg().path("icons/pin.svg").size(px(11.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
+                r.child(svg().path("icons/pin.svg").size(rem(11.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
             });
 
         // Drop an explorer entry onto a remote to move it to that remote's root.

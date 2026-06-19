@@ -39,6 +39,30 @@ impl Workspace {
         window.toggle_fullscreen();
     }
 
+    /// The base UI font size in px (drives the window rem size), clamped.
+    pub(crate) fn ui_font_size(&self) -> f32 {
+        self.store.get().ui_font_size.clamp(UI_FONT_MIN, UI_FONT_MAX)
+    }
+
+    pub(crate) fn zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.adjust_font_size(1.0, cx);
+    }
+
+    pub(crate) fn zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.adjust_font_size(-1.0, cx);
+    }
+
+    pub(crate) fn zoom_reset(&mut self, _: &ZoomReset, _: &mut Window, cx: &mut Context<Self>) {
+        self.store.update(|s| s.ui_font_size = UI_FONT_DEFAULT);
+        cx.notify();
+    }
+
+    fn adjust_font_size(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let next = (self.ui_font_size() + delta).round().clamp(UI_FONT_MIN, UI_FONT_MAX);
+        self.store.update(|s| s.ui_font_size = next);
+        cx.notify();
+    }
+
     pub(crate) fn copy_to_clipboard(&mut self, text: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
@@ -79,7 +103,7 @@ impl Workspace {
         let done = self.copied == Some(source);
         h_flex()
             .id(id)
-            .size(px(22.0))
+            .size(rem(22.0))
             .flex_shrink_0()
             .justify_center()
             .rounded_md()
@@ -92,7 +116,7 @@ impl Workspace {
             .child(
                 svg()
                     .path(if done { "icons/check.svg" } else { "icons/copy.svg" })
-                    .size(px(13.0))
+                    .size(rem(13.0))
                     .text_color(rgb(if done { SUCCESS } else { FG_MUTED })),
             )
     }

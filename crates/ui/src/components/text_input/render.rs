@@ -1,6 +1,7 @@
 //! `Render` for the text field (box chrome, caret line, clear button).
 
 use super::*;
+use crate::widgets::rem;
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -49,11 +50,11 @@ impl Render for TextInput {
             .gap_1()
             .w_full()
             .text_sm()
-            .line_height(px(18.0))
+            .line_height(rem(18.0))
             .cursor_text()
             // Box chrome, unless embedded inline (e.g. a list row supplies its own).
             .when(!self.bare, |el| {
-                el.h(px(30.0))
+                el.py_1()
                     .px_2()
                     .rounded_md()
                     .bg(rgb(ELEVATED))
@@ -68,7 +69,7 @@ impl Render for TextInput {
                     div()
                         .id("ti-clear")
                         .flex_none()
-                        .size(px(18.0))
+                        .size(rem(18.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -78,7 +79,7 @@ impl Render for TextInput {
                         // Don't let the clear click also reposition the caret.
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
-                        .child(svg().path("icons/x.svg").size(px(11.0)).text_color(rgb(FG_MUTED))),
+                        .child(svg().path("icons/x.svg").size(rem(11.0)).text_color(rgb(FG_MUTED))),
                 )
             });
         let error = self.error.clone().filter(|_| !self.bare);

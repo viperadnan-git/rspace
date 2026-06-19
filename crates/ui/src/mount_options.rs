@@ -117,7 +117,7 @@ impl Render for MountOptionsModal {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::cancel))
-            .w(px(420.0))
+            .w(rem(420.0))
             .gap_4()
             .child(
                 div()

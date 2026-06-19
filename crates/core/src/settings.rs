@@ -19,6 +19,8 @@ pub struct Settings {
     pub rclone_config_path: Option<String>,
     pub sort_field: SortField,
     pub sort_order: SortOrder,
+    /// Base UI font size in px (Zed's `ui_font_size`); drives the window rem size.
+    pub ui_font_size: f32,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             rclone_config_path: None,
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
+            ui_font_size: 16.0,
         }
     }
 }

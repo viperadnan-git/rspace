@@ -36,8 +36,16 @@ pub const COL_MAX: f32 = 340.0;
 /// resize divider sits exactly on the column boundary.
 pub const TABLE_PAD: f32 = 12.0;
 /// Fixed file-list row height, shared by entry rows and the inline editor so
-/// renaming/new-folder never shifts the layout.
+/// renaming/new-folder never shifts the layout. Scaled by the UI zoom.
 pub const ROW_H: f32 = 28.0;
+
+/// The rem size the `rem()`-based sizes were authored at; the live rem size is
+/// the user's `ui_font_size`, so all rem sizing scales from it.
+pub const BASE_REM: f32 = 16.0;
+/// Default + clamp for the user's UI font size (px), à la Zed's `ui_font_size`.
+pub const UI_FONT_DEFAULT: f32 = 16.0;
+pub const UI_FONT_MIN: f32 = 10.0;
+pub const UI_FONT_MAX: f32 = 28.0;
 
 pub const SIDEBAR_W: f32 = 204.0;
 pub const SIDEBAR_MIN: f32 = 160.0;

@@ -46,7 +46,7 @@ impl Workspace {
                 .px_1()
                 .rounded_md()
                 .flex_shrink_0()
-                .max_w(px(160.0))
+                .max_w(rem(160.0))
                 .truncate()
                 .cursor_pointer()
                 .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
@@ -67,7 +67,7 @@ impl Workspace {
         let search_open = self.explorer.read(cx).search_open();
         h_flex()
             .w_full()
-            .h(px(34.0))
+            .py_1p5()
             .gap_2()
             .justify_between()
             .pl_1()

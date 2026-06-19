@@ -48,7 +48,7 @@ impl Workspace {
                 this.close_menus();
                 cx.notify();
             }))
-            .child(svg().path(icon).size(px(15.0)).flex_shrink_0().text_color(rgb(icon_color)))
+            .child(svg().path(icon).size(rem(15.0)).flex_shrink_0().text_color(rgb(icon_color)))
             .child(label)
     }
 
@@ -69,7 +69,7 @@ impl Workspace {
         v_flex()
             .id(id)
             .occlude()
-            .min_w(px(180.0))
+            .min_w(rem(180.0))
             .p_1()
             .rounded_md()
             .bg(rgb(ELEVATED))

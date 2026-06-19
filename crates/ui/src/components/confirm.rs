@@ -60,7 +60,7 @@ impl Render for ConfirmModal {
             .key_context("modal Confirm")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::accept))
-            .w(px(400.0))
+            .w(rem(400.0))
             .gap_4()
             .child(div().text_lg().text_color(rgb(FG)).child(self.title.clone()))
             .child(div().text_sm().text_color(rgb(FG_MUTED)).child(self.message.clone()))
