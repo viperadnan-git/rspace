@@ -288,11 +288,6 @@ pub fn pick_file_into<V: 'static>(input: Entity<TextInput>, cx: &mut Context<V>)
     .detach();
 }
 
-/// A text button base (padding, rounding, label); caller adds color/hover/click.
-pub fn text_button(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
-    h_flex().id(id).flex_shrink_0().px_3().py_1().rounded_md().cursor_pointer().child(label.into())
-}
-
 /// Transparent border that turns accent on keyboard focus (Zed-style focus ring).
 pub fn focus_ring<E: Styled + InteractiveElement>(el: E) -> E {
     el.border_1().border_color(rgba(0x0000_0000)).focus_visible(|s| s.border_color(rgb(ACCENT)))
@@ -308,24 +303,68 @@ pub enum ButtonStyle {
 }
 
 /// A labelled action button in one of the [`ButtonStyle`] variants.
-pub fn button<V: 'static>(
+/// A text button with an optional leading icon and an optional fixed height.
+/// [`button`] is the common (label-only, default-height) shorthand.
+pub struct Button {
     id: &'static str,
-    label: impl Into<SharedString>,
+    label: SharedString,
     style: ButtonStyle,
-    on_click: impl Fn(&mut V, &mut Context<V>) + 'static,
-    cx: &mut Context<V>,
-) -> Stateful<Div> {
-    let base = text_button(id, label)
-        .text_sm()
-        .font_weight(FontWeight::MEDIUM)
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
-    match style {
-        ButtonStyle::Primary => base.bg(rgb(ACCENT)).text_color(rgb(0xffffff)).hover(|s| s.bg(rgb(ACCENT_HOVER))),
-        ButtonStyle::Soft => base.text_color(rgb(FG)).bg(rgba(OVERLAY)).hover(|s| s.bg(rgba(SELECT_MUTED))),
-        ButtonStyle::Secondary => base.text_color(rgb(FG)).hover(|s| s.bg(rgba(OVERLAY))),
-        ButtonStyle::Danger => base.bg(rgb(DANGER)).text_color(rgb(0xffffff)),
+    icon: Option<&'static str>,
+    height: Option<Pixels>,
+}
+
+impl Button {
+    pub fn new(id: &'static str, label: impl Into<SharedString>, style: ButtonStyle) -> Self {
+        Self { id, label: label.into(), style, icon: None, height: None }
+    }
+
+    pub fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    pub fn build<V: 'static>(
+        self,
+        on_click: impl Fn(&mut V, &mut Context<V>) + 'static,
+        cx: &mut Context<V>,
+    ) -> Stateful<Div> {
+        // svg colour doesn't inherit, so match the label colour explicitly.
+        let fg = match self.style {
+            ButtonStyle::Primary | ButtonStyle::Danger => 0xffffff,
+            _ => FG,
+        };
+        let base = h_flex()
+            .id(self.id)
+            .flex_shrink_0()
+            .gap_1p5()
+            .items_center()
+            .px_3()
+            .when_some(self.height, |b, h| b.h(h))
+            .when(self.height.is_none(), |b| b.py_1())
+            .rounded_md()
+            .cursor_pointer()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(fg))
+            .when_some(self.icon, |b, icon| {
+                b.child(svg().path(icon).size(px(14.0)).flex_shrink_0().text_color(rgb(fg)))
+            })
+            .child(self.label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
+        match self.style {
+            ButtonStyle::Primary => base.bg(rgb(ACCENT)).hover(|s| s.bg(rgb(ACCENT_HOVER))),
+            ButtonStyle::Soft => base.bg(rgba(OVERLAY)).hover(|s| s.bg(rgba(SELECT_MUTED))),
+            ButtonStyle::Secondary => base.hover(|s| s.bg(rgba(OVERLAY))),
+            ButtonStyle::Danger => base.bg(rgb(DANGER)),
+        }
     }
 }
+
 
 /// The rspace brand mark: the logo over the wordmark, as shown on the home
 /// (welcome) screen.

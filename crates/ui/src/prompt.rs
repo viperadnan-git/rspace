@@ -66,12 +66,23 @@ impl Render for PromptModal {
             .w_full()
             .gap_2()
             .px_3()
-            .py_1()
+            .py(px(0.0))
             .items_center()
+            // Same fixed height as a file row so renaming/new-folder occupy exactly
+            // one row. The highlight is a 4-sided inset ring (painted inside, no
+            // layout cost); no bottom border, which would otherwise overlap and clip
+            // the ring's bottom edge.
+            .h(px(ROW_H))
             .bg(rgba(SELECT))
-            .border_1()
-            .border_color(rgb(ACCENT))
-            .child(file_icon(self.icon_dir))
+            .shadow(vec![gpui::BoxShadow {
+                color: rgb(ACCENT).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(1.0),
+                inset: true,
+            }])
+            // File rows show an icon only for directories; match that here.
+            .when(self.icon_dir, |r| r.child(file_icon(true)))
             .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.input.clone()))
     }
 }

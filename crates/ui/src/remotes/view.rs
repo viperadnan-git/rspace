@@ -251,6 +251,6 @@ impl RemoteConfigModal {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let style = if primary { ButtonStyle::Primary } else { ButtonStyle::Secondary };
-        focus_ring(button(id, label, style, action, cx)).track_focus(focus).tab_index(0)
+        focus_ring(Button::new(id, label, style).build(action, cx)).track_focus(focus).tab_index(0)
     }
 }

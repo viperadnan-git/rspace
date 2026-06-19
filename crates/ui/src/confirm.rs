@@ -67,8 +67,8 @@ impl Render for ConfirmModal {
                     .w_full()
                     .justify_end()
                     .gap_2()
-                    .child(button("confirm-cancel", "Cancel", ButtonStyle::Secondary, |_, cx| cx.emit(ConfirmEvent::Dismissed), cx))
-                    .child(button("confirm-accept", self.confirm_label.clone(), accept_style, |_, cx| cx.emit(ConfirmEvent::Accepted), cx)),
+                    .child(Button::new("confirm-cancel", "Cancel", ButtonStyle::Secondary).build(|_, cx| cx.emit(ConfirmEvent::Dismissed), cx))
+                    .child(Button::new("confirm-accept", self.confirm_label.clone(), accept_style).build(|_, cx| cx.emit(ConfirmEvent::Accepted), cx)),
             )
     }
 }

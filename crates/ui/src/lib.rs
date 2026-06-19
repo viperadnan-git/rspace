@@ -39,8 +39,8 @@ use rspace_core::{
     dir_size, mount_root, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState,
 };
 use rspace_rclone_rc::{
-    ArgKind, ArgSpec, ArgValue, ConfigPaths, Entry, InfoOp, InfoResult, MountConfig, Operation,
-    Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
+    ArgKind, ArgSpec, ArgValue, ConfigPaths, Entry, InfoOp, InfoResult, Matcher, MountConfig,
+    Operation, Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
 };
 
 use preview::{Preview, PreviewState};
@@ -110,7 +110,10 @@ actions!(
         MountSave,
         MountCancel,
         SetupSubmit,
-        NumberCommit
+        NumberCommit,
+        SearchSubmit,
+        ToggleSearch,
+        CloseSearch
     ]
 );
 
@@ -144,7 +147,7 @@ impl AssetSource for Assets {
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
-            "plus", "server_network", "server_network_off", "github"
+            "plus", "server_network", "server_network_off", "github", "search", "corner_down_left"
         ))
     }
 
@@ -229,36 +232,36 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
         KeyBinding::new("f11", ToggleFullscreen, None),
         // Navigation/mutation are inert while a confirm dialog owns the keyboard.
-        KeyBinding::new("down", SelectNext, Some("Workspace && !modal")),
-        KeyBinding::new("j", SelectNext, Some("Workspace && !modal")),
-        KeyBinding::new("up", SelectPrev, Some("Workspace && !modal")),
-        KeyBinding::new("k", SelectPrev, Some("Workspace && !modal")),
+        KeyBinding::new("down", SelectNext, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("j", SelectNext, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("up", SelectPrev, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("k", SelectPrev, Some("Workspace && !modal && !TextInput")),
         // Shift extends the selection (handler reads live modifiers).
-        KeyBinding::new("shift-down", SelectNext, Some("Workspace && !modal")),
-        KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal")),
-        KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal")),
-        KeyBinding::new("shift-k", SelectPrev, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-a", SelectAll, Some("Workspace && !modal")),
-        KeyBinding::new("enter", Open, Some("Workspace && !modal")),
-        KeyBinding::new("tab", TogglePane, Some("Workspace && !modal")),
-        KeyBinding::new("backspace", GoUp, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-[", GoBack, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-]", GoForward, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-r", Reload, Some("Workspace && !modal")),
+        KeyBinding::new("shift-down", SelectNext, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("shift-k", SelectPrev, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-a", SelectAll, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("enter", Open, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("tab", TogglePane, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("backspace", GoUp, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-[", GoBack, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-]", GoForward, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-r", Reload, Some("Workspace && !modal && !TextInput")),
         // Toggle (not !modal) so it can also close itself; the handler ignores
         // it while another modal is open.
         // The modern "cmdk" command-menu shortcut: cmd-k on macOS, ctrl-k elsewhere.
         KeyBinding::new("secondary-k", TogglePalette, Some("Workspace")),
-        KeyBinding::new("left", FocusSidebar, Some("Workspace && !modal")),
-        KeyBinding::new("right", FocusExplorer, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-c", CopyEntry, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-x", CutEntry, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-v", PasteEntry, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-backspace", DeleteEntry, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-shift-n", NewFolder, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-u", NewFile, Some("Workspace && !modal")),
-        KeyBinding::new("f2", Rename, Some("Workspace && !modal")),
-        KeyBinding::new("space", TogglePreview, Some("Workspace && !modal")),
+        KeyBinding::new("left", FocusSidebar, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("right", FocusExplorer, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-c", CopyEntry, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-x", CutEntry, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-v", PasteEntry, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-backspace", DeleteEntry, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-shift-n", NewFolder, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("secondary-u", NewFile, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("f2", Rename, Some("Workspace && !modal && !TextInput")),
+        KeyBinding::new("space", TogglePreview, Some("Workspace && !modal && !TextInput")),
         KeyBinding::new("escape", CloseSettings, Some("Workspace")),
         // Add/edit-remote dialog: arrows (or ctrl-n/p) navigate the picker,
         // Enter advances. Bound to its own context so any focusable list can reuse.
@@ -280,6 +283,10 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", MountCancel, Some("MountOptions")),
         KeyBinding::new("enter", SetupSubmit, Some("Setup")),
         KeyBinding::new("enter", NumberCommit, Some("NumberField")),
+        KeyBinding::new("enter", SearchSubmit, Some("ExplorerSearch")),
+        // Toggle works while the search field is focused too, so it can close it.
+        KeyBinding::new("secondary-f", ToggleSearch, Some("Workspace && !modal")),
+        KeyBinding::new("escape", CloseSearch, Some("ExplorerSearch")),
     ]);
     // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns it.
     #[cfg(target_os = "macos")]
@@ -421,17 +428,11 @@ impl Render for StatusScreen {
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .child(button(
-                            "setup-install",
-                            "Install rclone",
-                            ButtonStyle::Primary,
+                        .child(Button::new("setup-install", "Install rclone", ButtonStyle::Primary).build(
                             move |_, cx| cx.open_url(&install_url),
                             cx,
                         ))
-                        .child(button(
-                            "setup-recheck",
-                            "Check again",
-                            ButtonStyle::Soft,
+                        .child(Button::new("setup-recheck", "Check again", ButtonStyle::Soft).build(
                             |this, cx| this.check_again(cx),
                             cx,
                         )),
@@ -459,7 +460,7 @@ impl Render for StatusScreen {
                                 .gap_2()
                                 .items_center()
                                 .child(div().flex_1().min_w(px(0.0)).child(self.path_input.clone()))
-                                .child(button("setup-browse", "Browse\u{2026}", ButtonStyle::Soft, |this, cx| {
+                                .child(Button::new("setup-browse", "Browse\u{2026}", ButtonStyle::Soft).build(|this, cx| {
                                     this.browse(cx)
                                 }, cx)),
                         )
@@ -467,13 +468,10 @@ impl Render for StatusScreen {
                             el.child(div().text_xs().text_color(rgb(DANGER)).child(e))
                         })
                         .child(
-                            h_flex().w_full().justify_center().child(button(
-                                "setup-save",
-                                "Use this path",
-                                ButtonStyle::Primary,
-                                |this, cx| this.do_submit(cx),
-                                cx,
-                            )),
+                            h_flex().w_full().justify_center().child(
+                                Button::new("setup-save", "Use this path", ButtonStyle::Primary)
+                                    .build(|this, cx| this.do_submit(cx), cx),
+                            ),
                         ),
                 )
             });
@@ -686,6 +684,18 @@ struct Workspace {
     /// folder after navigating up).
     pending_select: Option<String>,
     dir_query: Query<(String, String), Vec<Entry>>,
+    /// Explorer search: live current-dir filter, plus recursive search on submit.
+    search_input: Entity<TextInput>,
+    /// Whether the search row is shown (toggled by the toolbar button / Cmd-F).
+    search_open: bool,
+    search: String,
+    /// The query whose recursive results `search_query` currently holds.
+    searched: Option<String>,
+    search_query: Query<(String, String, String), Vec<Entry>>,
+    /// Displayed entries while a non-recursive filter is active, and the
+    /// (query, dir-len) it was built for — so it's only rebuilt when those change.
+    view: Vec<Entry>,
+    view_sig: Option<(String, usize)>,
     history: Vec<Location>,
     history_pos: usize,
     /// Which copy button last fired, so only that one shows the check.
@@ -792,6 +802,17 @@ impl Workspace {
             this.set_refresh(*secs, cx);
         })
         .detach();
+        let search_input = cx.new(|cx| TextInput::new(cx, "Search this folder").bare());
+        // Only react to actual text changes — the input also notifies on caret
+        // moves/selection, which don't affect the filter.
+        cx.observe(&search_input, |this, input, cx| {
+            let text = input.read(cx).text();
+            if text != this.search {
+                this.search = text.to_string();
+                cx.notify();
+            }
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, _| {
             this.window_active = window.is_window_active();
         })
@@ -843,6 +864,13 @@ impl Workspace {
             entry_scroll: UniformListScrollHandle::new(),
             pending_select: None,
             dir_query: Query::new(Some(stale)),
+            search_input,
+            search_open: false,
+            search: String::new(),
+            searched: None,
+            search_query: Query::new(None),
+            view: Vec::new(),
+            view_sig: None,
             history: Vec::new(),
             history_pos: 0,
             copied: None,
@@ -944,7 +972,135 @@ impl Workspace {
     }
 
     fn entries(&self) -> &[Entry] {
-        self.dir_query.data().map(Vec::as_slice).unwrap_or(&[])
+        if self.recursive_showing() {
+            self.search_query.data().map(Vec::as_slice).unwrap_or(&[])
+        } else if self.has_query() {
+            &self.view
+        } else {
+            self.dir_query.data().map(Vec::as_slice).unwrap_or(&[])
+        }
+    }
+
+    /// The search box holds at least one word to match on (ignoring whitespace).
+    fn has_query(&self) -> bool {
+        self.search.split_whitespace().next().is_some()
+    }
+
+    /// A full (subfolder) search was submitted and still matches the box.
+    fn recursive_intent(&self) -> bool {
+        self.searched.as_deref() == Some(self.search.as_str())
+    }
+
+    /// True when the recursive results on hand match the current query.
+    fn recursive_showing(&self) -> bool {
+        self.recursive_intent() && self.search_query.data().is_some()
+    }
+
+    /// Rebuild the filtered current-folder view, but only when the query or the
+    /// directory's entries changed — it's invoked every frame.
+    fn rebuild_search_view(&mut self) {
+        if self.recursive_showing() || !self.has_query() {
+            return;
+        }
+        let dir_len = self.dir_query.data().map_or(0, |v| v.len());
+        if self.view_sig.as_ref().is_some_and(|(q, n)| q == &self.search && *n == dir_len) {
+            return;
+        }
+        // Same matcher as the recursive search (all query words must match).
+        let matcher = Matcher::new(&self.search);
+        self.view = self
+            .dir_query
+            .data()
+            .map(|es| es.iter().filter(|e| matcher.matches(&e.name)).cloned().collect())
+            .unwrap_or_default();
+        self.view_sig = Some((self.search.clone(), dir_len));
+    }
+
+    fn search_submit(&mut self, _: &SearchSubmit, _: &mut Window, cx: &mut Context<Self>) {
+        self.run_search(cx);
+    }
+
+    /// The Subfolders toggle button: turn the full search off (back to the
+    /// current-folder filter) if it's on, else run it — mirroring Enter.
+    fn toggle_subfolder_search(&mut self, cx: &mut Context<Self>) {
+        if self.recursive_intent() {
+            self.searched = None;
+            cx.notify();
+        } else {
+            self.run_search(cx);
+        }
+    }
+
+    /// Run a full subfolder search for the current query (Enter / the ⏎ hint).
+    /// Typing alone only filters the current folder; this is the deeper search.
+    fn run_search(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.open_remote.clone() else {
+            return;
+        };
+        let query = self.search.trim().to_string();
+        if query.is_empty() {
+            self.searched = None;
+            return;
+        }
+        self.searched = Some(self.search.clone());
+        let path = self.path.clone();
+        let service = self.service.clone();
+        let (field, order) = (self.sort_field, self.sort_order);
+        self.search_query.load(
+            (remote, path, query),
+            cx,
+            |this| &mut this.search_query,
+            move |(remote, path, query)| async move {
+                let mut entries = service.search(&remote, &path, &query).await?;
+                sort_entries(&mut entries, field, order);
+                Ok::<_, ServiceError>(entries)
+            },
+        );
+    }
+
+    /// Show/hide the search row; focus the field on open, restore list focus on close.
+    fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_open = !self.search_open;
+        if self.search_open {
+            self.search_input.read(cx).focus_handle(cx).focus(window, cx);
+        } else {
+            self.reset_search(cx);
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_search(window, cx);
+    }
+
+    fn close_search(&mut self, _: &CloseSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_open {
+            self.search_open = false;
+            self.reset_search(cx);
+            self.focus.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// Clear the query text (the search box × button), back to the full listing.
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.searched = None;
+        self.search.clear();
+        self.search_input.update(cx, |i, cx| i.set_text(String::new(), cx));
+        cx.notify();
+    }
+
+    /// Clear the search when changing directory (search is per-folder).
+    fn reset_search(&mut self, cx: &mut Context<Self>) {
+        self.search_open = false;
+        self.searched = None;
+        // A new directory invalidates the cached filtered view.
+        self.view_sig = None;
+        if !self.search.is_empty() {
+            self.search.clear();
+            self.search_input.update(cx, |i, cx| i.set_text(String::new(), cx));
+        }
     }
 
     fn load_entries(&mut self, cx: &mut Context<Self>) {
@@ -1317,6 +1473,8 @@ impl Workspace {
     /// Push a new location onto history, selecting `want` (by name) on arrival.
     /// Saves the current row first so going back restores it.
     fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
+        // Search is per-folder; clear it on any directory change.
+        self.reset_search(cx);
         // Record as recently-opened only when switching remotes, not per folder.
         if self.open_remote.as_deref() != Some(remote.as_str()) {
             self.db.record_remote(&remote);
@@ -1802,6 +1960,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rebuild_search_view();
         self.resolve_selection();
         self.refresh_preview(cx);
         // Keep focus on the open dialog, else on the workspace — so each owns the
@@ -1821,6 +1980,8 @@ impl Render for Workspace {
                 let handle = input.read(cx).focus_handle(cx);
                 focus_once(&mut self.rclone_edit_focus, &handle, window, cx);
             }
+        } else if self.search_input.read(cx).focus_handle(cx).is_focused(window) {
+            // The explorer search box owns the keyboard while it's focused.
         } else if !self.focus.is_focused(window) {
             self.focus.focus(window, cx);
         }
@@ -1839,6 +2000,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::close_settings))
             .on_action(cx.listener(Self::toggle_pane))
+            .on_action(cx.listener(Self::toggle_search_action))
             .on_action(cx.listener(Self::focus_sidebar))
             .on_action(cx.listener(Self::focus_explorer))
             .on_action(cx.listener(Self::copy))

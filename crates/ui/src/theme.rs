@@ -36,6 +36,9 @@ pub const COL_MAX: f32 = 340.0;
 /// (no inter-column gap); each insets its content with its own `px_2`, so the
 /// resize divider sits exactly on the column boundary.
 pub const TABLE_PAD: f32 = 12.0;
+/// Fixed file-list row height, shared by entry rows and the inline editor so
+/// renaming/new-folder never shifts the layout.
+pub const ROW_H: f32 = 28.0;
 
 pub const SIDEBAR_W: f32 = 204.0;
 pub const SIDEBAR_MIN: f32 = 160.0;

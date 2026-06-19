@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -124,6 +126,72 @@ pub struct Entry {
     pub mod_time: String,
     #[serde(rename = "IsDir")]
     pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+struct Listing {
+    list: Vec<Entry>,
+}
+
+/// A reusable search matcher: split the query into lowercased words once, then
+/// test many names. `matches` is an AND gate (a name must contain every word),
+/// and `positions` gives the char indices to emphasize. Building the words once
+/// keeps per-entry matching allocation-light.
+pub struct Matcher {
+    words: Vec<String>,
+}
+
+impl Matcher {
+    pub fn new(query: &str) -> Self {
+        Self { words: query.split_whitespace().map(str::to_lowercase).collect() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
+    /// `name` contains every query word (case-insensitive). No words → no match.
+    pub fn matches(&self, name: &str) -> bool {
+        if self.words.is_empty() {
+            return false;
+        }
+        let name = name.to_lowercase();
+        self.words.iter().all(|w| name.contains(w))
+    }
+
+    /// Ascending char indices to emphasize: the union of each word's occurrences.
+    pub fn positions(&self, text: &str) -> Vec<usize> {
+        let t: Vec<char> = text.chars().collect();
+        let mut hits = BTreeSet::new();
+        for w in &self.words {
+            let q: Vec<char> = w.chars().collect();
+            if q.is_empty() || q.len() > t.len() {
+                continue;
+            }
+            let mut i = 0;
+            while i + q.len() <= t.len() {
+                if t[i..i + q.len()].iter().zip(&q).all(|(a, b)| a.to_lowercase().eq(b.to_lowercase())) {
+                    hits.extend(i..i + q.len());
+                    i += q.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        hits.into_iter().collect()
+    }
+}
+
+/// Escape rclone glob metacharacters so a search term matches literally.
+fn glob_escape(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for c in query.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[derive(Debug, Error)]
@@ -327,11 +395,31 @@ impl RcClient {
     /// List one directory level. `fs` is the remote (e.g. `"drive:"`), `remote`
     /// is the path within it (empty for the root).
     pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<Entry>, RcError> {
-        #[derive(Deserialize)]
-        struct Listing {
-            list: Vec<Entry>,
-        }
         let r: Listing = self.call("operations/list", &json!({ "fs": fs, "remote": remote })).await?;
+        Ok(r.list)
+    }
+
+    /// Recursive listing filtered to entries whose name contains `query`
+    /// (case-insensitive). rclone walks the subtree but returns only the
+    /// matches, so the response stays bounded by match count, not tree size.
+    /// Recursive search for entries matching the query. rclone's include can't
+    /// express word-AND, so the *files* are bounded server-side to the most
+    /// selective (longest) word — a superset of the AND match; rclone returns
+    /// every directory regardless, so the caller narrows with a [`Matcher`].
+    pub async fn list_filtered(&self, fs: &str, remote: &str, query: &str) -> Result<Vec<Entry>, RcError> {
+        let anchor = query.split_whitespace().max_by_key(|w| w.chars().count()).unwrap_or(query);
+        let pattern = format!("*{}*", glob_escape(anchor));
+        let r: Listing = self
+            .call(
+                "operations/list",
+                &json!({
+                    "fs": fs,
+                    "remote": remote,
+                    "opt": { "recurse": true },
+                    "_filter": { "IncludeRule": [pattern], "IgnoreCase": true },
+                }),
+            )
+            .await?;
         Ok(r.list)
     }
 

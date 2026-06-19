@@ -9,7 +9,7 @@ mod proc;
 pub mod service;
 
 pub use client::{
-    ConfigPaths, ConfigStep, Entry, JobStatus, OptionExample, Provider, RcClient, RcError,
+    ConfigPaths, ConfigStep, Entry, JobStatus, Matcher, OptionExample, Provider, RcClient, RcError,
     RemoteInfo, RemoteOption, Stats,
 };
 pub use daemon::{reap_orphan, Daemon, DaemonError};

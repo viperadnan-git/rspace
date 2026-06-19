@@ -460,4 +460,26 @@ impl Service {
         }
         result
     }
+
+    /// Recursive word search (all query words, AND). rclone bounds the files
+    /// server-side but returns every directory, so the results are narrowed here
+    /// with the same [`Matcher`] used for the in-folder filter.
+    pub async fn search(&self, remote: &str, path: &str, query: &str) -> Result<Vec<Entry>, ServiceError> {
+        tracing::debug!(remote, path, query, "search start");
+        let start = std::time::Instant::now();
+        let (fs, owned_path, owned_query) = (format!("{remote}:"), path.to_string(), query.to_string());
+        let mut result = self
+            .run(move |c| async move { c.list_filtered(&fs, &owned_path, &owned_query).await })
+            .await;
+        if let Ok(entries) = &mut result {
+            let matcher = crate::client::Matcher::new(query);
+            entries.retain(|e| matcher.matches(&e.name));
+        }
+        let ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Ok(entries) => tracing::debug!(remote, path, count = entries.len(), elapsed_ms = ms, "search done"),
+            Err(e) => tracing::warn!(remote, path, elapsed_ms = ms, error = %e, "search failed"),
+        }
+        result
+    }
 }

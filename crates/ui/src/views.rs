@@ -287,9 +287,10 @@ impl Workspace {
             .when(active, |x| x.child(div().text_color(rgb(FG_MUTED)).child(sort_arrow(self.sort_order))))
             .when_some(resize, |x, col| x.relative().child(self.column_resize_handle(col, cx)));
         match width {
-            // Shrink+clip below the preferred width so a column can't overflow the pane edge.
-            Some(w) => base.px_2().w(w).min_w(px(0.0)).overflow_hidden(),
-            None => base.pr_2().flex_grow(1.0).min_w(px(0.0)),
+            // Fixed columns keep their width (don't shrink), matching the rows so
+            // headers and cells stay aligned; the Name column flexes and truncates.
+            Some(w) => base.px_2().w(w).flex_shrink_0().overflow_hidden(),
+            None => base.pr_2().flex_1().min_w(px(0.0)),
         }
     }
 
@@ -326,6 +327,7 @@ impl Workspace {
     fn column_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
+            .flex_shrink_0()
             .px_3()
             .py_1()
             .text_xs()
@@ -344,23 +346,85 @@ impl Workspace {
             ))
     }
 
+    /// Explorer search row: a bare input embedded in a list-styled row (like the
+    /// rename editor) — live current-dir filter, with a Recursive toggle that
+    /// searches all subfolders on Enter.
+    fn search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .key_context("ExplorerSearch")
+            .on_action(cx.listener(Self::search_submit))
+            .on_action(cx.listener(Self::close_search))
+            .w_full()
+            .h(px(34.0))
+            .flex_shrink_0()
+            .gap_2()
+            .px_3()
+            .items_center()
+            .border_b_1()
+            .border_color(rgb(BORDER_MUTED))
+            .child(
+                svg()
+                    .path("icons/search.svg")
+                    .size(px(14.0))
+                    .flex_shrink_0()
+                    .text_color(rgb(FG_SUBTLE)),
+            )
+            .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.search_input.clone()))
+            // Typing filters this folder live; ⏎ (or clicking the hint) runs a full
+            // subfolder search. The hint shows active while those results are up.
+            .when(!self.search.is_empty(), |el| {
+                let active = self.recursive_intent();
+                el.child(
+                    icon_button("search-clear", "icons/x.svg")
+                        .tooltip(tooltip_text("Clear"))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_search(cx))),
+                )
+                .child(
+                    // Accent fill when active (subfolder results up), muted otherwise.
+                    Button::new(
+                        "search-subfolders",
+                        "Subfolders",
+                        if active { ButtonStyle::Primary } else { ButtonStyle::Soft },
+                    )
+                        .icon("icons/corner_down_left.svg")
+                        .height(px(24.0))
+                        .build(|this, cx| this.toggle_subfolder_search(cx), cx)
+                        .text_xs()
+                        .tooltip(tooltip_text("Search all subfolders (Enter)")),
+                )
+            })
+    }
+
     pub(crate) fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.entries().len();
         let making_new = self.prompt.as_ref().is_some_and(|p| p.read(cx).target.is_none());
+        let search_error = self
+            .recursive_intent()
+            .then(|| match self.search_query.status() {
+                Status::Error(m) => Some(m.clone()),
+                _ => None,
+            })
+            .flatten();
         let body = if self.open_remote.is_none() {
             self.render_welcome(cx).into_any_element()
         } else if matches!(self.dir_query.status(), Status::Loading) {
             loading_view().into_any_element()
         } else if let Status::Error(message) = self.dir_query.status() {
             self.render_error(message.clone(), cx).into_any_element()
+        } else if self.recursive_intent() && matches!(self.search_query.status(), Status::Loading) {
+            loading_view().into_any_element()
+        } else if let Some(message) = search_error {
+            self.render_error(message, cx).into_any_element()
         } else if count == 0 && !making_new {
-            centered("This folder is empty", FG_SUBTLE).into_any_element()
+            let msg = if self.search.is_empty() { "This folder is empty" } else { "No matches" };
+            centered(msg, FG_SUBTLE).into_any_element()
         } else {
             uniform_list(
                 "entries",
                 count,
                 cx.processor(|this, range: Range<usize>, _window, cx| {
                     let focused = this.pane == Pane::Explorer;
+                    let matcher = Matcher::new(&this.search);
                     range
                         .filter_map(|ix| this.entries().get(ix).map(|e| (ix, e.clone())))
                         .map(|(ix, entry)| {
@@ -376,6 +440,9 @@ impl Workspace {
                             let size_label = if is_dir { "--".to_string() } else { human_size(entry.size) };
                             let date_label = human_date(&entry.mod_time);
                             let name = entry.name.clone();
+                            // Recursive results show the relative path so the match's
+                            // location is visible; the current dir shows just the name.
+                            let label = if this.recursive_showing() { entry.path.clone() } else { name.clone() };
                             let ctx_entry = entry.clone();
                             let drag = DraggedEntry {
                                 path: entry.path.clone(),
@@ -385,6 +452,10 @@ impl Workspace {
                             };
                             let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
+                                // Fixed row height (no vertical padding) shared with
+                                // the inline editor, so renaming never shifts the row.
+                                .h(px(ROW_H))
+                                .py(px(0.0))
                                 // Flush columns (no inter-column gap) so cells line up
                                 // with the header and the resize dividers.
                                 .gap_0()
@@ -403,10 +474,13 @@ impl Workspace {
                                     let dst = this.open_remote.clone().unwrap_or_default();
                                     this.entry_drop_target(r, dst, drop_path, cx)
                                 })
-                                .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                                .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
                                     this.pane = Pane::Explorer;
                                     this.context = None;
                                     this.prompt = None;
+                                    // Interacting with the list returns the keyboard
+                                    // from the search box to the workspace.
+                                    this.focus.focus(window, cx);
                                     if ev.click_count() >= 2 {
                                         this.select_only(ix);
                                         this.descend(ix, cx);
@@ -446,17 +520,25 @@ impl Workspace {
                                     h_flex()
                                         .id(SharedString::from(format!("name-{ix}")))
                                         .gap_2()
-                                        .flex_grow(1.0)
+                                        // Flex with basis 0 so the name column fills the
+                                        // remainder and truncates, instead of pushing the
+                                        // fixed Size/Date columns out.
+                                        .flex_1()
                                         .min_w(px(0.0))
                                         .pr_2()
-                                        .tooltip(tooltip_text(name.clone()))
+                                        .tooltip(tooltip_text(label.clone()))
                                         .when(is_dir, |r| r.child(file_icon(true)))
-                                        .child(div().truncate().child(name)),
+                                        .child(if matcher.is_empty() {
+                                            div().flex_1().min_w(px(0.0)).truncate().child(label).into_any_element()
+                                        } else {
+                                            highlighted_label(&label, &matcher.positions(&label), FG, ACCENT)
+                                                .into_any_element()
+                                        }),
                                 )
                                 .child(
                                     h_flex()
                                         .w(this.col_size_width)
-                                        .min_w(px(0.0))
+                                        .flex_shrink_0()
                                         .px_2()
                                         .justify_end()
                                         .overflow_hidden()
@@ -468,7 +550,7 @@ impl Workspace {
                                 .child(
                                     div()
                                         .w(this.col_date_width)
-                                        .min_w(px(0.0))
+                                        .flex_shrink_0()
                                         .px_2()
                                         .truncate()
                                         .text_xs()
@@ -496,9 +578,14 @@ impl Workspace {
             .min_w(px(0.0))
             .overflow_hidden()
             .on_drag_move(cx.listener(Self::on_column_drag))
+            .when(show_table && self.search_open, |el| el.child(self.search_bar(cx)))
             .when(show_table, |el| el.child(self.column_header(cx)))
             .when(new_item, |el| el.child(self.prompt.as_ref().unwrap().clone()))
-            .child(body)
+            // The body fills the space left by the fixed header rows. It's a flex
+            // container (so the list's `flex_1` resolves) that is itself `flex_1`,
+            // so full-height states (empty/loading/error) fill the remainder instead
+            // of overflowing and shrinking the header.
+            .child(v_flex().flex_1().min_h(px(0.0)).min_w(px(0.0)).child(body))
             .when(
             self.open_remote.is_some(),
             |el| {
@@ -515,10 +602,11 @@ impl Workspace {
                 // propagation, so this only fires off the rows.
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
                         this.pane = Pane::Explorer;
                         this.context = None;
                         this.bg_menu = None;
+                        this.focus.focus(window, cx);
                         if !this.selected.is_empty() {
                             this.selected.clear();
                             cx.notify();
@@ -582,6 +670,17 @@ impl Workspace {
                                     )))
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                         this.force_reload_entries(cx)
+                                    })),
+                            )
+                            .child(
+                                icon_button("toggle-search", "icons/search.svg")
+                                    .when(self.search_open, |b| b.bg(rgba(SELECT_MUTED)))
+                                    .tooltip(tooltip_text(format!(
+                                        "Search ({})",
+                                        if cfg!(target_os = "macos") { "\u{2318}F" } else { "Ctrl F" }
+                                    )))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        this.toggle_search(window, cx)
                                     })),
                             )
                             .child(
@@ -669,10 +768,7 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Run a command")),
             )
             .when(!has_remotes, |el| {
-                el.child(button(
-                    "welcome-add",
-                    "Add remote",
-                    ButtonStyle::Secondary,
+                el.child(Button::new("welcome-add", "Add remote", ButtonStyle::Secondary).build(
                     |this, cx| this.begin_add_remote(cx),
                     cx,
                 ))
