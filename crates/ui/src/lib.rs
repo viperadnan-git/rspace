@@ -2,6 +2,7 @@
 
 mod command_palette;
 mod components;
+mod daemon;
 mod explorer;
 mod fuzzy;
 mod jobs;
@@ -57,6 +58,7 @@ use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use number_field::{NumberField, NumberFieldEvent};
 use explorer::{Explorer, ExplorerEvent};
 use sidebar::{Sidebar, SidebarEvent};
+use daemon::{DaemonStatus, RcHealth};
 use text_input::TextInput;
 use query::{Query, Status};
 use theme::*;
@@ -144,25 +146,6 @@ impl RcloneField {
     }
 }
 
-/// Reachability of the rclone rc daemon, surfaced by the status-bar button.
-#[derive(Clone)]
-enum RcHealth {
-    Unknown,
-    Up,
-    Down(String),
-    /// Daemon is being restarted (a fresh `rcd` is spawning).
-    Restarting,
-}
-
-impl RcHealth {
-    fn icon(&self) -> &'static str {
-        match self {
-            RcHealth::Down(_) => "icons/server_network_off.svg",
-            _ => "icons/server_network.svg",
-        }
-    }
-}
-
 #[derive(Clone)]
 struct Location {
     remote: String,
@@ -174,6 +157,8 @@ struct Location {
 /// `panels::settings` and orchestrated by `workspace::settings`.
 struct SettingsView {
     open: bool,
+    /// The rclone binary path in use (shown in the rclone setting).
+    rclone_bin: String,
     /// In-progress rclone binary/config override edit (field + input).
     rclone_edit: Option<(RcloneField, Entity<TextInput>)>,
     /// Focus the rclone edit input once when it opens (not every frame, which
@@ -270,7 +255,6 @@ impl Render for DragLabel {
 
 struct Workspace {
     service: Service,
-    rclone_bin: String,
     version: String,
     focus: FocusHandle,
     remotes: Vec<RemoteInfo>,
@@ -325,7 +309,8 @@ struct Workspace {
     preview_open: bool,
     /// The preview pane (owns its subject, fetch, and cache).
     preview: Entity<PreviewPane>,
-    rc_health: RcHealth,
+    /// The rcd status item (owns daemon health + popover).
+    daemon: Entity<DaemonStatus>,
     clipboard: Option<Clipboard>,
 }
 
@@ -377,6 +362,9 @@ impl Workspace {
         let sidebar_sub = cx.subscribe(&sidebar, Self::on_sidebar_event);
         let preview =
             cx.new(|cx| PreviewPane::new(weak.clone(), explorer.clone(), service.clone(), cx));
+        let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
+        // Re-render the status bar when the daemon's health changes.
+        cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
@@ -396,7 +384,6 @@ impl Workspace {
         .detach();
         let this = Self {
             service,
-            rclone_bin,
             version,
             focus,
             remotes: Vec::new(),
@@ -405,6 +392,7 @@ impl Workspace {
             menus: Menus::default(),
             settings: SettingsView {
                 open: false,
+                rclone_bin,
                 rclone_edit: None,
                 rclone_edit_focus: false,
                 refresh_field,
@@ -441,11 +429,10 @@ impl Workspace {
             jobs_maximized,
             preview_open,
             preview,
-            rc_health: RcHealth::Unknown,
+            daemon,
             clipboard: None,
         };
         this.load_remotes(cx);
-        Self::poll_health(window, cx);
         this
     }
 
@@ -499,36 +486,4 @@ impl Workspace {
         }
     }
 
-    /// Ping the rc daemon on an interval for the status-bar dot; runs unfocused.
-    fn poll_health(window: &Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
-            loop {
-                let service = match cx.update(|_, app| this.update(app, |v, _| v.service.clone()).ok()) {
-                    Ok(Some(s)) => s,
-                    _ => break,
-                };
-                let health = match service.ping().await {
-                    Ok(()) => RcHealth::Up,
-                    Err(e) => RcHealth::Down(e.to_string()),
-                };
-                let alive = cx
-                    .update(|_, app| {
-                        this.update(app, |v, vcx| {
-                            // Don't fight an in-flight restart (it pings the old, dead port).
-                            if !matches!(v.rc_health, RcHealth::Restarting) {
-                                v.rc_health = health;
-                                vcx.notify();
-                            }
-                        })
-                        .is_ok()
-                    })
-                    .unwrap_or(false);
-                if !alive {
-                    break;
-                }
-                cx.background_executor().timer(Duration::from_secs(3)).await;
-            }
-        })
-        .detach();
-    }
 }

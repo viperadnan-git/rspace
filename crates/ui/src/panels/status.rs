@@ -1,4 +1,6 @@
-//! The bottom status bar and rc-daemon health popover.
+//! The bottom status bar: daemon status button + popover, open-remote info,
+//! job counts. The daemon health/logic lives in the `DaemonStatus` entity; this
+//! renders it with the shared popover/menu helpers (consistent with the menus).
 
 use super::*;
 
@@ -50,17 +52,17 @@ impl Workspace {
     /// suppressed while the popover is open, like Zed's status-bar buttons.
     fn rc_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.menus.rc_popover_open;
-        // Static cases stay zero-alloc; only the rare `Down` message formats.
-        let (color, tip): (u32, SharedString) = match &self.rc_health {
+        let health = self.daemon.read(cx).health().clone();
+        let (color, tip): (u32, SharedString) = match &health {
             RcHealth::Up => (FG_MUTED, "rclone rc daemon connected".into()),
             RcHealth::Down(e) => (DANGER, format!("rclone rc daemon unreachable: {e}").into()),
             RcHealth::Restarting => (FG_MUTED, "Restarting rclone daemon…".into()),
             RcHealth::Unknown => (FG_SUBTLE, "Checking rclone daemon…".into()),
         };
-        let icon: AnyElement = if matches!(self.rc_health, RcHealth::Restarting) {
+        let icon: AnyElement = if matches!(health, RcHealth::Restarting) {
             spinner("rc-spin", px(15.0), FG_MUTED).into_any_element()
         } else {
-            svg().path(self.rc_health.icon()).size(px(15.0)).flex_shrink_0().text_color(rgb(color)).into_any_element()
+            svg().path(health.icon()).size(px(15.0)).flex_shrink_0().text_color(rgb(color)).into_any_element()
         };
         div()
             .relative()
@@ -93,8 +95,7 @@ impl Workspace {
     }
 
     /// Full-window click-catcher that dismisses the open rcd popover; rendered at
-    /// the workspace root, below the popover card. Avoids the trigger/`mouse_down_out`
-    /// double-fire by intercepting the next mouse-down anywhere outside the card.
+    /// the workspace root, below the popover card.
     pub(crate) fn rc_popover_backdrop(&self, cx: &mut Context<Self>) -> impl IntoElement {
         deferred(
             div().absolute().top_0().left_0().size_full().occlude().on_mouse_down(
@@ -110,13 +111,14 @@ impl Workspace {
 
     /// The daemon status + actions card shown by [`rc_status`].
     fn rc_popover_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (color, status) = match &self.rc_health {
+        let health = self.daemon.read(cx).health().clone();
+        let (color, status) = match &health {
             RcHealth::Unknown => (FG_SUBTLE, "Connecting…"),
             RcHealth::Up => (SUCCESS, "Connected"),
             RcHealth::Down(_) => (DANGER, "Disconnected"),
             RcHealth::Restarting => (FG_MUTED, "Restarting…"),
         };
-        let subtitle = match (&self.rc_health, self.version.is_empty()) {
+        let subtitle = match (&health, self.version.is_empty()) {
             (RcHealth::Up, false) => format!("{status} · rclone {}", self.version),
             _ => status.to_string(),
         };
@@ -132,27 +134,31 @@ impl Workspace {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(svg().path(self.rc_health.icon()).size(px(14.0)).flex_shrink_0().text_color(rgb(color)))
+                        .child(svg().path(health.icon()).size(px(14.0)).flex_shrink_0().text_color(rgb(color)))
                         .child(div().text_color(rgb(FG)).child("rclone daemon")),
                 )
                 .child(div().text_xs().text_color(rgb(FG_MUTED)).child(subtitle))
                 .into_any_element(),
         );
-        if let RcHealth::Down(e) = &self.rc_health {
+        if let RcHealth::Down(e) = &health {
             items.push(
                 div().w_full().px_2().pb_1().text_xs().text_color(rgb(DANGER)).child(e.clone()).into_any_element(),
             );
         }
         items.push(div().w_full().my_1().h(px(1.0)).bg(rgb(BORDER_MUTED)).into_any_element());
         items.push(
-            self.menu_item("Reconnect", "icons/activity.svg", cx, |this, cx| this.reconnect_daemon(cx))
-                .into_any_element(),
+            self.menu_item("Reconnect", "icons/activity.svg", cx, |this, cx| {
+                this.daemon.update(cx, |d, cx| d.reconnect(cx));
+            })
+            .into_any_element(),
         );
         // Restarting already in flight: skip a redundant restart.
-        if !matches!(self.rc_health, RcHealth::Restarting) {
+        if !matches!(health, RcHealth::Restarting) {
             items.push(
-                self.menu_item("Restart daemon", "icons/refresh.svg", cx, |this, cx| this.restart_daemon(cx))
-                    .into_any_element(),
+                self.menu_item("Restart daemon", "icons/refresh.svg", cx, |this, cx| {
+                    this.daemon.update(cx, |d, cx| d.restart(cx));
+                })
+                .into_any_element(),
             );
         }
         items.push(
@@ -162,51 +168,6 @@ impl Workspace {
             .into_any_element(),
         );
         self.popover_surface("rc-popover", items, cx).w(px(220.0))
-    }
-
-    /// Mark the daemon healthy and re-sync the views (after a reconnect/restart).
-    fn on_daemon_up(&mut self, cx: &mut Context<Self>) {
-        self.rc_health = RcHealth::Up;
-        self.load_remotes(cx);
-        if self.open_remote.is_some() {
-            self.force_reload_entries(cx);
-        }
-    }
-
-    /// Re-ping the daemon and refresh the listings (recover a lost connection).
-    fn reconnect_daemon(&mut self, cx: &mut Context<Self>) {
-        let service = self.service.clone();
-        cx.spawn(async move |this, cx| {
-            let result = service.ping().await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => this.on_daemon_up(cx),
-                    Err(e) => this.rc_health = RcHealth::Down(e.to_string()),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Stop and respawn `rcd`, then refresh. The swap-able client means every
-    /// in-flight and future call picks up the new endpoint automatically.
-    pub(crate) fn restart_daemon(&mut self, cx: &mut Context<Self>) {
-        self.rc_health = RcHealth::Restarting;
-        let service = self.service.clone();
-        cx.spawn(async move |this, cx| {
-            let result = service.restart_daemon().await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => this.on_daemon_up(cx),
-                    Err(e) => this.rc_health = RcHealth::Down(e.to_string()),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     fn jobs_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {

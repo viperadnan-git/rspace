@@ -84,7 +84,7 @@ impl Workspace {
     }
 
     pub(crate) fn action_restart_daemon(&mut self, _: &RestartDaemon, _: &mut Window, cx: &mut Context<Self>) {
-        self.restart_daemon(cx);
+        self.daemon.update(cx, |d, cx| d.restart(cx));
     }
 
     pub(crate) fn action_toggle_transfers(&mut self, _: &ToggleTransfers, _: &mut Window, cx: &mut Context<Self>) {

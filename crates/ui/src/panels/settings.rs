@@ -106,7 +106,7 @@ impl Workspace {
     /// rclone's own paths (from `config/paths`, so correct per-OS) plus its cache
     /// size and a clear action. Paths are clickable and open with the OS default.
     fn rclone_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let binary = Some(self.rclone_bin.clone()).filter(|s| !s.is_empty());
+        let binary = Some(self.settings.rclone_bin.clone()).filter(|s| !s.is_empty());
         let config = self.settings.rclone_paths.as_ref().map(|p| p.config.clone());
         let cache = self.settings.rclone_paths.as_ref().map(|p| p.cache.clone());
         let cache_label = match self.settings.rclone_cache_size {
