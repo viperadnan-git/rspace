@@ -121,7 +121,6 @@ pub(crate) use status_screen::{relaunch, StatusScreen};
 enum CopySource {
     Path,
     Error,
-    JobCommand(usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]

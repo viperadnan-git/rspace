@@ -292,7 +292,7 @@ impl Workspace {
         let id = data.job_id;
         if data.running {
             items.push(
-                self.menu_item("Cancel", "icons/x.svg", cx, move |this, cx| this.request_cancel_job(id, cx))
+                self.menu_item_danger("Cancel", "icons/x.svg", cx, move |this, cx| this.request_cancel_job(id, cx))
                     .into_any_element(),
             );
         }

@@ -119,15 +119,9 @@ impl Workspace {
             icon_button(SharedString::from(format!("{suffix}-{id}")), svg_icon).tooltip(tooltip_text(tip))
         };
         let actions = h_flex()
+            .flex_shrink_0()
             .gap_0p5()
             .items_center()
-            .child(self.copy_button(
-                SharedString::from(format!("copy-cmd-{id}")),
-                CopySource::JobCommand(id),
-                job.command.clone(),
-                "Copy rclone command",
-                cx,
-            ))
             .when(running, |el| {
                 el.child(action_button("cancel", "icons/x.svg", "Cancel").on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.request_cancel_job(id, cx)),
@@ -284,14 +278,25 @@ impl Workspace {
             .when_some(wash, |el, (color, frac)| {
                 el.child(div().absolute().top_0().bottom_0().left_0().w(relative(frac)).bg(rgba(color)))
             })
-            // Line 1: status · name · trailing metric.
+            // Line 1: status · type badge · name · actions.
             .child(
                 h_flex()
                     .relative()
                     .w_full()
-                    .gap_2()
+                    .gap_1p5()
                     .items_center()
                     .child(div().flex_shrink_0().child(icon))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(rgba(SELECT_MUTED))
+                            .text_xs()
+                            .text_color(rgb(FG_MUTED))
+                            .child(verb),
+                    )
                     .child(
                         h_flex()
                             .flex_grow(1.0)
@@ -301,9 +306,9 @@ impl Workspace {
                                 self.job_target_chip(SharedString::from(format!("{key}-name")), t.clone(), name, cx)
                             })),
                     )
-                    .child(trailing),
+                    .child(actions),
             )
-            // Line 2: type badge + actions left, size/ETA pinned right.
+            // Line 2: live metric (percent · speed) left, size/ETA pinned right.
             .child(
                 h_flex()
                     .w_full()
@@ -312,22 +317,7 @@ impl Workspace {
                     .justify_between()
                     .text_xs()
                     .text_color(rgb(FG_SUBTLE))
-                    .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .gap_1()
-                            .items_center()
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_md()
-                                    .bg(rgba(SELECT_MUTED))
-                                    .text_color(rgb(FG_MUTED))
-                                    .child(verb),
-                            )
-                            .child(actions),
-                    )
+                    .child(trailing)
                     .child(div().flex_shrink_0().min_w(px(0.0)).truncate().text_color(rgb(FG_MUTED)).child(meta)),
             )
             .into_any_element()
