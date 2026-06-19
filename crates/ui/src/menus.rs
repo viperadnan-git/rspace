@@ -132,9 +132,13 @@ impl Workspace {
             .into_any_element(),
         );
         if self.clipboard.is_some() {
+            // Paste into the folder when the target is one; a file pastes alongside
+            // it, into the current directory (modern file-explorer behaviour).
+            let into = entry.is_dir.then(|| entry.path.clone());
             items.push(
-                self.menu_item("Paste", "icons/clipboard.svg", cx, move |this, cx| {
-                    this.paste_clipboard(cx)
+                self.menu_item("Paste", "icons/clipboard.svg", cx, move |this, cx| match &into {
+                    Some(dir) => this.paste_clipboard_into(dir.clone(), cx),
+                    None => this.paste_clipboard(cx),
                 })
                 .into_any_element(),
             );
@@ -251,11 +255,67 @@ impl Workspace {
         self.popover("remote-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 
+    pub(crate) fn render_task_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (data, pos) = self.menus.task_menu.clone().unwrap();
+        let mut items: Vec<AnyElement> = Vec::new();
+        // Reveal endpoints in the explorer (source first, then destination).
+        for (label, target) in [("Open source", data.targets.first()), ("Open destination", data.targets.get(1))] {
+            if let Some(target) = target.cloned() {
+                items.push(
+                    self.menu_item(label, "icons/folder_open.svg", cx, move |this, cx| {
+                        this.reveal_target_in_explorer(target.clone(), cx)
+                    })
+                    .into_any_element(),
+                );
+            }
+        }
+        if !data.command.is_empty() {
+            let command = data.command.clone();
+            items.push(
+                self.menu_item("Copy command", "icons/copy.svg", cx, move |this, cx| {
+                    this.copy_to_clipboard(command.clone(), cx)
+                })
+                .into_any_element(),
+            );
+        }
+        for (label, target) in [("Copy source path", data.targets.first()), ("Copy destination path", data.targets.get(1))] {
+            if let Some(target) = target.cloned() {
+                let path = format!("{}:{}", target.remote, target.path);
+                items.push(
+                    self.menu_item(label, "icons/copy.svg", cx, move |this, cx| {
+                        this.copy_to_clipboard(path.clone(), cx)
+                    })
+                    .into_any_element(),
+                );
+            }
+        }
+        let id = data.job_id;
+        if data.running {
+            items.push(
+                self.menu_item("Cancel", "icons/x.svg", cx, move |this, cx| this.request_cancel_job(id, cx))
+                    .into_any_element(),
+            );
+        }
+        if data.can_retry {
+            items.push(
+                self.menu_item("Retry", "icons/refresh.svg", cx, move |this, cx| this.retry_job(id, cx))
+                    .into_any_element(),
+            );
+        }
+        if data.can_remove {
+            items.push(
+                self.menu_item_danger("Remove", "icons/trash.svg", cx, move |this, cx| this.clear_job(id, cx))
+                    .into_any_element(),
+            );
+        }
+        self.popover("task-menu", pos, gpui::Anchor::TopLeft, items, cx)
+    }
+
     pub(crate) fn render_bg_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let pos = self.menus.bg_menu.unwrap();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
-            self.menu_item("New folder", "icons/folder.svg", cx, |this, cx| this.begin_new_folder(cx))
+            self.menu_item("New folder", "icons/new_folder.svg", cx, |this, cx| this.begin_new_folder(cx))
                 .into_any_element(),
         );
         items.push(

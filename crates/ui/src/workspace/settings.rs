@@ -43,6 +43,16 @@ impl Workspace {
         self.open_settings(cx);
     }
 
+    pub(crate) fn action_show_keybindings(&mut self, _: &ShowKeybindings, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_keybindings(cx);
+    }
+
+    pub(crate) fn open_keybindings(&mut self, cx: &mut Context<Self>) {
+        let view = cx.new(KeybindingsView::new);
+        let sub = cx.subscribe(&view, |this, _, _: &DismissEvent, cx| this.close_modal(cx));
+        self.show_modal(ActiveModal::new(view).subscribe(sub), cx);
+    }
+
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.open = true;
         // Sync the font-size field to the live value (also changed by the zoom keys).
@@ -90,9 +100,8 @@ impl Workspace {
         self.daemon.update(cx, |d, cx| d.restart(cx));
     }
 
-    pub(crate) fn action_toggle_transfers(&mut self, _: &ToggleTransfers, _: &mut Window, cx: &mut Context<Self>) {
-        self.jobs_open = !self.jobs_open;
-        cx.notify();
+    pub(crate) fn action_toggle_tasks(&mut self, _: &ToggleTasks, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_dock(DockPanel::Tasks, cx);
     }
 
     pub(crate) fn ask_confirm(
@@ -156,10 +165,13 @@ impl Workspace {
             || self.menus.bg_menu.is_some()
             || self.modal.is_some()
             || self.prompt.is_some()
-            || self.jobs_open
+            || self.dock_is(DockPanel::Tasks)
         {
             self.settings.open = false;
-            self.jobs_open = false;
+            // Esc dismisses the transient Tasks dock, but leaves the Preview be.
+            if self.dock_is(DockPanel::Tasks) {
+                self.dock = None;
+            }
             self.prompt = None;
             self.close_modal(cx);
             self.close_menus();

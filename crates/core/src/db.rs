@@ -19,7 +19,7 @@ pub struct UiState {
     pub preview_open: bool,
     pub col_date_width: Option<f32>,
     pub col_size_width: Option<f32>,
-    pub transfers_maximized: bool,
+    pub jobs_width: Option<f32>,
 }
 
 /// Handle to the app-state databases. Cloneable; clones share the connections.
@@ -67,20 +67,11 @@ impl Db {
                  command   TEXT PRIMARY KEY,
                  count     INTEGER NOT NULL,
                  last_used INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS jobs (
-                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                 op          TEXT NOT NULL,
-                 source      TEXT,
-                 dest        TEXT,
-                 ok          INTEGER NOT NULL,
-                 bytes       INTEGER NOT NULL DEFAULT 0,
-                 finished_at INTEGER NOT NULL
              );",
         )
     }
 
-    /// Empty the disposable history (recent remotes, command usage, jobs).
+    /// Empty the disposable history (recent remotes, command usage).
     ///
     /// VACUUM compacts the db, but in WAL mode it writes the rewrite into the
     /// `-wal` sidecar, which is never truncated while the connection stays open —
@@ -90,7 +81,7 @@ impl Db {
     pub fn clear_history(&self) {
         let conn = self.cache.lock().unwrap();
         let _ = conn.execute_batch(
-            "DELETE FROM recent_remotes; DELETE FROM command_usage; DELETE FROM jobs;
+            "DELETE FROM recent_remotes; DELETE FROM command_usage;
              VACUUM;
              PRAGMA wal_checkpoint(TRUNCATE);",
         );
@@ -206,41 +197,6 @@ impl Db {
         };
         rows.flatten().collect()
     }
-
-    /// Append a finished job to the log (stamped now) and prune to `JOB_LOG_CAP`.
-    pub fn record_job(&self, op: &str, source: Option<&str>, dest: Option<&str>, ok: bool, bytes: i64) {
-        let conn = self.cache.lock().unwrap();
-        let _ = conn.execute(
-            "INSERT INTO jobs (op, source, dest, ok, bytes, finished_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, unixepoch())",
-            params![op, source, dest, ok, bytes],
-        );
-        let _ = conn.execute(
-            "DELETE FROM jobs WHERE id NOT IN (SELECT id FROM jobs ORDER BY finished_at DESC, id DESC LIMIT ?1)",
-            [JOB_LOG_CAP],
-        );
-    }
-
-    pub fn recent_jobs(&self, limit: usize) -> Vec<JobRecord> {
-        let conn = self.cache.lock().unwrap();
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT op, source, dest, ok, bytes, finished_at
-             FROM jobs ORDER BY finished_at DESC, id DESC LIMIT ?1",
-        ) else {
-            return Vec::new();
-        };
-        let rows = stmt.query_map([limit as i64], |r| {
-            Ok(JobRecord {
-                op: r.get(0)?,
-                source: r.get(1)?,
-                dest: r.get(2)?,
-                ok: r.get(3)?,
-                bytes: r.get(4)?,
-                finished_at: r.get(5)?,
-            })
-        });
-        rows.map(|it| it.flatten().collect()).unwrap_or_default()
-    }
 }
 
 /// Open a SQLite file (creating its parent), in WAL mode for concurrent reads.
@@ -265,18 +221,6 @@ fn open_or_memory(path: &Path, init: fn(&Connection) -> rusqlite::Result<()>) ->
             conn
         }
     }
-}
-
-const JOB_LOG_CAP: i64 = 200;
-
-#[derive(Debug, Clone)]
-pub struct JobRecord {
-    pub op: String,
-    pub source: Option<String>,
-    pub dest: Option<String>,
-    pub ok: bool,
-    pub bytes: i64,
-    pub finished_at: i64,
 }
 
 #[cfg(test)]
@@ -332,28 +276,15 @@ mod tests {
     }
 
     #[test]
-    fn jobs_log_roundtrips_newest_first() {
-        let db = memory();
-        for op in ["Copy", "Move", "Delete"] {
-            db.record_job(op, Some("a:x"), Some("b:"), true, 10);
-        }
-        let jobs = db.recent_jobs(10);
-        assert_eq!(jobs.len(), 3);
-        assert_eq!(jobs[0].op, "Delete");
-    }
-
-    #[test]
     fn clear_history_keeps_pinned_and_ui() {
         let db = memory();
         db.save_pinned(&["gdrive".into()]);
         db.save_ui(&UiState { preview_open: true, ..Default::default() });
         db.record_remote("a");
         db.record_command("Copy");
-        db.record_job("Copy", None, None, true, 1);
         db.clear_history();
         assert!(db.recent_remotes(10).is_empty());
         assert!(db.command_rank().is_empty());
-        assert!(db.recent_jobs(10).is_empty());
         assert_eq!(db.load_pinned(), vec!["gdrive".to_string()]);
         assert!(db.load_ui().preview_open);
     }
@@ -372,8 +303,8 @@ mod tests {
     #[test]
     fn save_ui_overwrites() {
         let db = memory();
-        db.save_ui(&UiState { transfers_maximized: true, ..Default::default() });
-        db.save_ui(&UiState { transfers_maximized: false, ..Default::default() });
-        assert!(!db.load_ui().transfers_maximized);
+        db.save_ui(&UiState { jobs_width: Some(420.0), ..Default::default() });
+        db.save_ui(&UiState { jobs_width: Some(300.0), ..Default::default() });
+        assert_eq!(db.load_ui().jobs_width, Some(300.0));
     }
 }

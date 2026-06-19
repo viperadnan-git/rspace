@@ -1,6 +1,7 @@
 //! The transfer queue: a [`Jobs`] entity owning tracked rclone jobs, their
 //! submission, polling, and lifecycle. File operations live on [`Workspace`]
-//! and enqueue here via [`Jobs::spawn_job`].
+//! and enqueue here via [`Jobs::spawn_job`]. Jobs are in-memory only — closing
+//! the app drops them with the daemon.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -41,6 +42,8 @@ pub(crate) struct Job {
     pub(crate) verb: SharedString,
     pub(crate) targets: Vec<JobTarget>,
     pub(crate) done: bool,
+    /// User-stopped: shown as a neutral "Cancelled", not a failure.
+    pub(crate) cancelled: bool,
     pub(crate) error: Option<String>,
     pub(crate) bytes: u64,
     pub(crate) total: u64,
@@ -68,39 +71,26 @@ impl Job {
 pub(crate) enum JobsEvent {
     /// A successful job that should refresh the open listing.
     ReloadEntries,
-    /// A job finished (logged): refresh the history and notify (success toasts
-    /// auto-dismiss; failures stay until dismissed, showing rclone's error).
+    /// A job finished: notify (success toasts auto-dismiss; failures stay until
+    /// dismissed, showing rclone's error).
     Finished { label: SharedString, ok: bool, error: Option<SharedString> },
 }
 
 pub(crate) struct Jobs {
     service: Service,
-    db: Db,
     items: Vec<Job>,
     seq: usize,
-    /// Recent finished jobs (newest first), read by the transfers panel.
-    history: Vec<JobRecord>,
 }
 
 impl EventEmitter<JobsEvent> for Jobs {}
 
 impl Jobs {
-    pub(crate) fn new(service: Service, db: Db) -> Self {
-        let history = db.recent_jobs(JOB_HISTORY_LIMIT);
-        Self { service, db, items: Vec::new(), seq: 0, history }
+    pub(crate) fn new(service: Service) -> Self {
+        Self { service, items: Vec::new(), seq: 0 }
     }
 
     pub(crate) fn items(&self) -> &[Job] {
         &self.items
-    }
-
-    pub(crate) fn history(&self) -> &[JobRecord] {
-        &self.history
-    }
-
-    /// Re-read the persisted job history (after a new finish or a cleanup).
-    pub(crate) fn refresh_history(&mut self) {
-        self.history = self.db.recent_jobs(JOB_HISTORY_LIMIT);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -125,7 +115,22 @@ impl Jobs {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                let active = match this.update(cx, |this, _| {
+                // The daemon owns the task list: drop any job it no longer tracks
+                // (finished + expired, or gone after a daemon restart). A failed
+                // query leaves the list alone so a transient blip doesn't wipe it.
+                let live = service
+                    .job_list()
+                    .await
+                    .ok()
+                    .map(|ids| ids.into_iter().collect::<std::collections::HashSet<u64>>());
+                let active = match this.update(cx, |this, cx| {
+                    if let Some(live) = &live {
+                        let before = this.items.len();
+                        this.items.retain(|j| j.jobid.is_none_or(|id| live.contains(&id)));
+                        if this.items.len() != before {
+                            cx.notify();
+                        }
+                    }
                     this.items
                         .iter()
                         .filter(|j| !j.done && j.jobid.is_some())
@@ -140,8 +145,8 @@ impl Jobs {
                     let stats = service.stats(group).await.ok();
                     let alive = this.update(cx, |this, cx| {
                         let mut reload = false;
-                        // Set when the job finishes this tick, to act on after the borrow.
-                        let mut finished: Option<(String, Option<String>, Option<String>, bool, i64, String, Option<String>)> = None;
+                        // Set when the job finishes this tick, to emit after the borrow.
+                        let mut finished: Option<(SharedString, bool, Option<SharedString>)> = None;
                         if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
                             if let Some(s) = &stats {
                                 j.bytes = s.bytes;
@@ -169,18 +174,13 @@ impl Jobs {
                                         tracing::warn!(job = %j.label(), command = %j.command, elapsed_ms = j.elapsed_ms, error = %msg, "job failed");
                                         j.error = Some(msg);
                                     }
-                                    let endpoint = |i: usize| {
-                                        j.targets.get(i).map(|t| format!("{}:{}", t.remote, t.path))
-                                    };
                                     let err = if st.success { None } else { j.error.clone() };
-                                    finished = Some((j.verb.to_string(), endpoint(0), endpoint(1), st.success, j.bytes as i64, j.label(), err));
+                                    finished = Some((j.label().into(), st.success, err.map(Into::into)));
                                 }
                             }
                         }
-                        if let Some((op, src, dst, ok, bytes, label, err)) = finished {
-                            this.db.record_job(&op, src.as_deref(), dst.as_deref(), ok, bytes);
-                            this.refresh_history();
-                            cx.emit(JobsEvent::Finished { label: label.into(), ok, error: err.map(Into::into) });
+                        if let Some((label, ok, error)) = finished {
+                            cx.emit(JobsEvent::Finished { label, ok, error });
                         }
                         if reload {
                             cx.emit(JobsEvent::ReloadEntries);
@@ -238,8 +238,6 @@ impl Jobs {
         let id = self.seq;
         self.seq += 1;
         let group = format!("rspace/{id}");
-        // The command carries the full remote:path args — log it so a failure is
-        // diagnosable without guessing the source/destination.
         tracing::info!(%group, command = %command, "job enqueued");
         self.items.push(Job {
             id,
@@ -248,6 +246,7 @@ impl Jobs {
             verb,
             targets,
             done: false,
+            cancelled: false,
             error: None,
             bytes: 0,
             total: 0,
@@ -267,9 +266,8 @@ impl Jobs {
     }
 
     fn on_job_submitted(&mut self, id: usize, result: Result<u64, ServiceError>, cx: &mut Context<Self>) {
-        // A job that fails to even start never reaches the poll loop, so log and
-        // notify here (same path the poll loop uses for in-flight failures).
-        let mut failed: Option<(String, Option<String>, Option<String>, String, String)> = None;
+        // A job that fails to start never reaches the poll loop, so settle it here.
+        let mut failed: Option<(SharedString, SharedString)> = None;
         if let Some(j) = self.items.iter_mut().find(|j| j.id == id) {
             match result {
                 Ok(jobid) => j.jobid = Some(jobid),
@@ -278,14 +276,12 @@ impl Jobs {
                     tracing::warn!(command = %j.command, error = %err, "job submit failed");
                     j.done = true;
                     j.error = Some(err.clone());
-                    let endpoint = |i: usize| j.targets.get(i).map(|t| format!("{}:{}", t.remote, t.path));
-                    failed = Some((j.verb.to_string(), endpoint(0), endpoint(1), j.label(), err));
+                    failed = Some((j.label().into(), err.into()));
                 }
             }
         }
-        if let Some((op, src, dst, label, err)) = failed {
-            self.db.record_job(&op, src.as_deref(), dst.as_deref(), false, 0);
-            cx.emit(JobsEvent::Finished { label: label.into(), ok: false, error: Some(err.into()) });
+        if let Some((label, err)) = failed {
+            cx.emit(JobsEvent::Finished { label, ok: false, error: Some(err) });
         }
         cx.notify();
     }
@@ -310,7 +306,7 @@ impl Jobs {
             this.update(cx, |this, cx| {
                 if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
                     j.done = true;
-                    j.error.get_or_insert_with(|| "cancelled".into());
+                    j.cancelled = true;
                 }
                 cx.notify();
             })

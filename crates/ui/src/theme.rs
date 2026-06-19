@@ -18,6 +18,8 @@ pub const ACCENT_HOVER: u32 = 0x5a9bf0;
 pub const ACCENT_SOFT: u32 = 0x478be626;
 pub const SUCCESS: u32 = 0x57ab5a; // success
 pub const DANGER: u32 = 0xe5534b; // error
+/// Translucent danger fill for the ambient wash behind a failed task row.
+pub const DANGER_SOFT: u32 = 0xe5534b1f;
 // Translucent element overlays (element.* base), neutral over any pane bg.
 pub const OVERLAY: u32 = 0x656c7626;
 pub const SELECT: u32 = 0x656c7659;
@@ -52,6 +54,7 @@ pub const SIDEBAR_MIN: f32 = 160.0;
 pub const PREVIEW_W: f32 = 320.0;
 pub const PREVIEW_MIN: f32 = 220.0;
 pub const PREVIEW_MAX: f32 = 640.0;
+pub const JOBS_W: f32 = 380.0;
 pub const SIDEBAR_MAX: f32 = 480.0;
 pub const RESIZE_HANDLE_W: f32 = 6.0;
 pub const TITLE_BAR_H: f32 = 36.0;

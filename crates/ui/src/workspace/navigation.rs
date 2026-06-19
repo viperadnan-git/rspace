@@ -81,15 +81,29 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Jump to the open remote's root.
+    pub(crate) fn go_to_root(&mut self, cx: &mut Context<Self>) {
+        if let Some(remote) = self.open_remote.clone() {
+            self.navigate(remote, String::new(), None, cx);
+        }
+    }
+
     pub(crate) fn reveal_target(&mut self, target: JobTarget, window: &mut Window, cx: &mut Context<Self>) {
-        self.jobs_open = false;
+        // The Tasks dock sits beside the explorer, so revealing a target navigates
+        // the explorer without closing the dock (unlike the old bottom panel).
+        self.reveal_target_in_explorer(target, cx);
+        self.focus_explorer_pane(window, cx);
+    }
+
+    /// Navigate the explorer to a job endpoint (no focus change — for menu actions
+    /// that lack a `Window`).
+    pub(crate) fn reveal_target_in_explorer(&mut self, target: JobTarget, cx: &mut Context<Self>) {
         if target.is_dir {
             self.navigate(target.remote, target.path, None, cx);
         } else {
             let containing_dir = parent_of(&target.path).to_string();
             self.navigate(target.remote, containing_dir, Some(target.name.to_string()), cx);
         }
-        self.focus_explorer_pane(window, cx);
     }
 
     /// Remember the cursor row of the current location, so going back restores it.

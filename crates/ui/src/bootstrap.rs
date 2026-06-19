@@ -2,15 +2,6 @@
 
 use super::*;
 
-// Component-owned actions, declared in their modules; bound centrally here.
-use crate::confirm::ConfirmAccept;
-use crate::explorer::{CloseSearch, SearchSubmit};
-use crate::mount_options::{MountCancel, MountSave};
-use crate::number_field::NumberCommit;
-use crate::prompt::{PromptCancel, PromptSubmit};
-use crate::remotes::{ConfigConfirm, ConfigNext, ConfigPrev, FocusNext, FocusPrev};
-use crate::status_screen::SetupSubmit;
-
 struct Assets;
 
 impl AssetSource for Assets {
@@ -40,7 +31,8 @@ impl AssetSource for Assets {
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
-            "plus", "server_network", "server_network_off", "github", "search", "corner_down_left"
+            "plus", "server_network", "server_network_off", "github", "search", "corner_down_left",
+            "keyboard", "new_folder", "home"
         ))
     }
 
@@ -66,7 +58,7 @@ pub struct Startup {
 
 pub fn run(startup: Startup) {
     application().with_assets(Assets).run(move |cx: &mut App| {
-        bind_keys(cx);
+        keymap::bind(cx);
         text_input::bind_keys(cx);
         picker::bind_keys(cx);
         cx.set_menus(vec![
@@ -117,71 +109,3 @@ pub fn run(startup: Startup) {
     });
 }
 
-fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("secondary-q", Quit, None),
-        // macOS native chord + the F11 convention used on Linux/Windows.
-        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
-        KeyBinding::new("f11", ToggleFullscreen, None),
-        // Navigation/mutation are inert while a confirm dialog owns the keyboard.
-        KeyBinding::new("down", SelectNext, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("j", SelectNext, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("up", SelectPrev, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("k", SelectPrev, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("shift-down", SelectNext, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("shift-j", SelectNext, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("shift-up", SelectPrev, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("shift-k", SelectPrev, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-a", SelectAll, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("enter", Open, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("tab", TogglePane, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("backspace", GoUp, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-[", GoBack, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-]", GoForward, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-r", Reload, Some("Workspace && !modal && !TextInput")),
-        // Toggle (not !modal) so it can also close itself; the handler ignores
-        // it while another modal is open.
-        // The modern "cmdk" command-menu shortcut: cmd-k on macOS, ctrl-k elsewhere.
-        KeyBinding::new("secondary-k", TogglePalette, Some("Workspace")),
-        KeyBinding::new("left", FocusSidebar, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("right", FocusExplorer, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-c", CopyEntry, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-x", CutEntry, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-v", PasteEntry, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-backspace", DeleteEntry, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-shift-n", NewFolder, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("secondary-u", NewFile, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("f2", Rename, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("space", TogglePreview, Some("Workspace && !modal && !TextInput")),
-        KeyBinding::new("escape", CloseSettings, Some("Workspace")),
-        // Add/edit-remote dialog: arrows (or ctrl-n/p) navigate the picker,
-        // Enter advances. Bound to its own context so any focusable list can reuse.
-        KeyBinding::new("down", ConfigNext, Some("RemoteConfig")),
-        KeyBinding::new("ctrl-n", ConfigNext, Some("RemoteConfig")),
-        KeyBinding::new("up", ConfigPrev, Some("RemoteConfig")),
-        KeyBinding::new("ctrl-p", ConfigPrev, Some("RemoteConfig")),
-        // Enter confirms the current step from anywhere in the modal (matching the
-        // other dialogs), so blurring a field doesn't disable it.
-        KeyBinding::new("enter", ConfigConfirm, Some("RemoteConfig")),
-        KeyBinding::new("tab", FocusNext, Some("RemoteConfig")),
-        KeyBinding::new("shift-tab", FocusPrev, Some("RemoteConfig")),
-        KeyBinding::new("enter", ConfirmAccept, Some("Confirm")),
-        KeyBinding::new("enter", PromptSubmit, Some("Prompt")),
-        KeyBinding::new("escape", PromptCancel, Some("Prompt")),
-        KeyBinding::new("enter", MountSave, Some("MountOptions")),
-        KeyBinding::new("escape", MountCancel, Some("MountOptions")),
-        KeyBinding::new("enter", SetupSubmit, Some("Setup")),
-        KeyBinding::new("enter", NumberCommit, Some("NumberField")),
-        KeyBinding::new("enter", SearchSubmit, Some("ExplorerSearch")),
-        // Toggle works while the search field is focused too, so it can close it.
-        KeyBinding::new("secondary-f", ToggleSearch, Some("Workspace && !modal")),
-        KeyBinding::new("escape", CloseSearch, Some("ExplorerSearch")),
-        KeyBinding::new("secondary-=", ZoomIn, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-+", ZoomIn, Some("Workspace && !modal")),
-        KeyBinding::new("secondary--", ZoomOut, Some("Workspace && !modal")),
-        KeyBinding::new("secondary-0", ZoomReset, Some("Workspace && !modal")),
-    ]);
-    // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns it.
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([KeyBinding::new("cmd-m", Minimize, None)]);
-}

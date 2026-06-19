@@ -7,7 +7,7 @@ pub mod settings;
 pub mod sort;
 
 pub use cache::{Lookup, QueryCache};
-pub use db::{Db, JobRecord, UiState};
+pub use db::{Db, UiState};
 pub use paths::{dir_size, mount_root, Paths};
 pub use settings::{Settings, SettingsStore};
 pub use sort::{SortField, SortOrder};

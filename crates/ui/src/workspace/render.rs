@@ -53,8 +53,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_palette))
             .on_action(cx.listener(Self::action_add_remote))
             .on_action(cx.listener(Self::action_open_settings))
+            .on_action(cx.listener(Self::action_show_keybindings))
             .on_action(cx.listener(Self::action_restart_daemon))
-            .on_action(cx.listener(Self::action_toggle_transfers))
+            .on_action(cx.listener(Self::action_toggle_tasks))
             .on_action(cx.listener(Self::zoom_in))
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::zoom_reset))
@@ -71,6 +72,11 @@ impl Render for Workspace {
                         let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
                         this.preview.update(cx, |p, cx| p.set_width(w, cx));
                     }
+                    ResizeTarget::Jobs => {
+                        let from_right = f32::from(window.viewport_size().width) - x;
+                        let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
+                        this.set_jobs_width(w, cx);
+                    }
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_pane_widths))
@@ -79,29 +85,23 @@ impl Render for Workspace {
             .text_color(rgb(FG))
             .text_sm()
             .child(self.render_title_bar(window, cx))
-            .child({
-                // A panel covers the browser only while open AND zoomed, so
-                // closing it can never leave the content region blank.
-                let zoomed = self.jobs_open && self.jobs_maximized;
-                v_flex()
+            .child(
+                // The Tasks panel is the workspace-level right dock (global). The
+                // Preview panel is rendered by the explorer itself, so it lives
+                // inside the explorer column and can't exist without an open remote.
+                div()
+                    .flex()
+                    .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .when(!zoomed, |el| {
-                        el.child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_1()
-                                .min_h(px(0.0))
-                                .w_full()
-                                .child(self.render_sidebar(cx))
-                                .child(self.render_explorer(cx)),
-                        )
-                    })
-                    .when(self.jobs_open, |el| el.child(self.render_transfers(cx)))
-            })
+                    .w_full()
+                    .child(self.render_sidebar(cx))
+                    .child(self.render_explorer(cx))
+                    .when(self.dock_is(DockPanel::Tasks), |el| el.child(self.render_tasks(cx))),
+            )
             .child(self.render_status_bar(cx))
             .when(self.menus.context.is_some(), |el| el.child(self.render_context_menu(cx)))
+            .when(self.menus.task_menu.is_some(), |el| el.child(self.render_task_menu(cx)))
             .when(self.menus.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.menus.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
             .when(self.menus.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))

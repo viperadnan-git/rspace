@@ -8,15 +8,22 @@ impl Workspace {
     pub(crate) fn persist_pane_widths(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let sidebar = f32::from(self.sidebar.read(cx).width());
         let preview = f32::from(self.preview.read(cx).width());
+        let jobs = f32::from(self.jobs_width);
         let (date, size) = {
             let e = self.explorer.read(cx);
             (f32::from(e.col_date_width()), f32::from(e.col_size_width()))
         };
-        let unchanged = (self.ui.sidebar_width, self.ui.preview_width, self.ui.col_date_width, self.ui.col_size_width)
-            == (Some(sidebar), Some(preview), Some(date), Some(size));
+        let unchanged = (
+            self.ui.sidebar_width,
+            self.ui.preview_width,
+            self.ui.jobs_width,
+            self.ui.col_date_width,
+            self.ui.col_size_width,
+        ) == (Some(sidebar), Some(preview), Some(jobs), Some(date), Some(size));
         if !unchanged {
             self.ui.sidebar_width = Some(sidebar);
             self.ui.preview_width = Some(preview);
+            self.ui.jobs_width = Some(jobs);
             self.ui.col_date_width = Some(date);
             self.ui.col_size_width = Some(size);
             self.save_ui();
@@ -25,6 +32,42 @@ impl Workspace {
 
     pub(crate) fn save_ui(&self) {
         self.app.db.save_ui(&self.ui);
+    }
+
+    pub(crate) fn dock_is(&self, panel: DockPanel) -> bool {
+        self.dock == Some(panel)
+    }
+
+    /// Set the active right-dock panel (exclusive). Only the preview choice is
+    /// persisted; tasks is transient.
+    pub(crate) fn set_dock(&mut self, dock: Option<DockPanel>, cx: &mut Context<Self>) {
+        self.dock = dock;
+        let preview_open = dock == Some(DockPanel::Preview);
+        if self.ui.preview_open != preview_open {
+            self.ui.preview_open = preview_open;
+            self.save_ui();
+        }
+        if preview_open {
+            self.preview.update(cx, |p, cx| p.refresh(cx));
+        }
+        cx.notify();
+    }
+
+    /// Toggle a dock panel: activate it, or close the dock if it's already active.
+    pub(crate) fn toggle_dock(&mut self, panel: DockPanel, cx: &mut Context<Self>) {
+        let next = (self.dock != Some(panel)).then_some(panel);
+        self.set_dock(next, cx);
+    }
+
+    pub(crate) fn set_jobs_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.jobs_width != width {
+            self.jobs_width = width;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn reset_jobs_width(&mut self, cx: &mut Context<Self>) {
+        self.set_jobs_width(px(JOBS_W), cx);
     }
 
     pub(crate) fn minimize(&mut self, _: &Minimize, window: &mut Window, _cx: &mut Context<Self>) {

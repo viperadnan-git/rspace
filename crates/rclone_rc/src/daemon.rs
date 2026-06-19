@@ -97,6 +97,11 @@ async fn spawn_healthy(rclone: &Path, pidfile: &Path) -> Result<(Child, RcClient
         .arg(&pass)
         // Serve remote objects over the same HTTP endpoint for file previews.
         .arg("--rc-serve")
+        // The daemon is the source of truth for tasks; keep finished jobs for the
+        // session so the Tasks panel can show them (rclone expires them in 60s by
+        // default).
+        .arg("--rc-job-expire-duration")
+        .arg("24h")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)

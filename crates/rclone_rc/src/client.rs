@@ -422,6 +422,17 @@ impl RcClient {
         Ok(())
     }
 
+    /// Job ids the daemon currently tracks (running + finished-not-yet-expired).
+    pub async fn job_list(&self) -> Result<Vec<u64>, RcError> {
+        #[derive(Deserialize)]
+        struct JobList {
+            #[serde(default)]
+            jobids: Vec<u64>,
+        }
+        let res: JobList = self.call("job/list", &json!({})).await?;
+        Ok(res.jobids)
+    }
+
     pub async fn stats(&self, group: &str) -> Result<Stats, RcError> {
         self.call("core/stats", &json!({ "group": group })).await
     }

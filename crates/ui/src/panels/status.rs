@@ -183,9 +183,12 @@ impl Workspace {
             .rounded_md()
             .cursor_pointer()
             .hover(|s| s.bg(rgba(OVERLAY)))
+            .tooltip(tooltip_text(format!(
+                "Tasks ({})",
+                if cfg!(target_os = "macos") { "\u{2318}T" } else { "Ctrl T" }
+            )))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.jobs_open = !this.jobs_open;
-                cx.notify();
+                this.toggle_dock(DockPanel::Tasks, cx);
             }))
             .when(active > 0, |el| {
                 el.child(

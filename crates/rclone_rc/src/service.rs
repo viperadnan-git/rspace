@@ -421,6 +421,10 @@ impl Service {
         self.run(move |c| async move { c.job_stop(jobid).await }).await
     }
 
+    pub async fn job_list(&self) -> Result<Vec<u64>, ServiceError> {
+        self.run(|c| async move { c.job_list().await }).await
+    }
+
     pub async fn list_dir(&self, remote: &str, path: &str) -> Result<Vec<Entry>, ServiceError> {
         tracing::debug!(remote, path, "list dir start");
         let start = std::time::Instant::now();

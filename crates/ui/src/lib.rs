@@ -6,6 +6,8 @@ mod daemon;
 mod explorer;
 mod fuzzy;
 mod jobs;
+mod keybindings;
+mod keymap;
 mod menus;
 mod mount_options;
 mod panels;
@@ -32,7 +34,7 @@ use std::time::Duration;
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
-    DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding,
+    DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable,
     Menu, MenuItem,
     MouseButton, MouseDownEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
@@ -40,7 +42,7 @@ use gpui::{
 };
 use gpui_platform::application;
 use rspace_core::{
-    dir_size, mount_root, Db, JobRecord, Paths, SettingsStore, SortField, SortOrder, UiState,
+    dir_size, mount_root, Db, Paths, SettingsStore, SortField, SortOrder, UiState,
 };
 use rspace_rclone_rc::{
     ArgKind, ArgSpec, ArgValue, ConfigPaths, Entry, InfoOp, InfoResult, Matcher, MountConfig,
@@ -50,6 +52,7 @@ use rspace_rclone_rc::{
 use preview::PreviewPane;
 use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
+use keybindings::KeybindingsView;
 use picker::Picker;
 use prompt::PromptModal;
 use toast::{ToastBody, Toasts};
@@ -64,7 +67,6 @@ use query::{Query, Status};
 use theme::*;
 use widgets::*;
 
-const JOB_HISTORY_LIMIT: usize = 50;
 /// Recent remotes fetched into the cache; the welcome screen filters these
 /// against the live config and shows the first few, so over-fetch to survive
 /// remotes that were since deleted.
@@ -103,11 +105,12 @@ actions!(
         AddRemote,
         OpenSettings,
         RestartDaemon,
-        ToggleTransfers,
+        ToggleTasks,
         ToggleSearch,
         ZoomIn,
         ZoomOut,
-        ZoomReset
+        ZoomReset,
+        ShowKeybindings
     ]
 );
 
@@ -171,8 +174,21 @@ struct Menus {
     bg_menu: Option<Point<Pixels>>,
     /// Remote right-click menu: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
+    /// Task-row right-click menu: the row's actions and the cursor position.
+    task_menu: Option<(TaskMenuData, Point<Pixels>)>,
     /// The rc-daemon health popover (status bar).
     rc_popover_open: bool,
+}
+
+/// What a Tasks-row context menu acts on — captured at right-click.
+#[derive(Clone)]
+struct TaskMenuData {
+    job_id: usize,
+    command: String,
+    targets: Vec<JobTarget>,
+    running: bool,
+    can_retry: bool,
+    can_remove: bool,
 }
 
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
@@ -183,10 +199,21 @@ struct Clipboard {
     mode: TransferMode,
 }
 
+/// Occupant of the single right-side dock. At most one is shown; toggling one
+/// replaces the other (Zed-style exclusive dock). Each panel is rendered by its
+/// owner — Preview by the explorer view (so it can't exist without an open
+/// remote), Tasks by the workspace (global).
+#[derive(Clone, Copy, PartialEq)]
+enum DockPanel {
+    Preview,
+    Tasks,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum ResizeTarget {
     Sidebar,
     Preview,
+    Jobs,
 }
 
 #[derive(Clone)]
@@ -299,10 +326,12 @@ struct Workspace {
     prompt_sub: Option<gpui::Subscription>,
     toasts: Entity<Toasts>,
     jobs: Entity<Jobs>,
-    jobs_open: bool,
-    jobs_maximized: bool,
-    preview_open: bool,
-    /// The preview pane (owns its subject, fetch, and cache).
+    /// The active right-dock panel, if any (exclusive: preview xor tasks).
+    dock: Option<DockPanel>,
+    /// Tasks pane width (resizable; persisted). Reuses the preview clamp range.
+    jobs_width: Pixels,
+    /// The preview pane (owns its subject, fetch, and cache); rendered inside the
+    /// explorer column.
     preview: Entity<PreviewPane>,
     /// The rcd status item (owns daemon health + popover).
     daemon: Entity<DaemonStatus>,
@@ -333,9 +362,10 @@ impl Workspace {
         let preview_width = clamped_width(ui.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
         let col_date_width = clamped_width(ui.col_date_width, COL_DATE, COL_MIN, COL_MAX);
         let col_size_width = clamped_width(ui.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
-        let jobs_maximized = ui.transfers_maximized;
-        let preview_open = ui.preview_open;
-        let jobs = cx.new(|_| Jobs::new(service.clone(), db.clone()));
+        let jobs_width = clamped_width(ui.jobs_width, JOBS_W, PREVIEW_MIN, PREVIEW_MAX);
+        // Preview is the only persisted dock choice; tasks always starts closed.
+        let dock = ui.preview_open.then_some(DockPanel::Preview);
+        let jobs = cx.new(|_| Jobs::new(service.clone()));
         jobs.update(cx, |jobs, cx| jobs.start_polling(cx));
         let refresh_field = cx.new(|cx| NumberField::new(store.get().refresh_secs, 1, 120, 1, cx));
         cx.subscribe(&refresh_field, |this, _, ev, cx| {
@@ -434,9 +464,8 @@ impl Workspace {
             prompt_sub: None,
             toasts,
             jobs,
-            jobs_open: false,
-            jobs_maximized,
-            preview_open,
+            dock,
+            jobs_width,
             preview,
             daemon,
             clipboard: None,

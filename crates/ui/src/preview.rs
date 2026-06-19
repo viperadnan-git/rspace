@@ -391,26 +391,12 @@ impl Workspace {
         if self.open_remote.is_none() {
             return;
         }
-        self.set_preview_open(!self.preview_open, cx);
+        self.toggle_dock(DockPanel::Preview, cx);
     }
 
-    /// Open the preview pane (persisting the layout) and show the current entry.
+    /// Open the preview pane and show the current entry (`set_dock` refreshes it).
     pub(crate) fn open_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.preview_open {
-            self.set_preview_open(true, cx);
-        } else {
-            self.preview.update(cx, |p, cx| p.refresh(cx));
-        }
-    }
-
-    fn set_preview_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.preview_open = open;
-        self.ui.preview_open = open;
-        self.save_ui();
-        if open {
-            self.preview.update(cx, |p, cx| p.refresh(cx));
-        }
-        cx.notify();
+        self.set_dock(Some(DockPanel::Preview), cx);
     }
 
     pub(crate) fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -37,6 +37,7 @@ impl Workspace {
                     .gap_5()
                     .child(self.refresh_setting(cx))
                     .child(self.ui_font_setting(cx))
+                    .child(self.path_bar_setting(cx))
                     .child(divider())
                     .child(self.download_setting(cx))
                     .child(divider())
@@ -74,6 +75,18 @@ impl Workspace {
                 .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).build(|this, cx| {
                     this.choose_download_dir(cx)
                 }, cx)),
+        )
+    }
+
+    fn path_bar_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = self.store.get().show_path_bar;
+        setting_block(
+            "Path bar",
+            "Show the breadcrumb path at the bottom of the explorer.",
+            switch("toggle-path-bar", on, None, |this, cx| {
+                this.store.update(|s| s.show_path_bar = !s.show_path_bar);
+                cx.notify();
+            }, cx),
         )
     }
 
@@ -345,7 +358,6 @@ impl Workspace {
         self.app.db.clear_history();
         delete_rotated_logs(&self.app.paths.logs_dir());
         self.recent_remotes.clear();
-        self.jobs.update(cx, |j, _| j.refresh_history());
         self.refresh_storage_size();
         self.toast("Cleaned up", false, cx);
         cx.notify();

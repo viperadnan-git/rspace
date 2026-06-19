@@ -4,4 +4,4 @@ use super::*;
 
 mod settings;
 mod status;
-mod transfers;
+mod tasks;

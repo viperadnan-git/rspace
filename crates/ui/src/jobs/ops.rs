@@ -418,19 +418,28 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Paste every clipboard item into the open directory, one job each. A cut
-    /// clears the clipboard once enqueued; a copy stays for repeated pastes.
+    /// Paste every clipboard item into the open directory, one job each.
     pub(crate) fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        self.paste_clipboard_into(self.path.clone(), cx);
+    }
+
+    /// Paste every clipboard item into `dst_dir`, one job each. A cut clears the
+    /// clipboard once enqueued; a copy stays for repeated pastes.
+    pub(crate) fn paste_clipboard_into(&mut self, dst_dir: String, cx: &mut Context<Self>) {
         let Some(clip) = self.clipboard.clone() else {
             return;
         };
         let Some(dst_remote) = self.open_remote.clone() else {
             return;
         };
-        let dst_dir = self.path.clone();
         for entry in &clip.entries {
-            // Same remote and same parent directory: nothing to do.
-            if clip.remote == dst_remote && parent_of(&entry.path) == dst_dir {
+            let same = clip.remote == dst_remote;
+            // Already there, or a folder dropped onto itself / its own subtree.
+            if same
+                && (parent_of(&entry.path) == dst_dir
+                    || (entry.is_dir
+                        && (dst_dir == entry.path || dst_dir.starts_with(&format!("{}/", entry.path)))))
+            {
                 continue;
             }
             let verb = match clip.mode {
@@ -491,8 +500,8 @@ impl Workspace {
 
     pub(crate) fn clear_job(&mut self, id: usize, cx: &mut Context<Self>) {
         self.jobs.update(cx, |jobs, cx| jobs.clear_job(id, cx));
-        if self.jobs.read(cx).is_empty() {
-            self.jobs_open = false;
+        if self.jobs.read(cx).is_empty() && self.dock_is(DockPanel::Tasks) {
+            self.dock = None;
         }
         cx.notify();
     }
@@ -523,8 +532,8 @@ impl Workspace {
             false,
             |this, cx| {
                 this.jobs.update(cx, |jobs, cx| jobs.clear_finished(cx));
-                if this.jobs.read(cx).is_empty() {
-                    this.jobs_open = false;
+                if this.jobs.read(cx).is_empty() && this.dock_is(DockPanel::Tasks) {
+                    this.dock = None;
                 }
             },
             cx,

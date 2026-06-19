@@ -10,7 +10,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let edge = px(-RESIZE_HANDLE_W / 2.0);
-        let left_edge = matches!(target, ResizeTarget::Preview);
+        let left_edge = matches!(target, ResizeTarget::Preview | ResizeTarget::Jobs);
         deferred(
             div()
                 .id(id)
@@ -31,6 +31,7 @@ impl Workspace {
                         match target {
                             ResizeTarget::Sidebar => this.sidebar.update(cx, |s, cx| s.reset_width(cx)),
                             ResizeTarget::Preview => this.preview.update(cx, |p, cx| p.reset_width(cx)),
+                            ResizeTarget::Jobs => this.reset_jobs_width(cx),
                         }
                     }
                 })),
@@ -67,8 +68,18 @@ impl Workspace {
             .border_color(rgb(BORDER_MUTED))
             .child(self.render_brand(cx))
             .child(
-                icon_button("settings-button", "icons/settings.svg")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings(cx))),
+                h_flex()
+                    .gap_1()
+                    .child(
+                        icon_button("keybindings-button", "icons/keyboard.svg")
+                            .tooltip(tooltip_text("Keyboard shortcuts"))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_keybindings(cx))),
+                    )
+                    .child(
+                        icon_button("settings-button", "icons/settings.svg")
+                            .tooltip(tooltip_text("Settings"))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_settings(cx))),
+                    ),
             )
     }
 

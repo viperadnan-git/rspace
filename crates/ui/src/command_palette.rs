@@ -351,30 +351,14 @@ fn icon_row(icon: impl IntoElement, label: impl IntoElement) -> impl IntoElement
     h_flex().flex_1().min_w(px(0.0)).gap_2().child(icon).child(label)
 }
 
-/// Actions offered as commands, with display labels. Curated (not the whole
-/// registry) so internal/nav/per-entry actions never appear.
+/// Palette-offered actions, derived from the single keymap source of truth so
+/// labels and keystrokes never drift from what's bound.
 fn action_defs() -> Vec<(Box<dyn Action>, &'static str)> {
-    vec![
-        (Box::new(AddRemote), "Add Remote"),
-        (Box::new(OpenSettings), "Open Settings"),
-        (Box::new(ToggleTransfers), "Toggle Transfers"),
-        (Box::new(RestartDaemon), "Restart Daemon"),
-        (Box::new(NewFolder), "New Folder"),
-        (Box::new(NewFile), "New File"),
-        (Box::new(GoUp), "Go Up"),
-        (Box::new(GoBack), "Go Back"),
-        (Box::new(GoForward), "Go Forward"),
-        (Box::new(Reload), "Reload"),
-        (Box::new(SelectAll), "Select All"),
-        (Box::new(TogglePane), "Toggle Pane"),
-        (Box::new(TogglePreview), "Toggle Preview"),
-        (Box::new(FocusSidebar), "Focus Sidebar"),
-        (Box::new(FocusExplorer), "Focus Explorer"),
-        (Box::new(Minimize), "Minimize"),
-        (Box::new(Zoom), "Zoom"),
-        (Box::new(ToggleFullscreen), "Toggle Fullscreen"),
-        (Box::new(Quit), "Quit"),
-    ]
+    crate::keymap::commands()
+        .into_iter()
+        .filter(|c| c.in_palette)
+        .map(|c| (c.action, c.label))
+        .collect()
 }
 
 enum PathLoc {
