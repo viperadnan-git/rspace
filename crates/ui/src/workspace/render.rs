@@ -4,12 +4,11 @@ use super::*;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.rebuild_search_view();
-        self.resolve_selection();
         self.refresh_preview(cx);
-        // Keep focus on the open dialog, else on the workspace — so each owns the
-        // keyboard while shown, and focus returns here when it closes. The modal
-        // entities (remote config, confirm) steer their own focus.
+        // Restore focus only when it has been lost (e.g. a modal closed) — route
+        // it to the active pane. Modals, the inline prompt, the settings panel,
+        // and the explorer (incl. its search input) each own their own focus.
+        let explorer_focused = self.explorer.focus_handle(cx).contains_focused(window, cx);
         if self.modal.is_some() || self.prompt.is_some() {
         } else if self.settings_open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
@@ -18,9 +17,11 @@ impl Render for Workspace {
                 let handle = input.read(cx).focus_handle(cx);
                 focus_once(&mut self.rclone_edit_focus, &handle, window, cx);
             }
-        } else if self.search_input.read(cx).focus_handle(cx).is_focused(window) {
-        } else if !self.focus.is_focused(window) {
-            self.focus.focus(window, cx);
+        } else if !explorer_focused && !self.focus.is_focused(window) {
+            match self.pane {
+                Pane::Explorer => self.explorer.focus_handle(cx).focus(window, cx),
+                Pane::Sidebar => self.focus.focus(window, cx),
+            }
         }
         v_flex()
             .key_context("Workspace")
@@ -44,7 +45,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::new_folder))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::rename))

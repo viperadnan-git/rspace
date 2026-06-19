@@ -5,10 +5,11 @@ use super::*;
 impl Workspace {
     pub(crate) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let info = if self.open_remote.is_some() {
-            if self.selected.len() > 1 {
-                format!("{} selected", self.selected.len())
+            let exp = self.explorer.read(cx);
+            if exp.selection_len() > 1 {
+                format!("{} selected", exp.selection_len())
             } else {
-                format!("{} items", self.entries().len())
+                format!("{} items", exp.entries().len())
             }
         } else {
             format!("{} remotes", self.remotes.len())

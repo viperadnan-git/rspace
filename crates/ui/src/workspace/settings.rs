@@ -161,16 +161,16 @@ impl Workspace {
             self.close_modal(cx);
             self.close_menus();
             cx.notify();
-        } else if self.pane == Pane::Explorer && self.selected.len() > 1 {
+        } else if self.pane == Pane::Explorer && self.explorer.read(cx).selection_len() > 1 {
             // Nothing to close: collapse a multi-selection back to the cursor.
-            self.select_only(self.entry_sel);
+            self.explorer.update(cx, |e, cx| e.collapse_selection(cx));
             cx.notify();
         }
     }
 
     pub(crate) fn set_refresh(&mut self, secs: u64, cx: &mut Context<Self>) {
         self.store.update(|s| s.refresh_secs = secs);
-        self.dir_query.set_stale_after(Some(Duration::from_secs(secs.max(1))));
+        self.explorer.update(cx, |e, _| e.set_refresh(secs));
         cx.notify();
     }
 

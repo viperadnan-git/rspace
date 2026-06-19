@@ -22,8 +22,8 @@ impl Workspace {
             return;
         };
         let same = src_remote == dst_remote;
-        let items: Vec<(String, String, bool)> = if self.selected.contains(&dragged.path) {
-            self.selected_entries().into_iter().map(|e| (e.path, e.name, e.is_dir)).collect()
+        let items: Vec<(String, String, bool)> = if self.explorer.read(cx).is_selected(&dragged.path) {
+            self.selected_entries(cx).into_iter().map(|e| (e.path, e.name, e.is_dir)).collect()
         } else {
             vec![(dragged.path.clone(), dragged.name.clone(), dragged.is_dir)]
         };
@@ -213,7 +213,7 @@ impl Workspace {
         let Some(remote) = self.open_remote.clone() else {
             return;
         };
-        if let Some(entry) = self.entries().get(self.entry_sel).cloned() {
+        if let Some(entry) = self.explorer.read(cx).focused_entry() {
             self.begin_rename(remote, entry, cx);
         }
     }
@@ -235,7 +235,7 @@ impl Workspace {
             return;
         }
         let to = join_path(parent_of(&entry.path), &new_name);
-        self.pending_select = Some(new_name.clone());
+        self.explorer.update(cx, |e, _| e.set_pending(new_name.clone()));
         let (from, is_dir) = (entry.path.clone(), entry.is_dir);
         let source = JobTarget::new(entry.name, remote.clone(), from.clone(), is_dir);
         let destination = JobTarget::new(new_name.clone(), remote.clone(), to.clone(), is_dir);
@@ -263,7 +263,7 @@ impl Workspace {
             return;
         };
         let path = join_path(&self.path, &name);
-        self.pending_select = Some(name.clone());
+        self.explorer.update(cx, |e, _| e.set_pending(name.clone()));
         let folder = JobTarget::new(name, remote.clone(), path.clone(), true);
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
         let service = self.service.clone();
@@ -338,7 +338,7 @@ impl Workspace {
         let Some(remote) = self.open_remote.clone() else {
             return;
         };
-        let entries = self.selected_entries();
+        let entries = self.selected_entries(cx);
         let n = entries.len();
         let what = match entries.first() {
             Some(e) if n == 1 => {
@@ -378,7 +378,7 @@ impl Workspace {
     /// Open a confirmation dialog; `action` runs only if the user confirms.
 
     pub(crate) fn download_selected(&mut self, cx: &mut Context<Self>) {
-        for entry in self.selected_entries() {
+        for entry in self.selected_entries(cx) {
             self.download_entry(&entry, cx);
         }
     }
@@ -409,7 +409,7 @@ impl Workspace {
         if self.pane != Pane::Explorer {
             return;
         }
-        let entries = self.selected_entries();
+        let entries = self.selected_entries(cx);
         if entries.is_empty() {
             return;
         }

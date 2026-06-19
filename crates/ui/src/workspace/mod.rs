@@ -7,7 +7,5 @@ pub(crate) mod modal;
 mod navigation;
 mod remotes;
 mod render;
-mod search;
-mod selection;
 mod settings;
 mod toasts;

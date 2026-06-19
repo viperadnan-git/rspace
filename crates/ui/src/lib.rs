@@ -2,6 +2,7 @@
 
 mod command_palette;
 mod components;
+mod explorer;
 mod fuzzy;
 mod jobs;
 mod menus;
@@ -29,7 +30,7 @@ use std::time::Duration;
 use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
-    DismissEvent, Div, DragMoveEvent, Entity, ExternalPaths, FocusHandle, Focusable, KeyBinding,
+    DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable, KeyBinding,
     Menu, MenuItem,
     MouseButton, MouseDownEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
@@ -53,6 +54,7 @@ use toast::{ToastBody, Toasts};
 use workspace::modal::ActiveModal;
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use number_field::{NumberField, NumberFieldEvent};
+use explorer::{Explorer, ExplorerEvent};
 use text_input::TextInput;
 use query::{Query, Status};
 use theme::*;
@@ -216,6 +218,7 @@ struct DraggedRemote {
 
 /// An explorer entry being dragged onto a folder. `count` lets the preview read
 /// "N items" when the dragged row is part of the multi-selection.
+#[derive(Clone)]
 struct DraggedEntry {
     path: String,
     name: String,
@@ -267,33 +270,14 @@ struct Workspace {
     open_remote: Option<String>,
     /// Empty = root.
     path: String,
-    entry_sel: usize,
-    /// Multi-selection by entry path; survives re-sort and refresh. Always
-    /// contains the cursor's path unless explicitly toggled off.
-    selected: HashSet<String>,
-    sel_anchor: usize,
-    entry_scroll: UniformListScrollHandle,
-    /// A row to select by name once the next listing loads (e.g. the child
-    /// folder after navigating up).
-    pending_select: Option<String>,
-    dir_query: Query<(String, String), Vec<Entry>>,
-    search_input: Entity<TextInput>,
-    search_open: bool,
-    search: String,
-    /// The query whose recursive results `search_query` currently holds.
-    searched: Option<String>,
-    search_query: Query<(String, String, String), Vec<Entry>>,
-    /// Displayed entries while a non-recursive filter is active, and the
-    /// (query, dir-len) it was built for — so it's only rebuilt when those change.
-    view: Vec<Entry>,
-    view_sig: Option<(String, usize)>,
+    /// The file-list pane: owns the listing, selection, search, and sort.
+    explorer: Entity<Explorer>,
+    _explorer_sub: gpui::Subscription,
     history: Vec<Location>,
     history_pos: usize,
     /// Last folder viewed per remote; reopening a remote returns to it.
     remote_paths: HashMap<String, String>,
     copied: Option<CopySource>,
-    sort_field: SortField,
-    sort_order: SortOrder,
     paths: Paths,
     store: SettingsStore,
     db: Db,
@@ -345,8 +329,6 @@ impl Workspace {
     ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let stale = Duration::from_secs(store.get().refresh_secs.max(1));
-        let (sort_field, sort_order) = (store.get().sort_field, store.get().sort_order);
         let ui = db.load_ui();
         let pinned = db.load_pinned();
         let recent_remotes = db.recent_remotes(RECENT_REMOTES_FETCH);
@@ -370,18 +352,15 @@ impl Workspace {
             this.set_refresh(*secs, cx);
         })
         .detach();
-        let search_input = cx.new(|cx| TextInput::new(cx, "Search this folder").bare());
-        // Only react to actual text changes — the input also notifies on caret
-        // moves/selection, which don't affect the filter.
-        cx.observe(&search_input, |this, input, cx| {
-            let text = input.read(cx).text();
-            if text != this.search {
-                this.search = text.to_string();
-                cx.notify();
-            }
-        })
-        .detach();
         let toasts = cx.new(|cx| Toasts::new(window, cx));
+        let weak = cx.entity().downgrade();
+        let settings = store.get();
+        let (sort_field, sort_order, refresh_secs) =
+            (settings.sort_field, settings.sort_order, settings.refresh_secs);
+        let explorer = cx.new(|cx| {
+            Explorer::new(weak.clone(), service.clone(), sort_field, sort_order, refresh_secs, window, cx)
+        });
+        let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
             JobsEvent::Finished { label, ok, error } => {
@@ -419,25 +398,12 @@ impl Workspace {
             col_size_width,
             open_remote: None,
             path: String::new(),
-            entry_sel: 0,
-            selected: HashSet::new(),
-            sel_anchor: 0,
-            entry_scroll: UniformListScrollHandle::new(),
-            pending_select: None,
-            dir_query: Query::new(Some(stale)),
-            search_input,
-            search_open: false,
-            search: String::new(),
-            searched: None,
-            search_query: Query::new(None),
-            view: Vec::new(),
-            view_sig: None,
+            explorer,
+            _explorer_sub: explorer_sub,
             history: Vec::new(),
             history_pos: 0,
             remote_paths: HashMap::new(),
             copied: None,
-            sort_field,
-            sort_order,
             paths,
             store,
             db,
@@ -469,14 +435,41 @@ impl Workspace {
         };
         this.load_remotes(cx);
         Self::poll_health(window, cx);
-        // Poll the open folder at the refresh cadence (focus-gated, self-cancelling).
-        query::poll(
-            window,
-            cx,
-            |v: &Self| Duration::from_secs(v.store.get().refresh_secs.max(1)),
-            Self::load_entries,
-        );
         this
+    }
+
+    /// Bridge explorer signals to navigation, preview, menus, and file ops —
+    /// handled after the explorer's own update completes, so calling back into
+    /// the explorer here never re-enters its borrow.
+    fn on_explorer_event(&mut self, _: Entity<Explorer>, event: &ExplorerEvent, cx: &mut Context<Self>) {
+        match event {
+            ExplorerEvent::OpenDir(path) => {
+                let remote = self.open_remote.clone().unwrap_or_default();
+                self.navigate(remote, path.clone(), None, cx);
+            }
+            ExplorerEvent::OpenFile => self.open_preview(cx),
+            ExplorerEvent::Context(entry, pos) => {
+                self.bg_menu = None;
+                self.context = Some((entry.clone(), *pos));
+                cx.notify();
+            }
+            ExplorerEvent::Background(pos) => {
+                self.context = None;
+                self.bg_menu = Some(*pos);
+                cx.notify();
+            }
+            ExplorerEvent::Upload(paths) => self.upload_paths(paths.clone(), cx),
+            ExplorerEvent::Drop { dragged, dst_remote, dst_dir, copy } => {
+                self.drop_into(dragged, dst_remote.clone(), dst_dir.clone(), *copy, cx);
+            }
+            ExplorerEvent::SortChanged(field, order) => {
+                let (field, order) = (*field, *order);
+                self.store.update(|s| {
+                    s.sort_field = field;
+                    s.sort_order = order;
+                });
+            }
+        }
     }
 
     /// Ping the rc daemon on an interval for the status-bar dot; runs unfocused.

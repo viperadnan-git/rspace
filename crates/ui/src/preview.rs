@@ -123,22 +123,15 @@ impl Workspace {
             self.preview = None;
             return;
         };
-        // Cheap identity from borrows — no allocation on the steady-state no-op
-        // (this runs on every render while the pane is open).
-        let subject_path = if self.selected.is_empty() {
-            self.path.as_str()
-        } else {
-            self.entries().get(self.entry_sel).map_or(self.path.as_str(), |e| e.path.as_str())
-        };
-        if self.preview.as_ref().is_some_and(|p| p.is(remote, subject_path)) {
+        // The selected cursor entry, or the open folder/remote when nothing is
+        // selected (the cursor is not a selection).
+        let cursor = self.explorer.read(cx).cursor_entry();
+        let subject_path = cursor.as_ref().map_or(self.path.clone(), |e| e.path.clone());
+        if self.preview.as_ref().is_some_and(|p| p.is(remote, &subject_path)) {
             return;
         }
         let remote = remote.to_string();
-        let entry = if self.selected.is_empty() {
-            self.location_entry()
-        } else {
-            self.entries().get(self.entry_sel).cloned().unwrap_or_else(|| self.location_entry())
-        };
+        let entry = cursor.unwrap_or_else(|| self.location_entry());
         let key = format!("{remote}:{}", entry.path);
         if let Some(state) = self.preview_cache_get(&key) {
             self.preview = Some(Preview { remote, entry, state, dir_size: DirSize::Idle });
