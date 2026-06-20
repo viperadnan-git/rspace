@@ -64,7 +64,7 @@ impl Workspace {
     }
 
     pub(crate) fn refresh_storage_size(&mut self) {
-        self.settings.storage_size = Some((dir_size(self.app.paths.root()), dir_size(&self.app.paths.cache_dir())));
+        self.settings.storage_size = Some(self.app.paths.storage_size());
     }
 
     /// Resolve rclone's own paths (`config/paths`, fetched once) and size its

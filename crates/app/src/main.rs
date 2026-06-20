@@ -19,8 +19,13 @@ fn main() -> Result<()> {
     let paths = Paths::resolve()?;
     paths.ensure()?;
     // Held until the process exits so the background log writer flushes.
-    let _log_guard = logging::init(&paths.logs_dir());
-    tracing::info!(root = %paths.root().display(), "storage ready");
+    let _log_guard = logging::init(paths.logs_dir());
+    tracing::info!(
+        config = %paths.config_dir().display(),
+        data = %paths.data_dir().display(),
+        cache = %paths.cache_dir().display(),
+        "storage ready"
+    );
 
     let store = SettingsStore::load(paths.settings_path());
     let db = Db::open(&paths.db_path(), &paths.history_db_path());

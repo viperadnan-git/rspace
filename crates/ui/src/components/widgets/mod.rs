@@ -231,25 +231,29 @@ pub fn icon_button(id: impl Into<gpui::ElementId>, icon: &'static str) -> Statef
 
 /// Base for a centered modal card: elevated surface that swallows clicks so they
 /// don't fall through to the dismiss-on-click backdrop.
-pub fn modal_card<V: 'static>(id: &'static str, focus: &FocusHandle, cx: &mut Context<V>) -> Stateful<Div> {
-    let focus = focus.clone();
+/// Base for a modal's content: occludes and swallows the press so a click inside
+/// never reaches the dismiss backdrop. The one place this guard lives.
+pub fn modal_surface(id: &'static str) -> Stateful<Div> {
     v_flex()
         .id(id)
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| cx.stop_propagation())
+}
+
+/// A dialog card: [`modal_surface`] + chrome, and a click blurs the focused field
+/// while keeping focus/shortcuts on the card.
+pub fn modal_card<V: 'static>(id: &'static str, focus: &FocusHandle, cx: &mut Context<V>) -> Stateful<Div> {
+    let focus = focus.clone();
+    modal_surface(id)
         .p_5()
         .rounded_lg()
         .bg(rgb(ELEVATED))
         .border_1()
         .border_color(rgb(BORDER_MUTED))
         .shadow_lg()
-        // A click on the card itself (inputs stop propagation, so never them)
-        // blurs the focused field and keeps focus/shortcuts on the card. Also
-        // stops the click reaching any backdrop behind the modal.
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |_, _: &MouseDownEvent, window, cx| {
-                focus.focus(window, cx);
-                cx.stop_propagation();
-            }),
+            cx.listener(move |_, _: &MouseDownEvent, window, cx| focus.focus(window, cx)),
         )
 }
 
@@ -297,20 +301,39 @@ pub enum ButtonStyle {
     Danger,
 }
 
+/// Button scale; `Medium` is the original size. Scales the icon too, which
+/// chaining styles after `build` can't reach.
+#[derive(Clone, Copy, Default)]
+#[allow(dead_code)] // full scale offered; not every step is in use yet
+pub enum ButtonSize {
+    XSmall,
+    Small,
+    #[default]
+    Medium,
+    Large,
+    XLarge,
+}
+
 pub struct Button {
     id: &'static str,
     label: SharedString,
     style: ButtonStyle,
+    size: ButtonSize,
     icon: Option<&'static str>,
 }
 
 impl Button {
     pub fn new(id: &'static str, label: impl Into<SharedString>, style: ButtonStyle) -> Self {
-        Self { id, label: label.into(), style, icon: None }
+        Self { id, label: label.into(), style, size: ButtonSize::default(), icon: None }
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    pub fn size(mut self, size: ButtonSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -324,20 +347,27 @@ impl Button {
             ButtonStyle::Primary | ButtonStyle::Danger => 0xffffff,
             _ => FG,
         };
+        let (px_h, py_v, gap, text, icon_sz) = match self.size {
+            ButtonSize::XSmall => (rem(6.0), rem(1.0), rem(3.0), rem(11.0), rem(11.0)),
+            ButtonSize::Small => (rem(8.0), rem(2.0), rem(4.0), rem(12.0), rem(12.0)),
+            ButtonSize::Medium => (rem(12.0), rem(4.0), rem(6.0), rem(14.0), rem(14.0)),
+            ButtonSize::Large => (rem(16.0), rem(6.0), rem(8.0), rem(16.0), rem(16.0)),
+            ButtonSize::XLarge => (rem(20.0), rem(8.0), rem(10.0), rem(18.0), rem(18.0)),
+        };
         let base = h_flex()
             .id(self.id)
             .flex_shrink_0()
-            .gap_1p5()
+            .gap(gap)
             .items_center()
-            .px_3()
-            .py_1()
+            .px(px_h)
+            .py(py_v)
             .rounded_md()
             .cursor_pointer()
-            .text_sm()
+            .text_size(text)
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(fg))
             .when_some(self.icon, |b, icon| {
-                b.child(svg().path(icon).size(rem(14.0)).flex_shrink_0().text_color(rgb(fg)))
+                b.child(svg().path(icon).size(icon_sz).flex_shrink_0().text_color(rgb(fg)))
             })
             .child(self.label)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_click(this, cx)));
@@ -455,16 +485,6 @@ pub fn setting_block(title: &str, desc: &str, control: impl IntoElement) -> impl
         .child(div().text_sm().text_color(rgb(FG)).child(title.to_string()))
         .child(div().text_xs().text_color(rgb(FG_MUTED)).child(desc.to_string()))
         .child(control)
-}
-
-pub fn info_row(label: &str, value: &str) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .justify_between()
-        .gap_4()
-        .text_xs()
-        .child(div().flex_shrink_0().text_color(rgb(FG_MUTED)).child(label.to_string()))
-        .child(div().min_w(px(0.0)).truncate().text_color(rgb(FG_SUBTLE)).child(value.to_string()))
 }
 
 pub fn count_badge(icon: &'static str, color: u32, n: usize) -> impl IntoElement {

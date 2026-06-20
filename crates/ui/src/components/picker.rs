@@ -5,7 +5,7 @@
 
 use gpui::{
     actions, uniform_list, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent, ScrollStrategy, Subscription,
+    KeyBinding, ListSizingBehavior, ScrollStrategy, Subscription,
     UniformListScrollHandle, Window,
 };
 
@@ -184,8 +184,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
         }
         self.was_loading = loading;
         let count = self.delegate.match_count();
-        v_flex()
-            .id("picker")
+        modal_surface("picker")
             // "modal" suppresses the workspace's `!modal` shortcuts; "Picker" scopes
             // the nav keys to a focused field inside.
             .key_context("modal Picker")
@@ -193,8 +192,6 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::select_prev))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::confirm))
-            // Swallow clicks so they don't fall through to the dismiss backdrop.
-            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
             .w(rem(544.0))
             .rounded_lg()
             .bg(rgb(ELEVATED))

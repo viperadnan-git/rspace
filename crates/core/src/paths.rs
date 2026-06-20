@@ -1,17 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use directories::{ProjectDirs, UserDirs};
+use directories::{BaseDirs, UserDirs};
 use thiserror::Error;
 
 /// User-visible root for mountpoints (`~/rspace`); each remote mounts at
-/// `mount_root()/<remote>`. Separate from the app data root (App Support).
+/// `mount_root()/<remote>`. Separate from the app's state directories.
 pub fn mount_root() -> Option<PathBuf> {
     UserDirs::new().map(|u| u.home_dir().join(APP_NAME))
 }
 
-/// Reverse-DNS application identifier; also the macOS bundle id.
-pub const APP_QUALIFIER: &str = "com";
-pub const APP_ORG: &str = "viperadnan";
 pub const APP_NAME: &str = "rspace";
 
 #[derive(Debug, Error)]
@@ -20,78 +17,115 @@ pub enum PathsError {
     NoHome,
 }
 
-/// Single on-disk root for all rspace state, with typed subdirectories.
-///
-/// To add a subdirectory: add a `*_dir()` accessor and list it in
-/// [`ensure`](Self::ensure) so it is created on startup.
+/// Per-category state directories, each resolved by the OS convention. Modeled on
+/// Zed: config is XDG-style even on macOS (`~/.config/rspace`), data/cache/logs
+/// stay platform-native there.
 #[derive(Debug, Clone)]
 pub struct Paths {
-    root: PathBuf,
+    config: PathBuf,
+    data: PathBuf,
+    cache: PathBuf,
+    logs: PathBuf,
 }
 
 impl Paths {
-    /// Resolve the app root from OS conventions
-    /// (App Support / LOCALAPPDATA / XDG data dir).
     pub fn resolve() -> Result<Self, PathsError> {
-        let dirs =
-            ProjectDirs::from(APP_QUALIFIER, APP_ORG, APP_NAME).ok_or(PathsError::NoHome)?;
-        Ok(Self { root: dirs.data_dir().to_path_buf() })
+        let dirs = BaseDirs::new().ok_or(PathsError::NoHome)?;
+        let home = dirs.home_dir();
+        // XDG `~/.config/rspace` everywhere (rclone-style), not the platform config
+        // dir; Linux still honours `$XDG_CONFIG_HOME` via the resolver.
+        let config = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            dirs.config_dir().join(APP_NAME)
+        } else {
+            home.join(".config").join(APP_NAME)
+        };
+        let data = dirs.data_local_dir().join(APP_NAME);
+        let cache = dirs.cache_dir().join(APP_NAME);
+        let logs = if cfg!(target_os = "macos") {
+            home.join("Library/Logs").join(APP_NAME)
+        } else {
+            data.join("logs")
+        };
+        Ok(Self { config, data, cache, logs })
     }
 
-    /// Build paths under an explicit root (tests, portable mode).
+    /// All categories under one root (tests, portable mode).
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
+        let root = root.into();
+        Self {
+            config: root.join("config"),
+            data: root.join("data"),
+            cache: root.join("cache"),
+            logs: root.join("logs"),
+        }
     }
 
     /// Preferences (kept). User-facing, never auto-cleaned.
-    pub fn config_dir(&self) -> PathBuf {
-        self.root.join("config")
+    pub fn config_dir(&self) -> &Path {
+        &self.config
     }
 
     /// Persistent app data (kept): pinned remotes, window layout.
-    pub fn data_dir(&self) -> PathBuf {
-        self.root.join("data")
+    pub fn data_dir(&self) -> &Path {
+        &self.data
     }
 
-    /// Disposable data — everything the Clean-up action wipes (history, logs).
-    pub fn cache_dir(&self) -> PathBuf {
-        self.root.join("cache")
+    /// Disposable data: recent history and the daemon pid.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache
     }
 
-    pub fn logs_dir(&self) -> PathBuf {
-        self.cache_dir().join("logs")
+    pub fn logs_dir(&self) -> &Path {
+        &self.logs
     }
 
     pub fn settings_path(&self) -> PathBuf {
-        self.config_dir().join("settings.json")
+        self.config.join("settings.json")
     }
 
     /// Kept app state: pinned remotes + window layout.
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir().join("rspace.db")
+        self.data.join("rspace.db")
     }
 
     /// Disposable history: recent remotes, command usage, job log.
     pub fn history_db_path(&self) -> PathBuf {
-        self.cache_dir().join("history.db")
+        self.cache.join("history.db")
     }
 
-    /// Running-daemon pid (runtime; left untouched by clean-up).
+    /// In cache: runtime, and Clean-up never wipes the whole dir.
     pub fn pid_path(&self) -> PathBuf {
-        self.root.join("rcd.pid")
+        self.cache.join("rcd.pid")
     }
 
-    /// Create the root and all subdirectories if missing.
     pub fn ensure(&self) -> std::io::Result<()> {
-        for dir in [self.config_dir(), self.data_dir(), self.logs_dir()] {
+        for dir in [&self.config, &self.data, &self.cache, &self.logs] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())
     }
+
+    /// `(total, clearable)` bytes; clearable = cache + logs. Coincident/nested
+    /// dirs (logs under data on Linux, data == cache on Windows) count once.
+    pub fn storage_size(&self) -> (u64, u64) {
+        let total = sum_distinct(&[&self.config, &self.data, &self.cache, &self.logs]);
+        let clearable = sum_distinct(&[&self.cache, &self.logs]);
+        (total, clearable)
+    }
+}
+
+/// Sum `dir_size`, skipping a dir that duplicates or nests under another in the
+/// list (so shared/nested roots aren't double-counted).
+fn sum_distinct(dirs: &[&PathBuf]) -> u64 {
+    let mut roots: Vec<&PathBuf> = Vec::new();
+    for d in dirs {
+        if roots.iter().any(|r| d.starts_with(r)) {
+            continue;
+        }
+        roots.retain(|r| !r.starts_with(d));
+        roots.push(d);
+    }
+    roots.iter().map(|r| dir_size(r)).sum()
 }
 
 /// Total size in bytes of all files under `path` (recursive; missing → 0).
@@ -116,7 +150,8 @@ mod tests {
     #[test]
     fn subdirs_live_under_root() {
         let p = Paths::with_root("/tmp/rspace-test");
-        assert!(p.config_dir().starts_with(p.root()));
+        assert!(p.config_dir().starts_with("/tmp/rspace-test"));
         assert_eq!(p.settings_path(), p.config_dir().join("settings.json"));
+        assert_eq!(p.pid_path(), p.cache_dir().join("rcd.pid"));
     }
 }

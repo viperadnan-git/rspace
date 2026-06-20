@@ -92,11 +92,15 @@ impl Workspace {
         card: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        // Backdrop: occludes (blocks mouse to the content behind) and dismisses on
+        // an outside click. The card is a direct child so its sizing resolves
+        // against the full-size overlay; it guards inside-clicks via `modal_surface`.
         let overlay = div()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
+            .occlude()
             .flex()
             .justify_center()
             // Pickers anchor near the top (Zed-style); dialogs center vertically.
@@ -110,7 +114,7 @@ impl Workspace {
         if deferred_layer {
             deferred(overlay).priority(3).into_any_element()
         } else {
-            overlay.occlude().into_any_element()
+            overlay.into_any_element()
         }
     }
 

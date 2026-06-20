@@ -40,10 +40,9 @@ impl Workspace {
                     .child(divider())
                     .child(self.download_setting(cx))
                     .child(divider())
-                    .child(self.storage_setting(cx))
-                    .child(divider())
                     .child(self.rclone_setting(cx))
-                    .child(self.settings_info(cx)),
+                    .child(divider())
+                    .child(self.rspace_section(cx)),
             );
         self.modal_overlay(
             true,
@@ -71,7 +70,7 @@ impl Workspace {
                     Some(current),
                     cx,
                 )))
-                .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).build(|this, cx| {
+                .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| {
                     this.choose_download_dir(cx)
                 }, cx)),
         )
@@ -102,20 +101,6 @@ impl Workspace {
     }
 
 
-    fn storage_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (total, clearable) = self.settings.storage_size.unwrap_or_default();
-        let summary = format!("{} · {} clearable", human_size(total as i64), human_size(clearable as i64));
-        setting_block(
-            "Storage",
-            "History and logs the app keeps on disk. Clean up clears these; your preferences and pinned remotes are kept.",
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(div().flex_grow(1.0).min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
-                .child(Button::new("clean-up", "Clean up", ButtonStyle::Soft).build(|this, cx| this.request_cleanup(cx), cx)),
-        )
-    }
-
     /// rclone's own paths (from `config/paths`, so correct per-OS) plus its cache
     /// size and a clear action. Paths are clickable and open with the OS default.
     fn rclone_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -145,7 +130,7 @@ impl Workspace {
                             cache,
                             cx,
                         )))
-                        .child(Button::new("clear-rclone-cache", "Clear", ButtonStyle::Soft).build(|this, cx| {
+                        .child(Button::new("clear-rclone-cache", "Clear", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| {
                             this.request_clear_rclone_cache(cx)
                         }, cx)),
                 ),
@@ -178,9 +163,9 @@ impl Workspace {
                 .gap_1()
                 .items_center()
                 .child(div().flex_1().min_w(px(0.0)).child(input))
-                .child(Button::new(browse_id, "Browse", ButtonStyle::Soft).build(|this, cx| this.browse_rclone_edit(cx), cx))
-                .child(Button::new(cancel_id, "Cancel", ButtonStyle::Secondary).build(|this, cx| this.cancel_rclone_edit(cx), cx))
-                .child(Button::new(save_id, "Save", ButtonStyle::Primary).build(|this, cx| this.confirm_rclone_edit(cx), cx))
+                .child(Button::new(browse_id, "Browse", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| this.browse_rclone_edit(cx), cx))
+                .child(Button::new(cancel_id, "Cancel", ButtonStyle::Secondary).size(ButtonSize::Small).build(|this, cx| this.cancel_rclone_edit(cx), cx))
+                .child(Button::new(save_id, "Save", ButtonStyle::Primary).size(ButtonSize::Small).build(|this, cx| this.confirm_rclone_edit(cx), cx))
                 .into_any_element();
         }
         let current_for_edit = current.clone().unwrap_or_default();
@@ -192,12 +177,13 @@ impl Workspace {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Button::new(change_id, "Change", ButtonStyle::Soft).build(move |this, cx| {
+                    .child(Button::new(change_id, "Change", ButtonStyle::Soft).size(ButtonSize::Small).build(move |this, cx| {
                         this.begin_rclone_edit(field, current_for_edit.clone(), cx)
                     }, cx))
                     .when(overridden, |el| {
                         el.child(
                             Button::new(reset_id, "Reset", ButtonStyle::Secondary)
+                                .size(ButtonSize::Small)
                                 .build(move |this, cx| this.reset_rclone(field, cx), cx)
                                 .tooltip(tooltip_text("Use automatic resolution")),
                         )
@@ -343,22 +329,81 @@ impl Workspace {
 
     fn cleanup_storage(&mut self, cx: &mut Context<Self>) {
         self.app.db.clear_history();
-        delete_rotated_logs(&self.app.paths.logs_dir());
+        delete_rotated_logs(self.app.paths.logs_dir());
         self.recent_remotes.clear();
         self.refresh_storage_size();
         self.toast("Cleaned up", false, cx);
         cx.notify();
     }
 
-    fn settings_info(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = self.app.paths.root().display().to_string();
+    fn rspace_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (total, clearable) = self.settings.storage_size.unwrap_or_default();
+        let summary = format!("{} · {} clearable", human_size(total as i64), human_size(clearable as i64));
+        let p = &self.app.paths;
+        let dirs = [
+            ("path-config", "Config", p.config_dir().display().to_string()),
+            ("path-data", "Data", p.data_dir().display().to_string()),
+            ("path-cache", "Cache", p.cache_dir().display().to_string()),
+            ("path-logs", "Logs", p.logs_dir().display().to_string()),
+        ];
+        let mut paths = v_flex().gap_1();
+        for (id, label, dir) in dirs {
+            paths = paths.child(self.path_row(id, label, dir, cx));
+        }
         v_flex()
-            .gap_3()
-            .pt_3()
-            .border_t_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(info_row("rclone", &self.version))
-            .child(self.path_link("data-folder", Some("Data folder".into()), Some(root), cx))
+            .gap_2()
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(div().text_sm().text_color(rgb(FG)).child("rspace"))
+                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(self.version.clone())),
+            )
+            .child(paths)
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(div().min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
+                    .child(Button::new("clean-up", "Clean up", ButtonStyle::Soft).size(ButtonSize::Small).build(
+                        |this, cx| this.request_cleanup(cx),
+                        cx,
+                    )),
+            )
+    }
+
+    /// A compact `Label   path` row; the path opens with the OS default on click.
+    fn path_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        path: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .text_xs()
+            .child(div().w(rem(44.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)).child(label))
+            .child(
+                div()
+                    .id(id)
+                    .flex_grow(1.0)
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_color(rgb(FG_MUTED))
+                    .cursor_pointer()
+                    .tooltip(tooltip_text("Open with default app"))
+                    .hover(|s| s.text_color(rgb(ACCENT)))
+                    .on_click(cx.listener({
+                        let path = path.clone();
+                        move |_, _: &ClickEvent, _, cx| cx.open_with_system(Path::new(&path))
+                    }))
+                    .child(path),
+            )
     }
 }
 
