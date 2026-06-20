@@ -28,7 +28,7 @@ pub(crate) enum ExplorerEvent {
     /// External files dropped onto the list — upload into the open directory.
     Upload(Vec<PathBuf>),
     /// An entry dragged onto a folder (or the breadcrumb) — move/copy it.
-    Drop { dragged: DraggedEntry, dst_remote: String, dst_dir: String, copy: bool },
+    Drop { dragged: DraggedEntry, dst_remote: String, dst_dir: String, mods: Modifiers },
     /// Sort field/order changed; the workspace persists it to settings.
     SortChanged(SortField, SortOrder),
 }
@@ -69,6 +69,9 @@ pub(crate) struct Explorer {
     /// Size / Date column widths (resizable; persisted by the workspace).
     col_date_width: Pixels,
     col_size_width: Pixels,
+    /// Whether this explorer belongs to the active tab. Background tabs skip the
+    /// folder poll so N open tabs don't fan out into N periodic RC listings.
+    is_active: bool,
 }
 
 impl EventEmitter<ExplorerEvent> for Explorer {}
@@ -103,12 +106,13 @@ impl Explorer {
             }
         })
         .detach();
-        // Poll the open folder at the refresh cadence (focus-gated, self-cancelling).
+        // Poll the open folder at the refresh cadence (window-active- and
+        // active-tab-gated, self-cancelling).
         query::poll(
             window,
             cx,
             |e: &Self| Duration::from_secs(e.poll_secs()),
-            Self::load_entries,
+            Self::poll_tick,
         );
         Self {
             workspace,
@@ -134,11 +138,32 @@ impl Explorer {
             pending_select: None,
             col_date_width,
             col_size_width,
+            is_active: false,
         }
     }
 
     fn poll_secs(&self) -> u64 {
         self.refresh_secs.max(1)
+    }
+
+    /// Periodic tick: only the active tab's explorer polls its folder.
+    fn poll_tick(&mut self, cx: &mut Context<Self>) {
+        if self.is_active {
+            self.load_entries(cx);
+        }
+    }
+
+    /// Mark this explorer active/inactive (workspace drives it on tab switch).
+    /// Becoming active triggers a stale-aware refresh so a returned-to tab shows
+    /// current contents without a blocking refetch when already fresh.
+    pub(crate) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_active == active {
+            return;
+        }
+        self.is_active = active;
+        if active && self.remote.is_some() {
+            self.load_entries(cx);
+        }
     }
 
     /// Mirror the settings refresh cadence (folder poll + staleness window).
@@ -421,9 +446,6 @@ impl Explorer {
         self.entry_sel.and_then(|ix| self.entries().get(ix).cloned())
     }
 
-    pub(crate) fn is_selected(&self, path: &str) -> bool {
-        self.selected.contains(path)
-    }
 
     pub(crate) fn selection_len(&self) -> usize {
         self.selected.len()

@@ -4,8 +4,10 @@ use super::*;
 
 mod layout;
 pub(crate) mod modal;
+mod dock;
 mod navigation;
 mod remotes;
 mod render;
 mod settings;
+mod tabs;
 mod toasts;

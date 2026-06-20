@@ -16,9 +16,19 @@ impl Sidebar {
         let menu_name = remote.name.clone();
         let mut row = nav_item(ix, selected, focused)
             .tooltip(tooltip_text(format!("{} · {}", remote.name, remote.kind)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.focus_explorer(window, cx);
-                cx.emit(SidebarEvent::Open(ix));
+            .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                // Secondary-click (Cmd/Ctrl) opens the remote in a new tab. Deferred
+                // so it runs after this Sidebar update completes — opening a remote
+                // calls back into the sidebar, which would otherwise re-enter it.
+                if ev.modifiers().secondary() {
+                    let weak = this.workspace.clone();
+                    window.defer(cx, move |window, cx| {
+                        weak.update(cx, |ws, cx| ws.open_remote_ix_in_new_tab(ix, window, cx)).ok();
+                    });
+                } else {
+                    this.focus_explorer(window, cx);
+                    cx.emit(SidebarEvent::Open(ix));
+                }
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -46,8 +56,21 @@ impl Sidebar {
         let dst = remote.name.clone();
         row = row
             .drag_over::<DraggedEntry>(|s, _, _, _| s.bg(rgba(SELECT_MUTED)))
-            .on_drop(cx.listener(move |_, dragged: &DraggedEntry, _, cx| {
-                cx.emit(SidebarEvent::DropEntry { dragged: dragged.clone(), dst_remote: dst.clone() });
+            // Spring-loaded: dwell a drag over a remote to open it mid-drag.
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<DraggedEntry>, _, cx| {
+                if e.bounds.contains(&e.event.position) {
+                    this.spring_hover(ix, cx);
+                } else if this.spring.is_pending(&ix) {
+                    this.spring_clear();
+                }
+            }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedEntry, window, cx| {
+                this.spring_clear();
+                cx.emit(SidebarEvent::DropEntry {
+                    dragged: dragged.clone(),
+                    dst_remote: dst.clone(),
+                    mods: window.modifiers(),
+                });
             }));
 
         if pinned {
@@ -87,8 +110,10 @@ impl Render for Sidebar {
             .child(
                 h_flex()
                     .w_full()
-                    .px_3()
-                    .py_2()
+                    .flex_shrink_0()
+                    .h(px(PANE_HEADER_H))
+                    .pl_3()
+                    .pr_1()
                     .justify_between()
                     .items_center()
                     .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("REMOTES"))

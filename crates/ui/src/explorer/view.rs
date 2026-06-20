@@ -7,8 +7,9 @@ use gpui::ExternalPaths;
 use super::*;
 
 impl Explorer {
-    /// A folder cell that accepts a dragged entry, tinting on hover and emitting
-    /// a [`ExplorerEvent::Drop`] (move, or copy when the modifier is held).
+    /// A folder cell that accepts a dragged entry, tinting on hover and emitting a
+    /// [`ExplorerEvent::Drop`]. The workspace applies the source-relative move/copy
+    /// rule from the modifiers.
     fn drop_target(
         &self,
         el: Stateful<Div>,
@@ -18,12 +19,13 @@ impl Explorer {
     ) -> Stateful<Div> {
         el.drag_over::<DraggedEntry>(|s, _, _, _| s.bg(rgba(ACCENT_SOFT)))
             .on_drop(cx.listener(move |_, dragged: &DraggedEntry, window, cx| {
-                let copy = window.modifiers().alt;
+                // Don't let the root (empty-space) drop also fire for a folder drop.
+                cx.stop_propagation();
                 cx.emit(ExplorerEvent::Drop {
                     dragged: dragged.clone(),
                     dst_remote: dst_remote.clone(),
                     dst_dir: dst_dir.clone(),
-                    copy,
+                    mods: window.modifiers(),
                 });
             }))
     }
@@ -231,12 +233,17 @@ impl Render for Explorer {
                             let name = entry.name.clone();
                             let label = if this.recursive_showing() { entry.path.clone() } else { name.clone() };
                             let ctx_entry = entry.clone();
-                            let drag = DraggedEntry {
-                                path: entry.path.clone(),
-                                name: name.clone(),
-                                is_dir,
-                                count: if selected { this.selected.len().max(1) } else { 1 },
+                            // Snapshot the whole selection (or just this row) into
+                            // the drag, so the drop works from any tab / target.
+                            let items: Vec<DragItem> = if selected {
+                                this.selected_entries()
+                                    .into_iter()
+                                    .map(|e| DragItem { path: e.path, name: e.name, is_dir: e.is_dir })
+                                    .collect()
+                            } else {
+                                vec![DragItem { path: entry.path.clone(), name: name.clone(), is_dir }]
                             };
+                            let drag = DraggedEntry { remote: this.remote.clone().unwrap_or_default(), items };
                             let drop_path = entry.path.clone();
                             list_item(ix, selected, focused)
                                 .h(rem(ROW_H))
@@ -245,10 +252,9 @@ impl Render for Explorer {
                                 .border_b_1()
                                 .border_color(rgb(SEPARATOR))
                                 .on_drag(drag, |d, _, _, app| {
-                                    let text: SharedString = if d.count > 1 {
-                                        format!("{} items", d.count).into()
-                                    } else {
-                                        d.name.clone().into()
+                                    let text: SharedString = match d.items.as_slice() {
+                                        [one] => one.name.clone().into(),
+                                        many => format!("{} items", many.len()).into(),
                                     };
                                     app.new(|_| DragLabel { text })
                                 })
@@ -373,6 +379,19 @@ impl Render for Explorer {
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgba(ACCENT_SOFT)))
             .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
                 cx.emit(ExplorerEvent::Upload(paths.paths().to_vec()));
+            }))
+            // Dropping an entry on empty list space sends it to the open directory
+            // (folder-row drops stop propagation, so this only fires off-row).
+            .drag_over::<DraggedEntry>(|s, _, _, _| s.bg(rgba(ACCENT_SOFT)))
+            .on_drop(cx.listener(|this, dragged: &DraggedEntry, window, cx| {
+                if let Some(remote) = this.remote.clone() {
+                    cx.emit(ExplorerEvent::Drop {
+                        dragged: dragged.clone(),
+                        dst_remote: remote,
+                        dst_dir: this.path.clone(),
+                        mods: window.modifiers(),
+                    });
+                }
             }))
             .into_any_element()
     }

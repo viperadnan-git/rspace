@@ -53,9 +53,16 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
-                        if this.open_remote.as_deref() == Some(name.as_str()) {
-                            this.open_remote = None;
-                            this.path = String::new();
+                        // Reset any tab parked on the now-deleted remote back to
+                        // the welcome screen, clearing its explorer listing too.
+                        for tab in &mut this.tabs {
+                            if tab.open_remote.as_deref() == Some(name.as_str()) {
+                                tab.open_remote = None;
+                                tab.path = String::new();
+                                tab.history.clear();
+                                tab.history_pos = 0;
+                                tab.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));
+                            }
                         }
                         this.remote_paths.remove(&name);
                         this.pinned.retain(|n| n != &name);
@@ -95,7 +102,7 @@ impl Workspace {
     }
 
     pub(crate) fn has_open_remote(&self) -> bool {
-        self.open_remote.is_some()
+        self.active().open_remote.is_some()
     }
 
     pub(crate) fn mounted_set(&self) -> HashSet<String> {
@@ -154,11 +161,6 @@ impl Workspace {
     pub(crate) fn select_remote(&mut self, name: Option<&str>, cx: &mut Context<Self>) {
         let ordered = self.ordered_remotes();
         self.sidebar.update(cx, |s, _| s.select_by_name(name, &ordered));
-    }
-
-    pub(crate) fn active_remote(&self) -> Option<&RemoteInfo> {
-        let name = self.open_remote.as_ref()?;
-        self.remotes.iter().find(|r| &r.name == name)
     }
 
 }

@@ -91,15 +91,18 @@ impl Preview {
 }
 
 /// The preview pane: tracks the explorer cursor, fetches/caches content, renders.
+/// Workspace-level and shared: it mirrors whichever tab is active, re-pointed via
+/// [`Self::set_explorer`]. Its width and visibility belong to the right dock.
 pub(crate) struct PreviewPane {
     workspace: WeakEntity<Workspace>,
+    /// The explorer whose cursor we mirror — the active tab's.
     explorer: Entity<Explorer>,
+    /// Observation of `explorer`; replaced when the explorer is re-pointed.
+    _obs: gpui::Subscription,
     service: Service,
     current: Option<Preview>,
     /// Recently loaded previews, keyed by `remote:path` (LRU, bounded).
     cache: Vec<(String, PreviewState)>,
-    /// Pane width (resizable; persisted by the workspace).
-    width: Pixels,
 }
 
 impl PreviewPane {
@@ -107,28 +110,19 @@ impl PreviewPane {
         workspace: WeakEntity<Workspace>,
         explorer: Entity<Explorer>,
         service: Service,
-        width: Pixels,
         cx: &mut Context<Self>,
     ) -> Self {
         // Track the cursor: every selection/navigation change notifies the
         // explorer, so observing it keeps the subject in sync.
-        cx.observe(&explorer, |this, _, cx| this.refresh(cx)).detach();
-        Self { workspace, explorer, service, current: None, cache: Vec::new(), width }
+        let obs = cx.observe(&explorer, |this, _, cx| this.refresh(cx));
+        Self { workspace, explorer, _obs: obs, service, current: None, cache: Vec::new() }
     }
 
-    pub(crate) fn width(&self) -> Pixels {
-        self.width
-    }
-
-    pub(crate) fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        if self.width != width {
-            self.width = width;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn reset_width(&mut self, cx: &mut Context<Self>) {
-        self.set_width(px(PREVIEW_W), cx);
+    /// Re-point at a different explorer (the active tab changed) and refresh.
+    pub(crate) fn set_explorer(&mut self, explorer: Entity<Explorer>, cx: &mut Context<Self>) {
+        self._obs = cx.observe(&explorer, |this, _, cx| this.refresh(cx));
+        self.explorer = explorer;
+        self.refresh(cx);
     }
 
     /// The open `(remote, path)`, read from the explorer (the source of what's
@@ -257,15 +251,15 @@ impl PreviewPane {
 
     /// Backend type of the open remote (`RemoteInfo::kind`), or empty if unknown.
     fn open_remote_kind(&self, cx: &App) -> String {
+        // Read this pane's own explorer (not the workspace's active tab) so the
+        // glyph stays correct regardless of which tab is active.
+        let Some((remote, _)) = self.explorer.read(cx).location() else {
+            return String::new();
+        };
         self.workspace
             .upgrade()
-            .map(|ws| {
-                let ws = ws.read(cx);
-                ws.open_remote
-                    .as_deref()
-                    .and_then(|name| ws.remotes.iter().find(|r| r.name == name))
-                    .map(|r| r.kind.clone())
-                    .unwrap_or_default()
+            .and_then(|ws| {
+                ws.read(cx).remotes.iter().find(|r| r.name == remote).map(|r| r.kind.clone())
             })
             .unwrap_or_default()
     }
@@ -346,6 +340,11 @@ fn location_entry(remote: &str, path: &str) -> Entry {
 
 impl Render for PreviewPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // No open remote (welcome screen): the pane is open but has nothing to
+        // show — a plain placeholder instead of a perpetual spinner.
+        if self.explorer.read(cx).location().is_none() {
+            return centered("Open a remote to preview files", FG_SUBTLE).into_any_element();
+        }
         // Driven solely by the subject (`current`), never the cursor: with nothing
         // selected the subject is the current directory/remote.
         let content = match self.current.as_ref().map(|p| (&p.entry, &p.state)) {
@@ -382,34 +381,17 @@ impl Render for PreviewPane {
             .overflow_hidden()
             .child(content)
             .when_some(entry, |el, entry| el.child(self.info(&entry, cx)))
+            .into_any_element()
     }
 }
 
 impl Workspace {
     pub(crate) fn toggle_preview(&mut self, _: &TogglePreview, _: &mut Window, cx: &mut Context<Self>) {
-        // The preview belongs to the file-list view; ignore on the welcome screen.
-        if self.open_remote.is_none() {
-            return;
-        }
-        self.toggle_dock(DockPanel::Preview, cx);
+        self.toggle_panel(Panel::Preview, cx);
     }
 
-    /// Open the preview pane and show the current entry (`set_dock` refreshes it).
+    /// Open the preview panel and show the current entry.
     pub(crate) fn open_preview(&mut self, cx: &mut Context<Self>) {
-        self.set_dock(Some(DockPanel::Preview), cx);
-    }
-
-    pub(crate) fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .relative()
-            .w(self.preview.read(cx).width())
-            .min_h(px(0.0))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(rgb(INSET))
-            .border_l_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle("preview-resize", ResizeTarget::Preview, cx))
-            .child(self.preview.clone())
+        self.show_panel(Some(Panel::Preview), cx);
     }
 }

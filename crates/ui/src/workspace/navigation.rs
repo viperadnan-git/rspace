@@ -1,11 +1,12 @@
 //! Directory navigation and history; the explorer and sidebar own their views.
+//! All navigation acts on the active tab — its location, history, and explorer.
 
 use super::*;
 
 impl Workspace {
     /// The selected entries (operands for copy/cut/delete/download).
     pub(crate) fn selected_entries(&self, cx: &App) -> Vec<Entry> {
-        self.explorer.read(cx).selected_entries()
+        self.explorer().read(cx).selected_entries()
     }
 
     pub(crate) fn prompt(&self) -> Option<Entity<PromptModal>> {
@@ -13,7 +14,7 @@ impl Workspace {
     }
 
     pub(crate) fn force_reload_entries(&mut self, cx: &mut Context<Self>) {
-        self.explorer.update(cx, |e, cx| e.force_reload_entries(cx));
+        self.explorer().update(cx, |e, cx| e.force_reload_entries(cx));
     }
 
     pub(crate) fn reload(&mut self, _: &Reload, _window: &mut Window, cx: &mut Context<Self>) {
@@ -21,23 +22,23 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
-        self.explorer.update(cx, |e, cx| e.toggle_search(window, cx));
+        self.explorer().update(cx, |e, cx| e.toggle_search(window, cx));
     }
 
     /// Whether the explorer pane currently holds keyboard focus.
     pub(crate) fn explorer_focused(&self, window: &Window, cx: &App) -> bool {
-        self.explorer.focus_handle(cx).contains_focused(window, cx)
+        self.explorer().focus_handle(cx).contains_focused(window, cx)
     }
 
     pub(crate) fn focus_explorer_pane(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.explorer.focus_handle(cx).focus(window, cx);
+        self.explorer().focus_handle(cx).focus(window, cx);
     }
 
     /// Deliberately move into the explorer (Tab / arrow): focus it and, if it has
     /// no selection, land the cursor on the first row.
     pub(crate) fn enter_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_explorer_pane(window, cx);
-        self.explorer.update(cx, |e, cx| e.select_first_if_empty(cx));
+        self.explorer().update(cx, |e, cx| e.select_first_if_empty(cx));
     }
 
     pub(crate) fn focus_sidebar_pane(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -45,25 +46,26 @@ impl Workspace {
     }
 
     pub(crate) fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open_remote.is_none() {
+        if self.active().open_remote.is_none() {
             return;
         }
-        self.open_remote = None;
-        self.path = String::new();
+        let tab = self.active_mut();
+        tab.open_remote = None;
+        tab.path = String::new();
+        tab.history.clear();
+        tab.history_pos = 0;
         self.prompt = None;
         self.menus.context = None;
         self.menus.bg_menu = None;
-        self.history.clear();
-        self.history_pos = 0;
-        self.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));
+        self.explorer().update(cx, |e, cx| e.show(None, String::new(), None, cx));
         self.focus_sidebar_pane(window, cx);
         cx.notify();
     }
 
-    /// Push a new location onto history, selecting `want` (by name) on arrival.
-    /// Saves the current row first so going back restores it.
+    /// Push a new location onto the active tab's history, selecting `want` (by
+    /// name) on arrival. Saves the current row first so going back restores it.
     pub(crate) fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
-        if self.open_remote.as_deref() != Some(remote.as_str()) {
+        if self.active().open_remote.as_deref() != Some(remote.as_str()) {
             self.app.db.record_remote(&remote);
             self.recent_remotes = self.app.db.recent_remotes(RECENT_REMOTES_FETCH);
         }
@@ -71,19 +73,20 @@ impl Workspace {
         // routes through navigate(), so syncing here covers all of them.
         self.select_remote(Some(&remote), cx);
         self.remember_sel(cx);
-        self.open_remote = Some(remote.clone());
-        self.path = path.clone();
         self.remote_paths.insert(remote.clone(), path.clone());
-        self.history.truncate(self.history_pos + 1);
-        self.history.push(Location { remote: remote.clone(), path: path.clone(), selected: None });
-        self.history_pos = self.history.len() - 1;
-        self.explorer.update(cx, |e, cx| e.show(Some(remote), path, want, cx));
+        let tab = self.active_mut();
+        tab.open_remote = Some(remote.clone());
+        tab.path = path.clone();
+        tab.history.truncate(tab.history_pos + 1);
+        tab.history.push(Location { remote: remote.clone(), path: path.clone(), selected: None });
+        tab.history_pos = tab.history.len() - 1;
+        self.explorer().update(cx, |e, cx| e.show(Some(remote), path, want, cx));
         cx.notify();
     }
 
     /// Jump to the open remote's root.
     pub(crate) fn go_to_root(&mut self, cx: &mut Context<Self>) {
-        if let Some(remote) = self.open_remote.clone() {
+        if let Some(remote) = self.active().open_remote.clone() {
             self.navigate(remote, String::new(), None, cx);
         }
     }
@@ -108,24 +111,27 @@ impl Workspace {
 
     /// Remember the cursor row of the current location, so going back restores it.
     pub(crate) fn remember_sel(&mut self, cx: &mut Context<Self>) {
-        let name = self.explorer.read(cx).cursor_name();
-        if let Some(loc) = self.history.get_mut(self.history_pos) {
+        let name = self.explorer().read(cx).cursor_name();
+        let tab = self.active_mut();
+        let pos = tab.history_pos;
+        if let Some(loc) = tab.history.get_mut(pos) {
             loc.selected = name;
         }
     }
 
     pub(crate) fn can_back(&self) -> bool {
-        self.history_pos > 0
+        self.active().history_pos > 0
     }
 
     pub(crate) fn can_forward(&self) -> bool {
-        self.history_pos + 1 < self.history.len()
+        let tab = self.active();
+        tab.history_pos + 1 < tab.history.len()
     }
 
     pub(crate) fn go_back(&mut self, cx: &mut Context<Self>) {
         if self.can_back() {
             self.remember_sel(cx);
-            self.history_pos -= 1;
+            self.active_mut().history_pos -= 1;
             self.restore_history(cx);
         }
     }
@@ -133,16 +139,17 @@ impl Workspace {
     pub(crate) fn go_forward(&mut self, cx: &mut Context<Self>) {
         if self.can_forward() {
             self.remember_sel(cx);
-            self.history_pos += 1;
+            self.active_mut().history_pos += 1;
             self.restore_history(cx);
         }
     }
 
     pub(crate) fn restore_history(&mut self, cx: &mut Context<Self>) {
-        let loc = self.history[self.history_pos].clone();
-        self.open_remote = Some(loc.remote.clone());
-        self.path = loc.path.clone();
-        self.explorer.update(cx, |e, cx| e.show(Some(loc.remote), loc.path, loc.selected, cx));
+        let loc = self.active().history[self.active().history_pos].clone();
+        let tab = self.active_mut();
+        tab.open_remote = Some(loc.remote.clone());
+        tab.path = loc.path.clone();
+        self.explorer().update(cx, |e, cx| e.show(Some(loc.remote), loc.path, loc.selected, cx));
         cx.notify();
     }
 
@@ -158,13 +165,14 @@ impl Workspace {
         if !self.explorer_focused(window, cx) {
             return;
         }
-        if self.path.is_empty() {
+        if self.active().path.is_empty() {
             self.focus_sidebar_pane(window, cx);
             cx.notify();
         } else {
-            let child = self.path.rsplit('/').next().unwrap_or_default().to_string();
-            let parent = parent_of(&self.path).to_string();
-            let remote = self.open_remote.clone().unwrap_or_default();
+            let path = self.active().path.clone();
+            let child = path.rsplit('/').next().unwrap_or_default().to_string();
+            let parent = parent_of(&path).to_string();
+            let remote = self.active().open_remote.clone().unwrap_or_default();
             self.navigate(remote, parent, Some(child), cx);
         }
     }

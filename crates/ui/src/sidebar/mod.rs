@@ -19,7 +19,7 @@ pub(crate) enum SidebarEvent {
     /// A pinned remote was dragged onto another — reorder.
     Reorder { from: String, before: String },
     /// An explorer entry was dropped onto a remote — move it to that root.
-    DropEntry { dragged: DraggedEntry, dst_remote: String },
+    DropEntry { dragged: DraggedEntry, dst_remote: String, mods: Modifiers },
 }
 
 pub(crate) struct Sidebar {
@@ -30,6 +30,8 @@ pub(crate) struct Sidebar {
     remote_scroll: UniformListScrollHandle,
     /// Pane width (resizable; persisted by the workspace).
     width: Pixels,
+    /// Spring-loaded remotes: a drag dwelling on a row opens it.
+    spring: SpringLoad<usize>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -48,7 +50,29 @@ impl Sidebar {
             remote_sel: 0,
             remote_scroll: UniformListScrollHandle::new(),
             width,
+            spring: SpringLoad::new(),
         }
+    }
+
+    /// A drag dwelling on remote row `ix`: after a 1s dwell, open it (so the user
+    /// can drop into it). Emits `Open` — handled after this update, so opening the
+    /// remote (which calls back into the sidebar) can't re-enter it.
+    pub(crate) fn spring_hover(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(generation) = self.spring.arm(ix) else { return };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(SPRING_LOAD_MS)).await;
+            this.update(cx, |this, cx| {
+                if this.spring.live(generation, &ix) {
+                    cx.emit(SidebarEvent::Open(ix));
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn spring_clear(&mut self) {
+        self.spring.clear();
     }
 
     pub(crate) fn width(&self) -> Pixels {
@@ -113,7 +137,7 @@ impl Sidebar {
     /// Hand keyboard focus to the explorer pane (used when opening a remote).
     fn focus_explorer(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ws) = self.workspace.upgrade() {
-            let handle = ws.read(cx).explorer.focus_handle(cx);
+            let handle = ws.read(cx).explorer().focus_handle(cx);
             handle.focus(window, cx);
         }
     }

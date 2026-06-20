@@ -6,8 +6,9 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let info = if self.open_remote.is_some() {
-            let exp = self.explorer.read(cx);
+        let info = if self.active().open_remote.is_some() {
+            let exp = self.explorer();
+            let exp = exp.read(cx);
             if exp.selection_len() > 1 {
                 format!("{} selected", exp.selection_len())
             } else {
@@ -19,31 +20,32 @@ impl Workspace {
         h_flex()
             .w_full()
             .flex_shrink_0()
+            // Fixed height so job badges appearing/disappearing can't shift the
+            // layout; rem-based so it scales with the UI font.
+            .h(rem(28.0))
+            .overflow_hidden()
             .justify_between()
-            // Left holds the daemon icon button — tighten so it hugs the corner
-            // (Zed-style), matching the vertical inset; keep the right text padded.
+            .items_center()
             .pl_1()
-            .pr_3()
-            .py_1()
+            .pr_1()
             .border_t_1()
             .border_color(rgb(BORDER_MUTED))
             .bg(rgb(INSET))
             .text_xs()
             .text_color(rgb(FG_MUTED))
             .child(
-                h_flex().gap_2().child(self.rc_status(cx)).children(self.active_remote().map(|r| {
-                    h_flex()
-                        .gap_2()
-                        .child(div().text_color(rgb(FG)).child(r.name.clone()))
-                        .child(div().text_color(rgb(FG_SUBTLE)).child(r.kind.clone()))
-                })),
+                // `version` already reads "rclone vX.Y", so no prefix.
+                h_flex().gap_2().items_center().child(self.rc_status(cx)).when(
+                    !self.version.is_empty(),
+                    |el| el.child(div().text_color(rgb(FG_SUBTLE)).child(self.version.clone())),
+                ),
             )
             .child(
                 h_flex()
-                    .gap_3()
-                    .when(!self.jobs.read(cx).is_empty(), |el| el.child(self.jobs_indicator(cx)))
-                    .child(info)
-                    .child(self.version.clone()),
+                    .gap_1()
+                    .items_center()
+                    .child(div().px_1().child(info))
+                    .child(self.tasks_toggle(cx)),
             )
     }
 
@@ -147,7 +149,7 @@ impl Workspace {
         }
         items.push(div().w_full().my_1().h(px(1.0)).bg(rgb(BORDER_MUTED)).into_any_element());
         items.push(
-            self.menu_item("Reconnect", "icons/activity.svg", cx, |this, cx| {
+            self.menu_item("Reconnect", "icons/activity.svg", cx, |this, _, cx| {
                 this.daemon.update(cx, |d, cx| d.reconnect(cx));
             })
             .into_any_element(),
@@ -155,14 +157,14 @@ impl Workspace {
         // Restarting already in flight: skip a redundant restart.
         if !matches!(health, RcHealth::Restarting) {
             items.push(
-                self.menu_item("Restart daemon", "icons/refresh.svg", cx, |this, cx| {
+                self.menu_item("Restart daemon", "icons/refresh.svg", cx, |this, _, cx| {
                     this.daemon.update(cx, |d, cx| d.restart(cx));
                 })
                 .into_any_element(),
             );
         }
         items.push(
-            self.menu_item("Copy logs path", "icons/copy.svg", cx, move |this, cx| {
+            self.menu_item("Copy logs path", "icons/copy.svg", cx, move |this, _, cx| {
                 this.copy_to_clipboard(logs.clone(), cx)
             })
             .into_any_element(),
@@ -170,36 +172,70 @@ impl Workspace {
         self.popover_surface("rc-popover", items, cx).w(rem(220.0))
     }
 
-    fn jobs_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A status-bar dock-panel toggle: an icon, highlighted when its panel shows,
+    /// like Zed's bottom-right panel buttons. `extra` adds trailing content (the
+    /// Tasks toggle's live job badges).
+    fn panel_toggle(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        on: bool,
+        enabled: bool,
+        tip: impl Into<SharedString>,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        extra: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let color = if on { FG } else if enabled { FG_MUTED } else { FG_SUBTLE };
+        let tip: SharedString = tip.into();
+        h_flex()
+            .id(id)
+            .gap_1p5()
+            .px_1p5()
+            .py(px(2.0))
+            .rounded_md()
+            .cursor_pointer()
+            .when(on, |el| el.bg(rgba(SELECT_MUTED)))
+            .hover(|s| s.bg(rgba(OVERLAY)))
+            .tooltip(tooltip_text(tip))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
+            .child(svg().path(icon).size(rem(14.0)).flex_shrink_0().text_color(rgb(color)))
+            .children(extra)
+    }
+
+    fn tasks_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Separate counts so a mixed run reads e.g. "↻2  ✓3  ⚠1".
         let jobs = self.jobs.read(cx);
         let active = jobs.items().iter().filter(|j| !j.done).count();
         let failed = jobs.items().iter().filter(|j| j.done && j.error.is_some()).count();
         let succeeded = jobs.items().iter().filter(|j| j.done && j.error.is_none()).count();
-        h_flex()
-            .id("jobs-indicator")
-            .gap_2()
-            .px_2()
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .tooltip(tooltip_text(format!(
-                "Tasks ({})",
-                if cfg!(target_os = "macos") { "\u{2318}T" } else { "Ctrl T" }
-            )))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.toggle_dock(DockPanel::Tasks, cx);
-            }))
-            .when(active > 0, |el| {
-                el.child(
-                    h_flex()
-                        .gap_1()
-                        .text_color(rgb(ACCENT))
-                        .child(spinner_icon("jobs-active-spin", "icons/refresh.svg", px(13.0), ACCENT))
-                        .child(active.to_string()),
-                )
-            })
-            .when(succeeded > 0, |el| el.child(count_badge("icons/check.svg", SUCCESS, succeeded)))
-            .when(failed > 0, |el| el.child(count_badge("icons/alert.svg", DANGER, failed)))
+        let badges = (active > 0 || succeeded > 0 || failed > 0).then(|| {
+            h_flex()
+                .gap_1p5()
+                .when(active > 0, |el| {
+                    el.child(
+                        h_flex()
+                            .gap_1()
+                            .text_color(rgb(ACCENT))
+                            .child(spinner_icon("jobs-active-spin", "icons/refresh.svg", px(13.0), ACCENT))
+                            .child(active.to_string()),
+                    )
+                })
+                .when(succeeded > 0, |el| el.child(count_badge("icons/check.svg", SUCCESS, succeeded)))
+                .when(failed > 0, |el| el.child(count_badge("icons/alert.svg", DANGER, failed)))
+                .into_any_element()
+        });
+        let tip = format!("Tasks ({})", if cfg!(target_os = "macos") { "\u{2318}T" } else { "Ctrl T" });
+        self.panel_toggle(
+            "tasks-toggle",
+            "icons/tasks.svg",
+            self.dock_is(Panel::Tasks),
+            true,
+            tip,
+            |this, _, cx| this.toggle_panel(Panel::Tasks, cx),
+            badges,
+            cx,
+        )
     }
+
 }

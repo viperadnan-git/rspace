@@ -258,6 +258,7 @@ impl Jobs {
             command,
             run: run.clone(),
         });
+        self.trim_history();
         cx.spawn(async move |this, cx| {
             let result = run(group).await;
             this.update(cx, |this, cx| this.on_job_submitted(id, result, cx)).ok();
@@ -289,6 +290,24 @@ impl Jobs {
     pub(crate) fn clear_job(&mut self, id: usize, cx: &mut Context<Self>) {
         self.items.retain(|j| j.id != id);
         cx.notify();
+    }
+
+    /// Bound the finished-job history (oldest dropped first) so the task list and
+    /// its memory stay O(1) over a long session. Active jobs are never dropped.
+    fn trim_history(&mut self) {
+        const MAX_FINISHED: usize = 200;
+        let finished = self.items.iter().filter(|j| j.done).count();
+        let mut over = finished.saturating_sub(MAX_FINISHED);
+        if over > 0 {
+            self.items.retain(|j| {
+                if j.done && over > 0 {
+                    over -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
 
     pub(crate) fn clear_finished(&mut self, cx: &mut Context<Self>) {

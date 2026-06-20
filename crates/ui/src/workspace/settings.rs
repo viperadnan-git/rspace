@@ -18,7 +18,7 @@ impl Workspace {
         // Pinned-first (pin order preserved), matching the sidebar; the palette's
         // stable fuzzy sort keeps this order on empty query and score ties.
         let remotes = self.ordered_remotes();
-        let current_remote = self.open_remote.clone();
+        let current_remote = self.active().open_remote.clone();
         let palette = cx.new(|cx| {
             let delegate = CommandPaletteDelegate::new(
                 previous_focus,
@@ -101,7 +101,7 @@ impl Workspace {
     }
 
     pub(crate) fn action_toggle_tasks(&mut self, _: &ToggleTasks, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_dock(DockPanel::Tasks, cx);
+        self.toggle_panel(Panel::Tasks, cx);
     }
 
     pub(crate) fn ask_confirm(
@@ -165,27 +165,30 @@ impl Workspace {
             || self.menus.bg_menu.is_some()
             || self.modal.is_some()
             || self.prompt.is_some()
-            || self.dock_is(DockPanel::Tasks)
+            || self.dock_is(Panel::Tasks)
         {
             self.settings.open = false;
             // Esc dismisses the transient Tasks dock, but leaves the Preview be.
-            if self.dock_is(DockPanel::Tasks) {
-                self.dock = None;
+            if self.dock_is(Panel::Tasks) {
+                self.close_dock(cx);
             }
             self.prompt = None;
             self.close_modal(cx);
             self.close_menus();
             cx.notify();
-        } else if self.explorer_focused(window, cx) && self.explorer.read(cx).selection_len() > 1 {
+        } else if self.explorer_focused(window, cx) && self.explorer().read(cx).selection_len() > 1 {
             // Nothing to close: collapse a multi-selection back to the cursor.
-            self.explorer.update(cx, |e, cx| e.collapse_selection(cx));
+            self.explorer().update(cx, |e, cx| e.collapse_selection(cx));
             cx.notify();
         }
     }
 
+    /// Mirror the refresh cadence into every tab's explorer (shared setting).
     pub(crate) fn set_refresh(&mut self, secs: u64, cx: &mut Context<Self>) {
         self.store.update(|s| s.refresh_secs = secs);
-        self.explorer.update(cx, |e, _| e.set_refresh(secs));
+        for tab in &self.tabs {
+            tab.explorer.update(cx, |e, _| e.set_refresh(secs));
+        }
         cx.notify();
     }
 

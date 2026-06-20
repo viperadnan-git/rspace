@@ -3,79 +3,34 @@
 use super::*;
 
 impl Workspace {
-    pub(crate) fn render_tasks(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_done = self.jobs.read(cx).has_finished();
-        let count = self.jobs.read(cx).items().len();
-        let body = if count == 0 {
-            centered("No tasks", FG_SUBTLE).into_any_element()
-        } else {
-            uniform_list(
-                "tasks",
-                count,
-                cx.processor(|this, range: Range<usize>, _window, cx| {
-                    // Newest first; clone only the visible window, not the whole list.
-                    let visible: Vec<Job> = {
-                        let jobs = this.jobs.read(cx);
-                        let n = jobs.items().len();
-                        range
-                            .filter_map(|i| n.checked_sub(1 + i).and_then(|idx| jobs.items().get(idx).cloned()))
-                            .collect()
-                    };
-                    visible
-                        .into_iter()
-                        .map(|job| {
-                            div()
-                                .border_b_1()
-                                .border_color(rgb(BORDER_MUTED))
-                                .child(this.job_row(&job, cx))
-                        })
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .flex_1()
-            .into_any_element()
-        };
-
-        v_flex()
-            .relative()
-            .w(self.jobs_width)
-            .min_h(px(0.0))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(rgb(INSET))
-            .border_l_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(self.resize_handle("jobs-resize", ResizeTarget::Jobs, cx))
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .px_3()
-                    .py_1p5()
+    /// The Tasks panel body (the dock supplies width, header, and close). A plain
+    /// scrollable list (not `uniform_list`) so rows can be variable height — the
+    /// second line wraps instead of clipping.
+    pub(crate) fn render_tasks_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let n = self.jobs.read(cx).items().len();
+        if n == 0 {
+            return centered("No tasks", FG_SUBTLE).into_any_element();
+        }
+        // Newest first. Clone one job per row (releasing the borrow each time)
+        // rather than the whole list; history is capped so `n` stays bounded.
+        let rows: Vec<AnyElement> = (0..n)
+            .rev()
+            .map(|i| {
+                let job = self.jobs.read(cx).items()[i].clone();
+                div()
                     .border_b_1()
                     .border_color(rgb(BORDER_MUTED))
-                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("TASKS"))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .when(has_done, |el| {
-                                el.child(
-                                    icon_button("clear-finished", "icons/trash.svg")
-                                        .tooltip(tooltip_text("Clear finished"))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.request_clear_finished(cx)
-                                        })),
-                                )
-                            })
-                            .child(icon_button("tasks-close", "icons/x.svg").on_click(
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.set_dock(None, cx);
-                                }),
-                            )),
-                    ),
-            )
-            .child(body)
+                    .child(self.job_row(&job, cx))
+                    .into_any_element()
+            })
+            .collect();
+        v_flex()
+            .id("tasks")
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .children(rows)
+            .into_any_element()
     }
 
     /// A clickable job endpoint: reveals it in the explorer on click, full
@@ -118,15 +73,11 @@ impl Workspace {
         let action_button = move |suffix: &str, svg_icon: &'static str, tip: &'static str| {
             icon_button(SharedString::from(format!("{suffix}-{id}")), svg_icon).tooltip(tooltip_text(tip))
         };
+        // Cancel lives in the row's right-click menu, not as an inline button.
         let actions = h_flex()
             .flex_shrink_0()
             .gap_0p5()
             .items_center()
-            .when(running, |el| {
-                el.child(action_button("cancel", "icons/x.svg", "Cancel").on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.request_cancel_job(id, cx)),
-                ))
-            })
             .when(can_retry, |el| {
                 el.child(action_button("retry", "icons/refresh.svg", "Retry").on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_job(id, cx)),
@@ -179,7 +130,6 @@ impl Workspace {
             elapsed_ms,
             menu,
         } = d;
-        let running = matches!(status, TaskStatus::Running);
         let pct = if total > 0 { (bytes as f64 / total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let time = human_duration(elapsed_ms);
         // Title shows where it's going: the destination if there is one, else the
@@ -194,62 +144,39 @@ impl Workspace {
             TaskStatus::Failed(_) => svg().path("icons/alert.svg").size(rem(15.0)).text_color(rgb(DANGER)).into_any_element(),
         };
 
-        // Line-1 trailing metric, by state.
-        let trailing: AnyElement = match &status {
-            TaskStatus::Failed(msg) => {
-                div().min_w(px(0.0)).truncate().text_xs().text_color(rgb(DANGER)).child(msg.clone()).into_any_element()
-            }
-            TaskStatus::Cancelled => {
-                div().flex_shrink_0().text_xs().text_color(rgb(FG_MUTED)).child("Cancelled").into_any_element()
-            }
-            TaskStatus::Done => {
-                let label = if total_transfers > 1 {
-                    format!("{total_transfers} files")
-                } else {
-                    human_size(total as i64)
-                };
-                div().flex_shrink_0().text_xs().text_color(rgb(FG_SUBTLE)).child(label).into_any_element()
-            }
-            TaskStatus::Running => h_flex()
-                .flex_shrink_0()
-                .gap_1p5()
-                .items_baseline()
-                .when(total > 0, |el| {
-                    el.child(div().text_color(rgb(FG)).child(format!("{}%", (pct * 100.0).round() as u32)))
-                })
-                .when(speed > 0.0, |el| {
-                    el.child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(format!("{}/s", human_size(speed as i64))))
-                })
-                .into_any_element(),
-        };
-
-        // Line-2 trailing metric, by state.
-        let meta = match &status {
-            TaskStatus::Failed(_) => format!("failed · {time}"),
-            TaskStatus::Cancelled => match total {
-                0 => format!("cancelled · {time}"),
-                t => format!("{} / {} · {time}", human_size(bytes as i64), human_size(t as i64)),
-            },
-            // The size lives on line 1 for a single-file done, so line 2 carries it
-            // only for multi-file (where line 1 shows the count instead).
-            TaskStatus::Done if total_transfers > 1 => format!("{} · {time}", human_size(total as i64)),
-            TaskStatus::Done => time.clone(),
+        // Line-1 primary metric (+ color) and muted line-2 metadata, per state, in
+        // one pass. A failed job's line 2 is its error instead (handled below).
+        let (primary, primary_color, secondary): (SharedString, u32, String) = match &status {
             TaskStatus::Running if total > 0 => {
-                let eta = if speed > 0.0 && total > bytes {
-                    let eta_ms = ((total - bytes) as f64 / speed * 1000.0) as u64;
-                    format!(" · {} left", human_duration(eta_ms))
-                } else {
-                    String::new()
-                };
-                format!("{} / {}{eta}", human_size(bytes as i64), human_size(total as i64))
+                let speed_s = (speed > 0.0)
+                    .then(|| format!(" · {}/s", human_size(speed as i64)))
+                    .unwrap_or_default();
+                let eta = (speed > 0.0 && total > bytes)
+                    .then(|| format!(" · {} left", human_duration(((total - bytes) as f64 / speed * 1000.0) as u64)))
+                    .unwrap_or_default();
+                let files = (total_transfers > 1)
+                    .then(|| format!(" · {transfers}/{total_transfers} files"))
+                    .unwrap_or_default();
+                (
+                    format!("{}%", (pct * 100.0).round() as u32).into(),
+                    FG,
+                    format!("{verb} · {} of {}{speed_s}{eta}{files}", human_size(bytes as i64), human_size(total as i64)),
+                )
             }
-            TaskStatus::Running => format!("starting… · {time}"),
-        };
-        // Running shows live file progress on line 2 (line 1 has %); the count for a
-        // done task is already on line 1.
-        let meta = match (total_transfers > 1).then_some(total_transfers) {
-            Some(n) if running => format!("{transfers}/{n} files · {meta}"),
-            _ => meta,
+            TaskStatus::Running => (human_size(bytes as i64).into(), FG, format!("{verb} · starting…")),
+            TaskStatus::Done if total_transfers > 1 => (
+                format!("{total_transfers} files").into(),
+                FG_SUBTLE,
+                format!("{verb} · {} · {time}", human_size(total as i64)),
+            ),
+            TaskStatus::Done => (human_size(total as i64).into(), FG_SUBTLE, format!("{verb} · {time}")),
+            TaskStatus::Cancelled if total > 0 => (
+                "Cancelled".into(),
+                FG_MUTED,
+                format!("{verb} · {} of {} · {time}", human_size(bytes as i64), human_size(total as i64)),
+            ),
+            TaskStatus::Cancelled => ("Cancelled".into(), FG_MUTED, format!("{verb} · cancelled · {time}")),
+            TaskStatus::Failed(_) => ("Failed".into(), DANGER, String::new()),
         };
 
         // Ambient wash: accent→pct while running, full danger on failure, faint
@@ -259,6 +186,21 @@ impl Workspace {
             TaskStatus::Running if total > 0 => Some((ACCENT_SOFT, pct)),
             TaskStatus::Cancelled if total > 0 => Some((OVERLAY, pct)),
             _ => None,
+        };
+
+        // The error wraps to full width; every other state is one ellipsized line.
+        let secondary_line: AnyElement = match &status {
+            TaskStatus::Failed(msg) => {
+                div().w_full().text_xs().text_color(rgb(DANGER)).child(msg.clone()).into_any_element()
+            }
+            _ => div()
+                .w_full()
+                .min_w(px(0.0))
+                .truncate()
+                .text_xs()
+                .text_color(rgb(FG_SUBTLE))
+                .child(secondary)
+                .into_any_element(),
         };
 
         v_flex()
@@ -278,7 +220,6 @@ impl Workspace {
             .when_some(wash, |el, (color, frac)| {
                 el.child(div().absolute().top_0().bottom_0().left_0().w(relative(frac)).bg(rgba(color)))
             })
-            // Line 1: status · type badge · name · actions.
             .child(
                 h_flex()
                     .relative()
@@ -287,39 +228,14 @@ impl Workspace {
                     .items_center()
                     .child(div().flex_shrink_0().child(icon))
                     .child(
-                        div()
-                            .flex_shrink_0()
-                            .px_1()
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(rgba(SELECT_MUTED))
-                            .text_xs()
-                            .text_color(rgb(FG_MUTED))
-                            .child(verb),
+                        h_flex().flex_1().min_w(px(0.0)).text_color(rgb(FG)).children(head.map(|t| {
+                            self.job_target_chip(SharedString::from(format!("{key}-name")), t.clone(), name, cx)
+                        })),
                     )
-                    .child(
-                        h_flex()
-                            .flex_grow(1.0)
-                            .min_w(px(0.0))
-                            .text_color(rgb(FG))
-                            .children(head.map(|t| {
-                                self.job_target_chip(SharedString::from(format!("{key}-name")), t.clone(), name, cx)
-                            })),
-                    )
+                    .child(div().flex_shrink_0().text_xs().text_color(rgb(primary_color)).child(primary))
                     .child(actions),
             )
-            // Line 2: live metric (percent · speed) left, size/ETA pinned right.
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .items_center()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(rgb(FG_SUBTLE))
-                    .child(trailing)
-                    .child(div().flex_shrink_0().min_w(px(0.0)).truncate().text_color(rgb(FG_MUTED)).child(meta)),
-            )
+            .child(secondary_line)
             .into_any_element()
     }
 }

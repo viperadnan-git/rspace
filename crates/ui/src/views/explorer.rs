@@ -5,73 +5,18 @@
 use super::*;
 
 impl Workspace {
-    /// The crumb row. Deep paths collapse the middle (remote › … › parent ›
-    /// current); in tight space ancestor crumbs truncate first while the current
-    /// folder stays readable, so it never overflows the column.
-    fn render_breadcrumb(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let row = h_flex().flex_1().min_w(px(0.0)).gap_1().items_center().overflow_hidden();
-        let Some(remote) = self.open_remote.clone() else {
-            return row;
-        };
-
-        let mut segs: Vec<(String, String)> = vec![(remote.clone(), String::new())];
-        if !self.path.is_empty() {
-            let mut acc = String::new();
-            for part in self.path.split('/') {
-                if !acc.is_empty() {
-                    acc.push('/');
-                }
-                acc.push_str(part);
-                segs.push((part.to_string(), acc.clone()));
-            }
-        }
-
-        let n = segs.len();
-        let visible: Vec<(usize, bool)> = if n <= MAX_CRUMBS {
-            (0..n).map(|i| (i, false)).collect()
-        } else {
-            vec![(0, false), (n - 3, true), (n - 2, false), (n - 1, false)]
-        };
-
-        let mut row = row;
-        for (pos, (idx, ellipsis)) in visible.into_iter().enumerate() {
-            if pos > 0 {
-                row = row.child(div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child("›"));
-            }
-            let (label, path) = segs[idx].clone();
-            let label = if ellipsis { "…".to_string() } else { label };
-            let is_last = idx == n - 1;
-            let remote = remote.clone();
-            let (remote_for_drop, drop_dir) = (remote.clone(), path.clone());
-            let crumb = div()
-                .id(SharedString::from(format!("crumb-{pos}")))
-                .px_1()
-                .rounded_md()
-                .min_w(px(0.0))
-                // The current folder keeps more room; ancestors give way first.
-                .max_w(rem(if is_last { 220.0 } else { 120.0 }))
-                .truncate()
-                .cursor_pointer()
-                .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
-                .hover(|s| s.bg(rgba(OVERLAY)))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.navigate(remote.clone(), path.clone(), None, cx)
-                }))
-                .child(label);
-            row = row.child(self.entry_drop_target(crumb, remote_for_drop, drop_dir, cx));
-        }
-        row
-    }
-
-    /// The toolbar above the listing: back/forward, directory actions, refresh,
-    /// and the search and preview toggles.
-    fn explorer_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let fetching = self.explorer.read(cx).is_fetching();
-        let search_open = self.explorer.read(cx).search_open();
+    /// The action bar above the listing: back/forward, directory actions, refresh,
+    /// and the search toggle. A fixed height lets the back/forward divider span it
+    /// edge to edge.
+    fn action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let fetching = self.explorer().read(cx).is_fetching();
+        let search_open = self.explorer().read(cx).search_open();
         h_flex()
             .w_full()
-            .py_1p5()
+            .flex_shrink_0()
+            .h(px(ACTION_BAR_H))
             .gap_2()
+            .items_center()
             .justify_between()
             .pl_1()
             .pr_3()
@@ -81,6 +26,7 @@ impl Workspace {
                 h_flex()
                     .h_full()
                     .gap_1()
+                    .items_center()
                     .min_w(px(0.0))
                     .child(nav_button("nav-back", "←", self.can_back()).when(self.can_back(), |b| {
                         b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_back(cx)))
@@ -136,60 +82,58 @@ impl Workspace {
                                 if cfg!(target_os = "macos") { "\u{2318}F" } else { "Ctrl F" }
                             )))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.explorer.update(cx, |e, cx| e.toggle_search(window, cx));
-                            })),
-                    )
-                    .child(
-                        icon_button("toggle-preview", "icons/sidebar_right.svg")
-                            .when(self.dock_is(DockPanel::Preview), |b| b.bg(rgba(SELECT_MUTED)))
-                            .tooltip(tooltip_text("Preview (Space)"))
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.toggle_preview(&TogglePreview, window, cx)
+                                this.explorer().update(cx, |e, cx| e.toggle_search(window, cx));
                             })),
                     ),
             )
     }
 
+    /// The pane: the tab strip plus the active tab's body (welcome screen, or the
+    /// file-list column with its preview).
     pub(crate) fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // The welcome screen (no remote open) replaces the whole column, so the
-        // preview — a child of this view — can't render without an open remote.
-        if self.open_remote.is_none() {
+        v_flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .child(self.render_tab_strip(cx))
+            .child(self.render_pane_body(cx))
+    }
+
+    fn render_pane_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        // The welcome screen replaces the body when no remote is open.
+        if self.active().open_remote.is_none() {
             return self.render_welcome(cx).into_any_element();
         }
-        let column = v_flex()
+        v_flex()
             .flex_1()
             .min_w(px(0.0))
             .min_h(px(0.0))
+            .overflow_hidden()
             .bg(rgb(INSET))
-            .child(self.explorer_toolbar(cx))
-            .child(self.explorer.clone())
-            .when(self.store.get().show_path_bar, |el| el.child(self.render_path_bar(cx)));
-        div()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .min_w(px(0.0))
-            .min_h(px(0.0))
-            .child(column)
-            .when(self.dock_is(DockPanel::Preview), |el| el.child(self.render_preview(cx)))
+            .child(self.action_bar(cx))
+            .child(self.explorer())
+            .when(self.store.get().show_path_bar, |el| el.child(self.render_path_bar(cx)))
             .into_any_element()
     }
 
-    /// Finder-style path bar: the breadcrumb in a thin strip below the listing,
-    /// toggled by `show_path_bar`. The copy-path button is pinned right, outside
-    /// the breadcrumb's shrink/truncate area, so it's always reachable.
+    /// The path bar: the [`PathBar`] entity (own width → Finder-style shrinking)
+    /// with the copy-path button overlaid at the right edge (kept on the workspace
+    /// so its copied-feedback animation still works).
     fn render_path_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
+        div()
+            .relative()
             .w_full()
             .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .px_1()
-            .py_0p5()
-            .text_xs()
-            .border_t_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(self.render_breadcrumb(cx))
-            .child(self.copy_button("copy-path", CopySource::Path, self.copy_text(), "Copy path", cx))
+            .child(self.path_bar.clone())
+            .child(
+                div()
+                    .absolute()
+                    .right(px(4.0))
+                    .top_0()
+                    .bottom_0()
+                    .flex()
+                    .items_center()
+                    .child(self.copy_button("copy-path", CopySource::Path, self.copy_text(), "Copy path", cx)),
+            )
     }
 }

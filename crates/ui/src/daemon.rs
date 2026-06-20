@@ -18,11 +18,10 @@ pub(crate) enum RcHealth {
 }
 
 impl RcHealth {
+    /// The rclone brand mark for the daemon button — colored by the caller
+    /// (normal when up, red on error).
     pub(crate) fn icon(&self) -> &'static str {
-        match self {
-            RcHealth::Down(_) => "icons/server_network_off.svg",
-            _ => "icons/server_network.svg",
-        }
+        "icons/rclone.svg"
     }
 }
 
@@ -82,7 +81,7 @@ impl DaemonStatus {
         self.workspace
             .update(cx, |ws, cx| {
                 ws.load_remotes(cx);
-                if ws.open_remote.is_some() {
+                if ws.active().open_remote.is_some() {
                     ws.force_reload_entries(cx);
                 }
             })

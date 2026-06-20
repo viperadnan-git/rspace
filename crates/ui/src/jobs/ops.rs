@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// Source-relative drop intent (Finder/Explorer convention): within one remote a
+/// drag **moves**; across remotes it **copies**. Modifiers override, cross-OS —
+/// force-copy is Option (macOS) / Ctrl (Windows·Linux); force-move is Cmd (macOS)
+/// / Shift (Windows·Linux). Returns true for copy.
+fn drop_is_copy(same_remote: bool, mods: Modifiers) -> bool {
+    let (force_copy, force_move) = if cfg!(target_os = "macos") {
+        (mods.alt, mods.platform)
+    } else {
+        (mods.control, mods.shift)
+    };
+    if force_copy {
+        true
+    } else if force_move {
+        false
+    } else {
+        !same_remote
+    }
+}
+
 impl Workspace {
     pub(crate) fn new_folder(&mut self, _: &NewFolder, _window: &mut Window, cx: &mut Context<Self>) {
         self.begin_new_folder(cx);
@@ -15,20 +34,21 @@ impl Workspace {
         dragged: &DraggedEntry,
         dst_remote: String,
         dst_dir: String,
-        copy: bool,
+        mods: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        let Some(src_remote) = self.open_remote.clone() else {
+        self.spring_clear();
+        // The drag is self-contained (remote + items snapshotted at drag-start), so
+        // the drop is correct even if spring-load switched the active tab.
+        if dragged.remote.is_empty() || dragged.items.is_empty() {
             return;
-        };
+        }
+        let src_remote = dragged.remote.clone();
         let same = src_remote == dst_remote;
-        let items: Vec<(String, String, bool)> = if self.explorer.read(cx).is_selected(&dragged.path) {
-            self.selected_entries(cx).into_iter().map(|e| (e.path, e.name, e.is_dir)).collect()
-        } else {
-            vec![(dragged.path.clone(), dragged.name.clone(), dragged.is_dir)]
-        };
+        let copy = drop_is_copy(same, mods);
         let mode = if copy { TransferMode::Copy } else { TransferMode::Move };
-        for (path, name, is_dir) in items {
+        for item in &dragged.items {
+            let (path, name, is_dir) = (item.path.clone(), item.name.clone(), item.is_dir);
             // Within the same remote: skip if already there or a folder onto itself.
             if same && parent_of(&path) == dst_dir {
                 continue;
@@ -196,7 +216,7 @@ impl Workspace {
     }
 
     pub(crate) fn begin_new_folder(&mut self, cx: &mut Context<Self>) {
-        if self.open_remote.is_none() {
+        if self.active().open_remote.is_none() {
             return;
         }
         self.begin_edit("", "Folder name", true, None, |this, name, cx| this.create_folder(name, cx), cx);
@@ -210,10 +230,10 @@ impl Workspace {
         if !self.explorer_focused(window, cx) {
             return;
         }
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
-        if let Some(entry) = self.explorer.read(cx).cursor_entry() {
+        if let Some(entry) = self.explorer().read(cx).cursor_entry() {
             self.begin_rename(remote, entry, cx);
         }
     }
@@ -235,7 +255,7 @@ impl Workspace {
             return;
         }
         let to = join_path(parent_of(&entry.path), &new_name);
-        self.explorer.update(cx, |e, _| e.set_pending(new_name.clone()));
+        self.explorer().update(cx, |e, _| e.set_pending(new_name.clone()));
         let (from, is_dir) = (entry.path.clone(), entry.is_dir);
         let source = JobTarget::new(entry.name, remote.clone(), from.clone(), is_dir);
         let destination = JobTarget::new(new_name.clone(), remote.clone(), to.clone(), is_dir);
@@ -259,11 +279,11 @@ impl Workspace {
     }
 
     fn create_folder(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
-        let path = join_path(&self.path, &name);
-        self.explorer.update(cx, |e, _| e.set_pending(name.clone()));
+        let path = join_path(&self.active().path, &name);
+        self.explorer().update(cx, |e, _| e.set_pending(name.clone()));
         let folder = JobTarget::new(name, remote.clone(), path.clone(), true);
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
         let service = self.app.service.clone();
@@ -274,7 +294,7 @@ impl Workspace {
     }
 
     pub(crate) fn begin_upload(&mut self, cx: &mut Context<Self>) {
-        if self.open_remote.is_none() {
+        if self.active().open_remote.is_none() {
             return;
         }
         let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -292,10 +312,10 @@ impl Workspace {
     }
 
     pub(crate) fn upload_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
-        let dst_dir = self.path.clone();
+        let dst_dir = self.active().path.clone();
         for path in paths {
             let is_dir = path.is_dir();
             let local = path.to_string_lossy().into_owned();
@@ -339,7 +359,7 @@ impl Workspace {
     }
 
     pub(crate) fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
         let entries = self.selected_entries(cx);
@@ -388,7 +408,7 @@ impl Workspace {
     }
 
     fn download_entry(&mut self, entry: &Entry, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
         let dest = self.store.get().download_dir();
@@ -407,7 +427,7 @@ impl Workspace {
     }
 
     pub(crate) fn set_clipboard(&mut self, mode: TransferMode, cx: &mut Context<Self>) {
-        let Some(remote) = self.open_remote.clone() else {
+        let Some(remote) = self.active().open_remote.clone() else {
             return;
         };
         let entries = self.selected_entries(cx);
@@ -420,7 +440,7 @@ impl Workspace {
 
     /// Paste every clipboard item into the open directory, one job each.
     pub(crate) fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
-        self.paste_clipboard_into(self.path.clone(), cx);
+        self.paste_clipboard_into(self.active().path.clone(), cx);
     }
 
     /// Paste every clipboard item into `dst_dir`, one job each. A cut clears the
@@ -429,7 +449,7 @@ impl Workspace {
         let Some(clip) = self.clipboard.clone() else {
             return;
         };
-        let Some(dst_remote) = self.open_remote.clone() else {
+        let Some(dst_remote) = self.active().open_remote.clone() else {
             return;
         };
         for entry in &clip.entries {
@@ -500,8 +520,8 @@ impl Workspace {
 
     pub(crate) fn clear_job(&mut self, id: usize, cx: &mut Context<Self>) {
         self.jobs.update(cx, |jobs, cx| jobs.clear_job(id, cx));
-        if self.jobs.read(cx).is_empty() && self.dock_is(DockPanel::Tasks) {
-            self.dock = None;
+        if self.jobs.read(cx).is_empty() && self.dock_is(Panel::Tasks) {
+            self.close_dock(cx);
         }
         cx.notify();
     }
@@ -532,8 +552,8 @@ impl Workspace {
             false,
             |this, cx| {
                 this.jobs.update(cx, |jobs, cx| jobs.clear_finished(cx));
-                if this.jobs.read(cx).is_empty() && this.dock_is(DockPanel::Tasks) {
-                    this.dock = None;
+                if this.jobs.read(cx).is_empty() && this.dock_is(Panel::Tasks) {
+                    this.close_dock(cx);
                 }
             },
             cx,

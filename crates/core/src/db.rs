@@ -15,11 +15,10 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct UiState {
     pub sidebar_width: Option<f32>,
+    /// The right dock's width (shared by all dock panels).
     pub preview_width: Option<f32>,
-    pub preview_open: bool,
     pub col_date_width: Option<f32>,
     pub col_size_width: Option<f32>,
-    pub jobs_width: Option<f32>,
 }
 
 /// Handle to the app-state databases. Cloneable; clones share the connections.
@@ -239,18 +238,18 @@ mod tests {
     fn ui_state_defaults_when_absent() {
         let db = memory();
         let ui = db.load_ui();
-        assert!(!ui.preview_open);
+        assert_eq!(ui.preview_width, None);
         assert_eq!(ui.sidebar_width, None);
     }
 
     #[test]
     fn ui_state_roundtrips() {
         let db = memory();
-        let ui = UiState { sidebar_width: Some(220.0), preview_open: true, ..Default::default() };
+        let ui = UiState { sidebar_width: Some(220.0), preview_width: Some(320.0), ..Default::default() };
         db.save_ui(&ui);
         let got = db.load_ui();
         assert_eq!(got.sidebar_width, Some(220.0));
-        assert!(got.preview_open);
+        assert_eq!(got.preview_width, Some(320.0));
     }
 
     #[test]
@@ -279,14 +278,14 @@ mod tests {
     fn clear_history_keeps_pinned_and_ui() {
         let db = memory();
         db.save_pinned(&["gdrive".into()]);
-        db.save_ui(&UiState { preview_open: true, ..Default::default() });
+        db.save_ui(&UiState { preview_width: Some(320.0), ..Default::default() });
         db.record_remote("a");
         db.record_command("Copy");
         db.clear_history();
         assert!(db.recent_remotes(10).is_empty());
         assert!(db.command_rank().is_empty());
         assert_eq!(db.load_pinned(), vec!["gdrive".to_string()]);
-        assert!(db.load_ui().preview_open);
+        assert_eq!(db.load_ui().preview_width, Some(320.0));
     }
 
     #[test]
@@ -303,8 +302,8 @@ mod tests {
     #[test]
     fn save_ui_overwrites() {
         let db = memory();
-        db.save_ui(&UiState { jobs_width: Some(420.0), ..Default::default() });
-        db.save_ui(&UiState { jobs_width: Some(300.0), ..Default::default() });
-        assert_eq!(db.load_ui().jobs_width, Some(300.0));
+        db.save_ui(&UiState { preview_width: Some(420.0), ..Default::default() });
+        db.save_ui(&UiState { preview_width: Some(300.0), ..Default::default() });
+        assert_eq!(db.load_ui().preview_width, Some(300.0));
     }
 }

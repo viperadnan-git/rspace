@@ -10,7 +10,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let edge = px(-RESIZE_HANDLE_W / 2.0);
-        let left_edge = matches!(target, ResizeTarget::Preview | ResizeTarget::Jobs);
+        let left_edge = matches!(target, ResizeTarget::Dock);
         deferred(
             div()
                 .id(id)
@@ -30,8 +30,7 @@ impl Workspace {
                     if e.click_count() >= 2 {
                         match target {
                             ResizeTarget::Sidebar => this.sidebar.update(cx, |s, cx| s.reset_width(cx)),
-                            ResizeTarget::Preview => this.preview.update(cx, |p, cx| p.reset_width(cx)),
-                            ResizeTarget::Jobs => this.reset_jobs_width(cx),
+                            ResizeTarget::Dock => this.reset_dock_width(cx),
                         }
                     }
                 })),

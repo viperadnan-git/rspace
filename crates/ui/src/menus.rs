@@ -8,7 +8,7 @@ impl Workspace {
         label: &'static str,
         icon: &'static str,
         cx: &mut Context<Self>,
-        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         self.menu_item_toned(label, icon, FG, FG_MUTED, cx, action)
     }
@@ -19,7 +19,7 @@ impl Workspace {
         label: &'static str,
         icon: &'static str,
         cx: &mut Context<Self>,
-        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         self.menu_item_toned(label, icon, DANGER, DANGER, cx, action)
     }
@@ -31,7 +31,7 @@ impl Workspace {
         text: u32,
         icon_color: u32,
         cx: &mut Context<Self>,
-        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         h_flex()
             .id(label)
@@ -43,8 +43,8 @@ impl Workspace {
             .cursor_pointer()
             .text_color(rgb(text))
             .hover(|s| s.bg(rgba(OVERLAY)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                action(this, cx);
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                action(this, window, cx);
                 this.close_menus();
                 cx.notify();
             }))
@@ -101,32 +101,32 @@ impl Workspace {
 
     pub(crate) fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (entry, pos) = self.menus.context.clone().unwrap();
-        let remote = self.open_remote.clone().unwrap_or_default();
+        let remote = self.active().open_remote.clone().unwrap_or_default();
         let mut items: Vec<AnyElement> = Vec::new();
 
         if entry.is_dir {
             let (e, r) = (entry.clone(), remote.clone());
             items.push(
-                self.menu_item("Open", "icons/folder_open.svg", cx, move |this, cx| {
+                self.menu_item("Open", "icons/folder_open.svg", cx, move |this, _, cx| {
                     this.navigate(r.clone(), e.path.clone(), None, cx)
                 })
                 .into_any_element(),
             );
         }
         items.push(
-            self.menu_item("Download", "icons/download.svg", cx, move |this, cx| {
+            self.menu_item("Download", "icons/download.svg", cx, move |this, _, cx| {
                 this.download_selected(cx)
             })
             .into_any_element(),
         );
         items.push(
-            self.menu_item("Copy", "icons/copy.svg", cx, move |this, cx| {
+            self.menu_item("Copy", "icons/copy.svg", cx, move |this, _, cx| {
                 this.set_clipboard(TransferMode::Copy, cx)
             })
             .into_any_element(),
         );
         items.push(
-            self.menu_item("Cut", "icons/scissors.svg", cx, move |this, cx| {
+            self.menu_item("Cut", "icons/scissors.svg", cx, move |this, _, cx| {
                 this.set_clipboard(TransferMode::Move, cx)
             })
             .into_any_element(),
@@ -136,7 +136,7 @@ impl Workspace {
             // it, into the current directory (modern file-explorer behaviour).
             let into = entry.is_dir.then(|| entry.path.clone());
             items.push(
-                self.menu_item("Paste", "icons/clipboard.svg", cx, move |this, cx| match &into {
+                self.menu_item("Paste", "icons/clipboard.svg", cx, move |this, _, cx| match &into {
                     Some(dir) => this.paste_clipboard_into(dir.clone(), cx),
                     None => this.paste_clipboard(cx),
                 })
@@ -145,26 +145,63 @@ impl Workspace {
         }
         let (e_rn, r_rn) = (entry.clone(), remote.clone());
         items.push(
-            self.menu_item("Rename", "icons/edit.svg", cx, move |this, cx| {
+            self.menu_item("Rename", "icons/edit.svg", cx, move |this, _, cx| {
                 this.begin_rename(r_rn.clone(), e_rn.clone(), cx)
             })
             .into_any_element(),
         );
         let (e_cp, r_cp) = (entry.clone(), remote.clone());
         items.push(
-            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, cx| {
+            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, _, cx| {
                 this.copy_to_clipboard(format!("{}:{}", r_cp, e_cp.path), cx)
             })
             .into_any_element(),
         );
         items.push(
-            self.menu_item_danger("Delete", "icons/trash.svg", cx, |this, cx| {
+            self.menu_item_danger("Delete", "icons/trash.svg", cx, |this, _, cx| {
                 this.request_delete_selected(cx)
             })
             .into_any_element(),
         );
 
         self.popover("context-menu", pos, gpui::Anchor::TopLeft, items, cx)
+    }
+
+    pub(crate) fn render_tab_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (id, pos) = self.menus.tab_menu.unwrap();
+        let pinned = self.is_tab_pinned(id);
+        let mut items: Vec<AnyElement> = Vec::new();
+        items.push(
+            self.menu_item(if pinned { "Unpin Tab" } else { "Pin Tab" }, "icons/pin.svg", cx, move |this, _, cx| {
+                this.toggle_pin_tab(id, cx)
+            })
+            .into_any_element(),
+        );
+        items.push(
+            self.menu_item("Close", "icons/x.svg", cx, move |this, window, cx| {
+                this.close_tab_id(id, window, cx)
+            })
+            .into_any_element(),
+        );
+        items.push(
+            self.menu_item("Close Others", "icons/x.svg", cx, move |this, window, cx| {
+                this.close_other_tabs(id, window, cx)
+            })
+            .into_any_element(),
+        );
+        items.push(
+            self.menu_item("Close to the Right", "icons/x.svg", cx, move |this, window, cx| {
+                this.close_tabs_to_right(id, window, cx)
+            })
+            .into_any_element(),
+        );
+        items.push(
+            self.menu_item("Close All", "icons/trash.svg", cx, move |this, window, cx| {
+                this.close_all_tabs(window, cx)
+            })
+            .into_any_element(),
+        );
+        self.popover("tab-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 
     pub(crate) fn render_remote_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -174,10 +211,18 @@ impl Workspace {
 
         let open_name = name.clone();
         items.push(
-            self.menu_item("Open", "icons/folder_open.svg", cx, move |this, cx| {
+            self.menu_item("Open", "icons/folder_open.svg", cx, move |this, _, cx| {
                 if let Some(ix) = this.ordered_remotes().iter().position(|r| r.name == open_name) {
                     this.load_remote(ix, cx);
                 }
+            })
+            .into_any_element(),
+        );
+
+        let newtab_name = name.clone();
+        items.push(
+            self.menu_item("Open in new tab", "icons/plus.svg", cx, move |this, window, cx| {
+                this.open_remote_in_new_tab(newtab_name.clone(), window, cx)
             })
             .into_any_element(),
         );
@@ -189,14 +234,14 @@ impl Workspace {
                 if mounted { "Unmount" } else { "Mount" },
                 "icons/hard_drive.svg",
                 cx,
-                move |this, cx| this.toggle_mount(mount_name.clone(), cx),
+                move |this, _, cx| this.toggle_mount(mount_name.clone(), cx),
             )
             .into_any_element(),
         );
         if mounted {
             let reveal_name = name.clone();
             items.push(
-                self.menu_item("Reveal in Finder", "icons/folder_open.svg", cx, move |this, cx| {
+                self.menu_item("Reveal in Finder", "icons/folder_open.svg", cx, move |this, _, cx| {
                     this.reveal_mount(&reveal_name, cx)
                 })
                 .into_any_element(),
@@ -204,7 +249,7 @@ impl Workspace {
         }
         let opts_name = name.clone();
         items.push(
-            self.menu_item("Mount options\u{2026}", "icons/settings.svg", cx, move |this, cx| {
+            self.menu_item("Mount options\u{2026}", "icons/settings.svg", cx, move |this, _, cx| {
                 this.begin_mount_options(opts_name.clone(), cx)
             })
             .into_any_element(),
@@ -213,7 +258,7 @@ impl Workspace {
         let pin_name = name.clone();
         let (pin_label, pin_icon) = if pinned { ("Unpin", "icons/pin.svg") } else { ("Pin", "icons/pin.svg") };
         items.push(
-            self.menu_item(pin_label, pin_icon, cx, move |this, cx| {
+            self.menu_item(pin_label, pin_icon, cx, move |this, _, cx| {
                 this.toggle_pin(pin_name.clone(), cx)
             })
             .into_any_element(),
@@ -223,13 +268,13 @@ impl Workspace {
             let up_name = name.clone();
             let down_name = name.clone();
             items.push(
-                self.menu_item("Move up", "icons/chevron_up.svg", cx, move |this, cx| {
+                self.menu_item("Move up", "icons/chevron_up.svg", cx, move |this, _, cx| {
                     this.move_pinned(&up_name, true, cx)
                 })
                 .into_any_element(),
             );
             items.push(
-                self.menu_item("Move down", "icons/chevron_down.svg", cx, move |this, cx| {
+                self.menu_item("Move down", "icons/chevron_down.svg", cx, move |this, _, cx| {
                     this.move_pinned(&down_name, false, cx)
                 })
                 .into_any_element(),
@@ -238,7 +283,7 @@ impl Workspace {
 
         let edit_name = name.clone();
         items.push(
-            self.menu_item("Edit remote", "icons/edit.svg", cx, move |this, cx| {
+            self.menu_item("Edit remote", "icons/edit.svg", cx, move |this, _, cx| {
                 this.begin_edit_remote(edit_name.clone(), cx)
             })
             .into_any_element(),
@@ -246,7 +291,7 @@ impl Workspace {
 
         let del_name = name.clone();
         items.push(
-            self.menu_item_danger("Delete remote", "icons/trash.svg", cx, move |this, cx| {
+            self.menu_item_danger("Delete remote", "icons/trash.svg", cx, move |this, _, cx| {
                 this.request_delete_remote(del_name.clone(), cx)
             })
             .into_any_element(),
@@ -262,7 +307,7 @@ impl Workspace {
         for (label, target) in [("Open source", data.targets.first()), ("Open destination", data.targets.get(1))] {
             if let Some(target) = target.cloned() {
                 items.push(
-                    self.menu_item(label, "icons/folder_open.svg", cx, move |this, cx| {
+                    self.menu_item(label, "icons/folder_open.svg", cx, move |this, _, cx| {
                         this.reveal_target_in_explorer(target.clone(), cx)
                     })
                     .into_any_element(),
@@ -272,7 +317,7 @@ impl Workspace {
         if !data.command.is_empty() {
             let command = data.command.clone();
             items.push(
-                self.menu_item("Copy command", "icons/copy.svg", cx, move |this, cx| {
+                self.menu_item("Copy command", "icons/copy.svg", cx, move |this, _, cx| {
                     this.copy_to_clipboard(command.clone(), cx)
                 })
                 .into_any_element(),
@@ -282,7 +327,7 @@ impl Workspace {
             if let Some(target) = target.cloned() {
                 let path = format!("{}:{}", target.remote, target.path);
                 items.push(
-                    self.menu_item(label, "icons/copy.svg", cx, move |this, cx| {
+                    self.menu_item(label, "icons/copy.svg", cx, move |this, _, cx| {
                         this.copy_to_clipboard(path.clone(), cx)
                     })
                     .into_any_element(),
@@ -292,19 +337,19 @@ impl Workspace {
         let id = data.job_id;
         if data.running {
             items.push(
-                self.menu_item_danger("Cancel", "icons/x.svg", cx, move |this, cx| this.request_cancel_job(id, cx))
+                self.menu_item_danger("Cancel", "icons/x.svg", cx, move |this, _, cx| this.request_cancel_job(id, cx))
                     .into_any_element(),
             );
         }
         if data.can_retry {
             items.push(
-                self.menu_item("Retry", "icons/refresh.svg", cx, move |this, cx| this.retry_job(id, cx))
+                self.menu_item("Retry", "icons/refresh.svg", cx, move |this, _, cx| this.retry_job(id, cx))
                     .into_any_element(),
             );
         }
         if data.can_remove {
             items.push(
-                self.menu_item_danger("Remove", "icons/trash.svg", cx, move |this, cx| this.clear_job(id, cx))
+                self.menu_item_danger("Remove", "icons/trash.svg", cx, move |this, _, cx| this.clear_job(id, cx))
                     .into_any_element(),
             );
         }
@@ -315,26 +360,26 @@ impl Workspace {
         let pos = self.menus.bg_menu.unwrap();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
-            self.menu_item("New folder", "icons/new_folder.svg", cx, |this, cx| this.begin_new_folder(cx))
+            self.menu_item("New folder", "icons/new_folder.svg", cx, |this, _, cx| this.begin_new_folder(cx))
                 .into_any_element(),
         );
         items.push(
-            self.menu_item("Upload", "icons/upload.svg", cx, |this, cx| this.begin_upload(cx))
+            self.menu_item("Upload", "icons/upload.svg", cx, |this, _, cx| this.begin_upload(cx))
                 .into_any_element(),
         );
         if self.clipboard.is_some() {
             items.push(
-                self.menu_item("Paste", "icons/clipboard.svg", cx, |this, cx| this.paste_clipboard(cx))
+                self.menu_item("Paste", "icons/clipboard.svg", cx, |this, _, cx| this.paste_clipboard(cx))
                     .into_any_element(),
             );
         }
         items.push(
-            self.menu_item("Refresh", "icons/refresh.svg", cx, |this, cx| this.force_reload_entries(cx))
+            self.menu_item("Refresh", "icons/refresh.svg", cx, |this, _, cx| this.force_reload_entries(cx))
                 .into_any_element(),
         );
         let dir_path = self.copy_text();
         items.push(
-            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, cx| {
+            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, _, cx| {
                 this.copy_to_clipboard(dir_path.clone(), cx)
             })
             .into_any_element(),

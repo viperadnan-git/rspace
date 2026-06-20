@@ -11,10 +11,12 @@ mod keymap;
 mod menus;
 mod mount_options;
 mod panels;
+mod path_bar;
 mod preview;
 mod query;
 mod remotes;
 mod sidebar;
+mod spring;
 mod theme;
 mod transfers;
 mod views;
@@ -35,10 +37,10 @@ use gpui::{
     actions, anchored, deferred, div, point, prelude::*, px, relative, rgb, rgba, size, svg,
     uniform_list, AnyElement, App, AssetSource, Bounds, ClickEvent, ClipboardItem, Context,
     DismissEvent, Div, DragMoveEvent, Entity, FocusHandle, Focusable,
-    Menu, MenuItem,
+    Menu, MenuItem, Modifiers,
     MouseButton, MouseDownEvent, MouseUpEvent,
-    PathPromptOptions, Pixels, Point, ScrollStrategy, SharedString, Stateful, TitlebarOptions,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions,
+    PathPromptOptions, Pixels, Point, ScrollHandle, ScrollStrategy, SharedString, Stateful,
+    TitlebarOptions, UniformListScrollHandle, WeakEntity, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use rspace_core::{
@@ -50,6 +52,8 @@ use rspace_rclone_rc::{
 };
 
 use preview::PreviewPane;
+use path_bar::PathBar;
+use spring::SpringLoad;
 use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
 use keybindings::KeybindingsView;
@@ -110,7 +114,20 @@ actions!(
         ZoomIn,
         ZoomOut,
         ZoomReset,
-        ShowKeybindings
+        ShowKeybindings,
+        NewTab,
+        CloseTab,
+        NextTab,
+        PrevTab,
+        ActivateTab1,
+        ActivateTab2,
+        ActivateTab3,
+        ActivateTab4,
+        ActivateTab5,
+        ActivateTab6,
+        ActivateTab7,
+        ActivateTab8,
+        ActivateTab9
     ]
 );
 
@@ -173,6 +190,8 @@ struct Menus {
     bg_menu: Option<Point<Pixels>>,
     /// Remote right-click menu: the remote name and the cursor position.
     remote_menu: Option<(String, Point<Pixels>)>,
+    /// Tab right-click menu: the tab's id and the cursor position.
+    tab_menu: Option<(usize, Point<Pixels>)>,
     /// Task-row right-click menu: the row's actions and the cursor position.
     task_menu: Option<(TaskMenuData, Point<Pixels>)>,
     /// The rc-daemon health popover (status bar).
@@ -198,21 +217,10 @@ struct Clipboard {
     mode: TransferMode,
 }
 
-/// Occupant of the single right-side dock. At most one is shown; toggling one
-/// replaces the other (Zed-style exclusive dock). Each panel is rendered by its
-/// owner — Preview by the explorer view (so it can't exist without an open
-/// remote), Tasks by the workspace (global).
-#[derive(Clone, Copy, PartialEq)]
-enum DockPanel {
-    Preview,
-    Tasks,
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum ResizeTarget {
     Sidebar,
-    Preview,
-    Jobs,
+    Dock,
 }
 
 #[derive(Clone)]
@@ -243,14 +251,29 @@ struct DraggedRemote {
     name: String,
 }
 
-/// An explorer entry being dragged onto a folder. `count` lets the preview read
-/// "N items" when the dragged row is part of the multi-selection.
+/// A tab being dragged to reorder it within the strip.
 #[derive(Clone)]
-struct DraggedEntry {
+struct DraggedTab {
+    id: usize,
+    title: SharedString,
+}
+
+/// One entry inside a [`DraggedEntry`].
+#[derive(Clone)]
+struct DragItem {
     path: String,
     name: String,
     is_dir: bool,
-    count: usize,
+}
+
+/// A drag from the file list — self-contained so a drop is correct anywhere,
+/// regardless of the active tab. `remote` and `items` are snapshotted at drag
+/// start: `items` is the whole selection (or the single dragged row), each with
+/// its full path.
+#[derive(Clone)]
+struct DraggedEntry {
+    remote: String,
+    items: Vec<DragItem>,
 }
 
 struct DragLabel {
@@ -280,6 +303,48 @@ struct AppState {
     paths: Paths,
 }
 
+/// One browse context — the unit a tab owns. Everything here is independent per
+/// tab: the open location, the file-list pane (selection/search/sort/scroll),
+/// and back/forward history. The workspace holds a `Vec<Tab>` and renders the
+/// active one. The split point for future side-by-side panes is to group these
+/// under a `Pane`; nothing in `Tab` would change.
+struct Tab {
+    /// Stable identity (survives reordering on pin/unpin); used to track the
+    /// active tab and to target context-menu actions.
+    id: usize,
+    /// Session-only pin. Pinned tabs sort before unpinned, render compact with no
+    /// close button, and close only via the context menu.
+    pinned: bool,
+    open_remote: Option<String>,
+    /// Empty = root.
+    path: String,
+    /// The file-list pane: owns the listing, selection, search, and sort.
+    explorer: Entity<Explorer>,
+    /// Routes this explorer's events to the workspace; dropped when the tab closes.
+    _explorer_sub: gpui::Subscription,
+    history: Vec<Location>,
+    history_pos: usize,
+}
+
+/// A panel that can occupy the right dock. At most one shows at a time; toggling
+/// one replaces the other. Extensible: add a variant, give it `title`/`icon` and
+/// a body arm in `dock.rs`, and a toggle. The panel's own state lives in its own
+/// entity (`PreviewPane`, `Jobs`), never duplicated on the workspace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Panel {
+    Preview,
+    Tasks,
+}
+
+impl Panel {
+    fn title(self) -> &'static str {
+        match self {
+            Panel::Preview => "PREVIEW",
+            Panel::Tasks => "TASKS",
+        }
+    }
+}
+
 struct Workspace {
     app: AppState,
     version: String,
@@ -297,15 +362,19 @@ struct Workspace {
     /// Per-remote mount config (cache mode, read-only, limits); cached from the
     /// DB, edited via the mount-options modal, read when mounting.
     mount_configs: HashMap<String, MountConfig>,
-    open_remote: Option<String>,
-    /// Empty = root.
-    path: String,
-    /// The file-list pane: owns the listing, selection, search, and sort.
-    explorer: Entity<Explorer>,
-    _explorer_sub: gpui::Subscription,
-    history: Vec<Location>,
-    history_pos: usize,
-    /// Last folder viewed per remote; reopening a remote returns to it.
+    /// Open tabs; each is an independent browse context. Always non-empty.
+    tabs: Vec<Tab>,
+    /// Index of the active tab in `tabs`.
+    active: usize,
+    /// Monotonic source of `Tab::id`.
+    next_tab_id: usize,
+    /// Spring-loaded tabs: a drag dwelling on a tab id activates it.
+    spring: SpringLoad<usize>,
+    /// Horizontal scroll offset of the tab strip (persists across frames so the
+    /// strip stays put when tabs overflow).
+    tab_scroll: ScrollHandle,
+    /// Last folder viewed per remote; reopening a remote returns to it. Shared
+    /// across tabs (a convenience cache, not part of any one browse context).
     remote_paths: HashMap<String, String>,
     copied: Option<CopySource>,
     store: SettingsStore,
@@ -326,12 +395,15 @@ struct Workspace {
     toasts: Entity<Toasts>,
     jobs: Entity<Jobs>,
     /// The active right-dock panel, if any (exclusive: preview xor tasks).
-    dock: Option<DockPanel>,
-    /// Tasks pane width (resizable; persisted). Reuses the preview clamp range.
-    jobs_width: Pixels,
-    /// The preview pane (owns its subject, fetch, and cache); rendered inside the
-    /// explorer column.
+    dock: Option<Panel>,
+    /// Right-dock width, shared by every panel (resizable; persisted).
+    dock_width: Pixels,
+    /// The preview panel (owns its subject, fetch, and cache). Workspace-level
+    /// and re-targeted onto the active tab's explorer on switch.
     preview: Entity<PreviewPane>,
+    /// The breadcrumb path bar (its own entity for a definite width). Re-targeted
+    /// onto the active tab's explorer on switch.
+    path_bar: Entity<PathBar>,
     /// The rcd status item (owns daemon health + popover).
     daemon: Entity<DaemonStatus>,
     clipboard: Option<Clipboard>,
@@ -361,9 +433,9 @@ impl Workspace {
         let preview_width = clamped_width(ui.preview_width, PREVIEW_W, PREVIEW_MIN, PREVIEW_MAX);
         let col_date_width = clamped_width(ui.col_date_width, COL_DATE, COL_MIN, COL_MAX);
         let col_size_width = clamped_width(ui.col_size_width, COL_SIZE, COL_MIN, COL_MAX);
-        let jobs_width = clamped_width(ui.jobs_width, JOBS_W, PREVIEW_MIN, PREVIEW_MAX);
-        // Preview is the only persisted dock choice; tasks always starts closed.
-        let dock = ui.preview_open.then_some(DockPanel::Preview);
+        // The dock shares one resizable width across panels (persisted as
+        // `preview_width`); it always starts closed (no panel auto-opens).
+        let dock_width = preview_width;
         let jobs = cx.new(|_| Jobs::new(service.clone()));
         jobs.update(cx, |jobs, cx| jobs.start_polling(cx));
         let refresh_field = cx.new(|cx| NumberField::new(store.get().refresh_secs, 1, 120, 1, cx));
@@ -386,24 +458,26 @@ impl Workspace {
         let settings = store.get();
         let (sort_field, sort_order, refresh_secs) =
             (settings.sort_field, settings.sort_order, settings.refresh_secs);
-        let explorer = cx.new(|cx| {
-            Explorer::new(
-                weak.clone(),
-                service.clone(),
-                (sort_field, sort_order),
-                refresh_secs,
-                (col_date_width, col_size_width),
-                window,
-                cx,
-            )
-        });
-        let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
         let sidebar = cx.new(|cx| Sidebar::new(weak.clone(), sidebar_width, cx));
         sidebar.focus_handle(cx).focus(window, cx);
         let sidebar_sub = cx.subscribe(&sidebar, Self::on_sidebar_event);
-        let preview = cx.new(|cx| {
-            PreviewPane::new(weak.clone(), explorer.clone(), service.clone(), preview_width, cx)
-        });
+        let tab = Self::build_tab(
+            0,
+            &weak,
+            &service,
+            (sort_field, sort_order),
+            refresh_secs,
+            (col_date_width, col_size_width),
+            window,
+            cx,
+        );
+        // The first tab is active: only it polls its folder.
+        tab.explorer.update(cx, |e, cx| e.set_active(true, cx));
+        // One shared preview, bound to the active tab's explorer (re-targeted on
+        // tab switch). The dock owns its width and visibility.
+        let preview =
+            cx.new(|cx| PreviewPane::new(weak.clone(), tab.explorer.clone(), service.clone(), cx));
+        let path_bar = cx.new(|cx| PathBar::new(weak.clone(), tab.explorer.clone(), cx));
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
@@ -445,12 +519,11 @@ impl Workspace {
                 rclone_cache_size: None,
             },
             mount_configs,
-            open_remote: None,
-            path: String::new(),
-            explorer,
-            _explorer_sub: explorer_sub,
-            history: Vec::new(),
-            history_pos: 0,
+            tabs: vec![tab],
+            active: 0,
+            next_tab_id: 1,
+            spring: SpringLoad::new(),
+            tab_scroll: ScrollHandle::new(),
             remote_paths: HashMap::new(),
             copied: None,
             store,
@@ -463,14 +536,61 @@ impl Workspace {
             prompt_sub: None,
             toasts,
             jobs,
-            dock,
-            jobs_width,
+            dock: None,
+            dock_width,
             preview,
+            path_bar,
             daemon,
             clipboard: None,
         };
         this.load_remotes(cx);
         this
+    }
+
+    /// Build a fresh browse-context tab (welcome screen; no remote open). Shared
+    /// by `new` (first tab) and the new-tab action.
+    fn build_tab(
+        id: usize,
+        weak: &WeakEntity<Workspace>,
+        service: &Service,
+        sort: (SortField, SortOrder),
+        refresh_secs: u64,
+        cols: (Pixels, Pixels),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        let explorer = cx.new(|cx| {
+            Explorer::new(weak.clone(), service.clone(), sort, refresh_secs, cols, window, cx)
+        });
+        let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
+        Tab {
+            id,
+            pinned: false,
+            open_remote: None,
+            path: String::new(),
+            explorer,
+            _explorer_sub: explorer_sub,
+            history: Vec::new(),
+            history_pos: 0,
+        }
+    }
+
+    fn active(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+
+    fn active_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    /// The active tab's explorer (cheap `Arc` clone; lets call sites read/update
+    /// without holding a borrow on the workspace).
+    fn explorer(&self) -> Entity<Explorer> {
+        self.active().explorer.clone()
+    }
+
+    fn preview(&self) -> Entity<PreviewPane> {
+        self.preview.clone()
     }
 
     /// Bridge explorer signals to navigation, preview, menus, and file ops —
@@ -479,7 +599,7 @@ impl Workspace {
     fn on_explorer_event(&mut self, _: Entity<Explorer>, event: &ExplorerEvent, cx: &mut Context<Self>) {
         match event {
             ExplorerEvent::OpenDir(path) => {
-                let remote = self.open_remote.clone().unwrap_or_default();
+                let remote = self.active().open_remote.clone().unwrap_or_default();
                 self.navigate(remote, path.clone(), None, cx);
             }
             ExplorerEvent::OpenFile => self.open_preview(cx),
@@ -494,8 +614,8 @@ impl Workspace {
                 cx.notify();
             }
             ExplorerEvent::Upload(paths) => self.upload_paths(paths.clone(), cx),
-            ExplorerEvent::Drop { dragged, dst_remote, dst_dir, copy } => {
-                self.drop_into(dragged, dst_remote.clone(), dst_dir.clone(), *copy, cx);
+            ExplorerEvent::Drop { dragged, dst_remote, dst_dir, mods } => {
+                self.drop_into(dragged, dst_remote.clone(), dst_dir.clone(), *mods, cx);
             }
             ExplorerEvent::SortChanged(field, order) => {
                 let (field, order) = (*field, *order);
@@ -517,8 +637,8 @@ impl Workspace {
             }
             SidebarEvent::Add => self.begin_add_remote(cx),
             SidebarEvent::Reorder { from, before } => self.reorder_pinned(from, before, cx),
-            SidebarEvent::DropEntry { dragged, dst_remote } => {
-                self.drop_into(dragged, dst_remote.clone(), String::new(), false, cx);
+            SidebarEvent::DropEntry { dragged, dst_remote, mods } => {
+                self.drop_into(dragged, dst_remote.clone(), String::new(), *mods, cx);
             }
         }
     }

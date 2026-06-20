@@ -24,14 +24,14 @@ impl AssetSource for Assets {
             };
         }
         Ok(icons!(
-            "folder", "file", "copy", "check", "settings", "alert", "maximize", "minimize", "download",
+            "folder", "file", "copy", "check", "settings", "alert", "download",
             "upload", "folder_open", "pin", "chevron_up", "chevron_down", "scissors", "clipboard",
             "refresh", "activity", "trash", "x", "edit", "cloud", "hard_drive", "server", "database",
             "lock", "image", "drive", "dropbox", "gcs", "b2", "box", "mega", "swift",
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
-            "plus", "server_network", "server_network_off", "github", "search", "corner_down_left",
+            "plus", "rclone", "tasks", "github", "search", "corner_down_left",
             "keyboard", "new_folder", "home"
         ))
     }

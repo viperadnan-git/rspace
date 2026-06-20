@@ -9,7 +9,7 @@ impl Render for Workspace {
         // Restore focus only when it has been lost (e.g. a modal closed) — route
         // it to the active pane. Modals, the inline prompt, the settings panel,
         // and the explorer (incl. its search input) each own their own focus.
-        let explorer_focused = self.explorer.focus_handle(cx).contains_focused(window, cx);
+        let explorer_focused = self.explorer().focus_handle(cx).contains_focused(window, cx);
         let sidebar_focused = self.sidebar.focus_handle(cx).contains_focused(window, cx);
         if self.modal.is_some() || self.prompt.is_some() {
         } else if self.settings.open {
@@ -21,7 +21,7 @@ impl Render for Workspace {
             }
         } else if !explorer_focused && !sidebar_focused && !self.focus.is_focused(window) {
             // Focus lost (e.g. a modal closed): route to the active pane.
-            if self.open_remote.is_some() {
+            if self.active().open_remote.is_some() {
                 self.focus_explorer_pane(window, cx);
             } else {
                 self.focus_sidebar_pane(window, cx);
@@ -59,6 +59,19 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::zoom_in))
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::zoom_reset))
+            .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::close_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::prev_tab))
+            .on_action(cx.listener(|this, _: &ActivateTab1, w, cx| this.jump_to_tab(1, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab2, w, cx| this.jump_to_tab(2, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab3, w, cx| this.jump_to_tab(3, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab4, w, cx| this.jump_to_tab(4, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab5, w, cx| this.jump_to_tab(5, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab6, w, cx| this.jump_to_tab(6, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab7, w, cx| this.jump_to_tab(7, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab8, w, cx| this.jump_to_tab(8, w, cx)))
+            .on_action(cx.listener(|this, _: &ActivateTab9, w, cx| this.jump_to_tab(9, w, cx)))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragResize>, window, cx| {
                 let x = f32::from(e.event.position.x);
                 match e.drag(cx).0 {
@@ -66,16 +79,11 @@ impl Render for Workspace {
                         let w = px(x.clamp(SIDEBAR_MIN, SIDEBAR_MAX));
                         this.sidebar.update(cx, |s, cx| s.set_width(w, cx));
                     }
-                    ResizeTarget::Preview => {
-                        // Pane is docked right: width grows as the cursor nears the edge.
+                    ResizeTarget::Dock => {
+                        // Docked right: width grows as the cursor nears the edge.
                         let from_right = f32::from(window.viewport_size().width) - x;
                         let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
-                        this.preview.update(cx, |p, cx| p.set_width(w, cx));
-                    }
-                    ResizeTarget::Jobs => {
-                        let from_right = f32::from(window.viewport_size().width) - x;
-                        let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
-                        this.set_jobs_width(w, cx);
+                        this.set_dock_width(w, cx);
                     }
                 }
             }))
@@ -86,9 +94,8 @@ impl Render for Workspace {
             .text_sm()
             .child(self.render_title_bar(window, cx))
             .child(
-                // The Tasks panel is the workspace-level right dock (global). The
-                // Preview panel is rendered by the explorer itself, so it lives
-                // inside the explorer column and can't exist without an open remote.
+                // Three columns: sidebar | the active pane (tab strip + browser) |
+                // the right dock (one panel: preview xor tasks).
                 div()
                     .flex()
                     .flex_row()
@@ -97,12 +104,13 @@ impl Render for Workspace {
                     .w_full()
                     .child(self.render_sidebar(cx))
                     .child(self.render_explorer(cx))
-                    .when(self.dock_is(DockPanel::Tasks), |el| el.child(self.render_tasks(cx))),
+                    .children(self.render_dock(cx)),
             )
             .child(self.render_status_bar(cx))
             .when(self.menus.context.is_some(), |el| el.child(self.render_context_menu(cx)))
             .when(self.menus.task_menu.is_some(), |el| el.child(self.render_task_menu(cx)))
             .when(self.menus.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
+            .when(self.menus.tab_menu.is_some(), |el| el.child(self.render_tab_menu(cx)))
             .when(self.menus.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
             .when(self.menus.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
             .when(self.settings.open, |el| el.child(self.render_settings(cx)))
