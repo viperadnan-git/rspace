@@ -77,8 +77,9 @@ impl Sidebar {
             let drag_name = remote.name.clone();
             let target = remote.name.clone();
             row = row
-                .on_drag(DraggedRemote { name: drag_name }, |d, _, _, app| {
-                    app.new(|_| DragLabel { text: d.name.clone().into() })
+                .on_drag(DraggedRemote { name: drag_name }, |d, offset, _, app| {
+                    let name = d.name.clone();
+                    app.new(move |_| DragLabel::new(name, offset))
                 })
                 .drag_over::<DraggedRemote>(|s, _, _, _| s.bg(rgba(SELECT_MUTED)))
                 .on_drop(cx.listener(move |_, d: &DraggedRemote, _, cx| {

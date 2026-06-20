@@ -37,7 +37,6 @@ impl Workspace {
                     .gap_5()
                     .child(self.refresh_setting(cx))
                     .child(self.ui_font_setting(cx))
-                    .child(self.path_bar_setting(cx))
                     .child(divider())
                     .child(self.download_setting(cx))
                     .child(divider())
@@ -75,18 +74,6 @@ impl Workspace {
                 .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).build(|this, cx| {
                     this.choose_download_dir(cx)
                 }, cx)),
-        )
-    }
-
-    fn path_bar_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on = self.store.get().show_path_bar;
-        setting_block(
-            "Path bar",
-            "Show the breadcrumb path at the bottom of the explorer.",
-            switch("toggle-path-bar", on, None, |this, cx| {
-                this.store.update(|s| s.show_path_bar = !s.show_path_bar);
-                cx.notify();
-            }, cx),
         )
     }
 

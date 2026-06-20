@@ -95,47 +95,13 @@ impl Explorer {
             .py_1()
             .text_xs()
             .text_color(rgb(FG_SUBTLE))
+            // Lifted off the chrome-toned list area so the header reads as a band.
+            .bg(rgb(CANVAS))
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
             .child(self.col_head(SortField::Name, "Name", None, false, None, cx))
             .child(self.col_head(SortField::Size, "Size", Some(size_w), true, Some(Column::Size), cx))
             .child(self.col_head(SortField::Modified, "Date Modified", Some(date_w), false, Some(Column::Date), cx))
-    }
-
-    fn search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .key_context("ExplorerSearch")
-            .on_action(cx.listener(Self::search_submit))
-            .on_action(cx.listener(Self::close_search))
-            .w_full()
-            .py_1p5()
-            .flex_shrink_0()
-            .gap_2()
-            .px_3()
-            .items_center()
-            .border_b_1()
-            .border_color(rgb(BORDER_MUTED))
-            .child(svg().path("icons/search.svg").size(rem(14.0)).flex_shrink_0().text_color(rgb(FG_SUBTLE)))
-            .child(div().flex_grow(1.0).min_w(px(0.0)).child(self.search_input.clone()))
-            .when(!self.search.is_empty(), |el| {
-                let active = self.recursive_intent();
-                el.child(
-                    icon_button("search-clear", "icons/x.svg")
-                        .tooltip(tooltip_text("Clear"))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_search(cx))),
-                )
-                .child(
-                    Button::new(
-                        "search-subfolders",
-                        "Subfolders",
-                        if active { ButtonStyle::Primary } else { ButtonStyle::Soft },
-                    )
-                    .icon("icons/corner_down_left.svg")
-                    .build(|this, cx| this.toggle_subfolder_search(cx), cx)
-                    .text_xs()
-                    .tooltip(tooltip_text("Search all subfolders (Enter)")),
-                )
-            })
     }
 
     fn render_error(&self, message: String, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -251,12 +217,12 @@ impl Render for Explorer {
                                 .gap_0()
                                 .border_b_1()
                                 .border_color(rgb(SEPARATOR))
-                                .on_drag(drag, |d, _, _, app| {
+                                .on_drag(drag, |d, offset, _, app| {
                                     let text: SharedString = match d.items.as_slice() {
                                         [one] => one.name.clone().into(),
                                         many => format!("{} items", many.len()).into(),
                                     };
-                                    app.new(|_| DragLabel { text })
+                                    app.new(move |_| DragLabel::new(text, offset))
                                 })
                                 .when(is_dir, |r| {
                                     let dst = this.remote.clone().unwrap_or_default();
@@ -357,22 +323,59 @@ impl Render for Explorer {
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragColumn>, window, cx| {
                 this.on_column_drag(e, window, cx);
             }))
-            .when(show_table && self.search_open, |el| el.child(self.search_bar(cx)))
+            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragMarquee>, window, cx| {
+                let m = window.modifiers();
+                let additive = m.secondary() || m.shift;
+                this.drag_marquee(this.marquee_anchor, e.event.position, additive, window, cx);
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_marquee(cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_marquee(cx)))
             .when(show_table, |el| el.child(self.column_header(size_w, date_w, cx)))
             .when(making_new, |el| el.child(prompt.as_ref().unwrap().clone()))
-            .child(v_flex().flex_1().min_h(px(0.0)).min_w(px(0.0)).child(body))
+            .child(
+                v_flex()
+                    .id("entry-list")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    // Press-drag in empty list space draws a rubber-band; rows stop
+                    // propagation on mouse-down so their own drag wins instead.
+                    .on_drag(DragMarquee, |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.new(|_| DragMarquee)
+                    })
+                    .child(body)
+                    .when_some(self.marquee_rect(), |el, (left, top, w, h)| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .left(left)
+                                .top(top)
+                                .w(w)
+                                .h(h)
+                                .bg(rgba(ACCENT_SOFT))
+                                .border_1()
+                                .border_color(rgb(ACCENT)),
+                        )
+                    }),
+            )
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|_, ev: &MouseDownEvent, _, cx| {
                     cx.emit(ExplorerEvent::Background(ev.position));
                 }),
             )
-            // Click in empty space deselects (Finder-style). Rows stop propagation.
+            // Click in empty space deselects (Finder-style); a press-drag from here
+            // starts a rubber-band. Rows stop propagation, so neither fires on them.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                     this.focus.focus(window, cx);
-                    this.clear_selection(cx);
+                    this.marquee_anchor = ev.position;
+                    if !(ev.modifiers.secondary() || ev.modifiers.shift) {
+                        this.clear_selection(cx);
+                    }
                 }),
             )
             // Files dragged from Finder upload into the open directory.

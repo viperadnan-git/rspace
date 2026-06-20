@@ -32,7 +32,7 @@ impl AssetSource for Assets {
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
             "plus", "rclone", "tasks", "github", "search", "corner_down_left",
-            "keyboard", "new_folder", "home"
+            "keyboard", "new_folder"
         ))
     }
 

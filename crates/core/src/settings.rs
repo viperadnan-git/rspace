@@ -21,8 +21,6 @@ pub struct Settings {
     pub sort_order: SortOrder,
     /// Base UI font size in px (Zed's `ui_font_size`); drives the window rem size.
     pub ui_font_size: f32,
-    /// Show the breadcrumb path bar at the bottom of the explorer.
-    pub show_path_bar: bool,
 }
 
 impl Default for Settings {
@@ -35,7 +33,6 @@ impl Default for Settings {
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
             ui_font_size: 16.0,
-            show_path_bar: true,
         }
     }
 }

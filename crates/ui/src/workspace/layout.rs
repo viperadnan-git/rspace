@@ -99,35 +99,6 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn copy_button(
-        &self,
-        id: impl Into<gpui::ElementId>,
-        source: CopySource,
-        text: String,
-        tip: &'static str,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let done = self.copied == Some(source);
-        h_flex()
-            .id(id)
-            .size(rem(22.0))
-            .flex_shrink_0()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(OVERLAY)))
-            .tooltip(tooltip_text(if done { "Copied" } else { tip }))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.copy_with_feedback(source, text.clone(), cx)
-            }))
-            .child(
-                svg()
-                    .path(if done { "icons/check.svg" } else { "icons/copy.svg" })
-                    .size(rem(13.0))
-                    .text_color(rgb(if done { SUCCESS } else { FG_MUTED })),
-            )
-    }
-
     pub(crate) fn copy_with_feedback(&mut self, source: CopySource, text: String, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;

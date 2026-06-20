@@ -137,6 +137,11 @@ pub fn divider() -> impl IntoElement {
     div().h(px(1.0)).w_full().bg(rgb(BORDER_MUTED))
 }
 
+/// A full-height hairline for separating items along a row.
+pub fn v_divider() -> impl IntoElement {
+    div().w(px(1.0)).h_full().flex_shrink_0().bg(rgb(BORDER_MUTED))
+}
+
 pub fn section_header(label: impl Into<SharedString>) -> Div {
     div().px_3().py_1().text_xs().text_color(rgb(FG_SUBTLE)).child(label.into())
 }

@@ -11,7 +11,7 @@ mod keymap;
 mod menus;
 mod mount_options;
 mod panels;
-mod path_bar;
+mod action_bar;
 mod preview;
 mod query;
 mod remotes;
@@ -52,7 +52,7 @@ use rspace_rclone_rc::{
 };
 
 use preview::PreviewPane;
-use path_bar::PathBar;
+use action_bar::ActionBar;
 use spring::SpringLoad;
 use command_palette::CommandPaletteDelegate;
 use confirm::ConfirmModal;
@@ -136,7 +136,6 @@ pub(crate) use status_screen::{relaunch, StatusScreen};
 
 #[derive(PartialEq, Clone, Copy)]
 enum CopySource {
-    Path,
     Error,
 }
 
@@ -247,6 +246,18 @@ impl Render for DragColumn {
     }
 }
 
+/// Rubber-band selection in the file list. Carries no state — the band's anchor
+/// and live selection live on the [`Explorer`]; this just drives gpui's drag
+/// lifecycle (press-move-release) and renders no preview.
+#[derive(Clone)]
+struct DragMarquee;
+
+impl Render for DragMarquee {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
 struct DraggedRemote {
     name: String,
 }
@@ -278,19 +289,31 @@ struct DraggedEntry {
 
 struct DragLabel {
     text: SharedString,
+    /// Cursor position within the grabbed element at drag start. gpui paints the
+    /// drag preview at `cursor - offset`, so shifting the label back by `offset`
+    /// re-anchors it to the cursor regardless of where a wide row was grabbed.
+    offset: Point<Pixels>,
+}
+
+impl DragLabel {
+    fn new(text: impl Into<SharedString>, offset: Point<Pixels>) -> Self {
+        Self { text: text.into(), offset }
+    }
 }
 
 impl Render for DragLabel {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(rgb(ELEVATED))
-            .shadow_lg()
-            .text_xs()
-            .text_color(rgb(FG))
-            .child(self.text.clone())
+        div().pl(self.offset.x + px(12.0)).pt(self.offset.y + px(8.0)).child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(rgb(ELEVATED))
+                .shadow_lg()
+                .text_xs()
+                .text_color(rgb(FG))
+                .child(self.text.clone()),
+        )
     }
 }
 
@@ -403,7 +426,7 @@ struct Workspace {
     preview: Entity<PreviewPane>,
     /// The breadcrumb path bar (its own entity for a definite width). Re-targeted
     /// onto the active tab's explorer on switch.
-    path_bar: Entity<PathBar>,
+    action_bar: Entity<ActionBar>,
     /// The rcd status item (owns daemon health + popover).
     daemon: Entity<DaemonStatus>,
     clipboard: Option<Clipboard>,
@@ -477,7 +500,7 @@ impl Workspace {
         // tab switch). The dock owns its width and visibility.
         let preview =
             cx.new(|cx| PreviewPane::new(weak.clone(), tab.explorer.clone(), service.clone(), cx));
-        let path_bar = cx.new(|cx| PathBar::new(weak.clone(), tab.explorer.clone(), cx));
+        let action_bar = cx.new(|cx| ActionBar::new(weak.clone(), tab.explorer.clone(), cx));
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
@@ -539,7 +562,7 @@ impl Workspace {
             dock: None,
             dock_width,
             preview,
-            path_bar,
+            action_bar,
             daemon,
             clipboard: None,
         };

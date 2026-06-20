@@ -73,7 +73,13 @@ impl Daemon {
     /// file so the next launch has nothing to reap. Takes `&mut self` so it can
     /// run while the daemon is held behind a [`SharedDaemon`].
     pub async fn shutdown(&mut self) {
-        let _ = tokio::time::timeout(Duration::from_secs(2), self.client.quit()).await;
+        // Ctrl-C in a terminal delivers SIGINT to the whole process group, so the
+        // daemon often self-exits before we get here; skip `core/quit` only when
+        // it has definitely exited (else it'd fail to connect and log a warning).
+        // An indeterminate `Err` still tries quit rather than risk a survivor.
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = tokio::time::timeout(Duration::from_secs(2), self.client.quit()).await;
+        }
         let _ = self.child.kill().await;
         let _ = std::fs::remove_file(&self.pidfile);
     }

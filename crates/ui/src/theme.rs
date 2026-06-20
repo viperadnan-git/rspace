@@ -63,7 +63,6 @@ pub const PANE_HEADER_H: f32 = 34.0;
 /// Height of the explorer action bar (back/forward, dir actions, search). Fixed
 /// so the back/forward divider can span it edge to edge.
 pub const ACTION_BAR_H: f32 = 34.0;
-pub const MAX_CRUMBS: usize = 4;
 /// Spring-load dwell before a hovered drag activates a tab / crumb / remote —
 /// the macOS spring-loaded-folders default (`com.apple.springing.delay`).
 pub const SPRING_LOAD_MS: u64 = 500;

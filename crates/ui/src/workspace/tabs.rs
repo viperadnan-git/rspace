@@ -34,7 +34,7 @@ impl Workspace {
         self.set_active_polling(cx);
         self.retarget_preview(cx);
         let explorer = self.active().explorer.clone();
-        self.path_bar.update(cx, |pb, cx| pb.set_explorer(explorer, cx));
+        self.action_bar.update(cx, |ab, cx| ab.set_explorer(explorer, cx));
         // A fresh tab opens on the welcome screen, so clear the sidebar highlight.
         self.select_remote(None, cx);
         self.close_menus();
@@ -109,7 +109,7 @@ impl Workspace {
         self.set_active_polling(cx);
         self.retarget_preview(cx);
         let explorer = self.active().explorer.clone();
-        self.path_bar.update(cx, |pb, cx| pb.set_explorer(explorer, cx));
+        self.action_bar.update(cx, |ab, cx| ab.set_explorer(explorer, cx));
         let remote = self.active().open_remote.clone();
         self.select_remote(remote.as_deref(), cx);
         self.close_menus();

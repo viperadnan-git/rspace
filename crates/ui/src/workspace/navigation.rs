@@ -22,7 +22,16 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
-        self.explorer().update(cx, |e, cx| e.toggle_search(window, cx));
+        self.action_bar.update(cx, |ab, cx| ab.toggle_search(window, cx));
+    }
+
+    /// Open the directory-actions menu (New folder / Upload / Paste / Copy path)
+    /// at `pos` — the action bar's `+` button and the empty-space right-click share
+    /// this background menu.
+    pub(crate) fn open_actions_menu(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        self.close_menus();
+        self.menus.bg_menu = Some(pos);
+        cx.notify();
     }
 
     /// Whether the explorer pane currently holds keyboard focus.
@@ -82,13 +91,6 @@ impl Workspace {
         tab.history_pos = tab.history.len() - 1;
         self.explorer().update(cx, |e, cx| e.show(Some(remote), path, want, cx));
         cx.notify();
-    }
-
-    /// Jump to the open remote's root.
-    pub(crate) fn go_to_root(&mut self, cx: &mut Context<Self>) {
-        if let Some(remote) = self.active().open_remote.clone() {
-            self.navigate(remote, String::new(), None, cx);
-        }
     }
 
     pub(crate) fn reveal_target(&mut self, target: JobTarget, window: &mut Window, cx: &mut Context<Self>) {

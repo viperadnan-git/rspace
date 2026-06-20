@@ -8,9 +8,13 @@ impl Render for Workspace {
         window.set_rem_size(px(self.ui_font_size()));
         // Restore focus only when it has been lost (e.g. a modal closed) — route
         // it to the active pane. Modals, the inline prompt, the settings panel,
-        // and the explorer (incl. its search input) each own their own focus.
+        // the explorer, and the action bar's search field each own their own focus.
         let explorer_focused = self.explorer().focus_handle(cx).contains_focused(window, cx);
         let sidebar_focused = self.sidebar.focus_handle(cx).contains_focused(window, cx);
+        // The search input lives on the action bar, outside the explorer's focus
+        // subtree, so check it explicitly — else the routing below steals it back.
+        let search_focused =
+            self.explorer().read(cx).search_input().focus_handle(cx).is_focused(window);
         if self.modal.is_some() || self.prompt.is_some() {
         } else if self.settings.open {
             // Settings inputs own their focus; focus a freshly-opened rclone edit
@@ -19,7 +23,7 @@ impl Render for Workspace {
                 let handle = input.read(cx).focus_handle(cx);
                 focus_once(&mut self.settings.rclone_edit_focus, &handle, window, cx);
             }
-        } else if !explorer_focused && !sidebar_focused && !self.focus.is_focused(window) {
+        } else if !explorer_focused && !sidebar_focused && !search_focused && !self.focus.is_focused(window) {
             // Focus lost (e.g. a modal closed): route to the active pane.
             if self.active().open_remote.is_some() {
                 self.focus_explorer_pane(window, cx);

@@ -17,7 +17,17 @@ impl Workspace {
             .h_full()
             .overflow_x_scroll()
             .track_scroll(&self.tab_scroll)
-            .children(tab_els);
+            .children(tab_els)
+            // New-tab button trails the last tab and scrolls with them (Chrome-style).
+            .child(
+                icon_button("new-tab", "icons/plus.svg")
+                    .flex_none()
+                    .ml_1()
+                    .tooltip(tooltip_text("New tab"))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.new_tab(&NewTab, window, cx)
+                    })),
+            );
         h_flex()
             .id("tab-bar")
             .w_full()
@@ -51,27 +61,16 @@ impl Workspace {
                     .items_center()
                     .border_b_1()
                     .border_color(rgb(BORDER_MUTED))
-                    .child(div().w(px(1.0)).h_full().flex_shrink_0().bg(rgb(BORDER_MUTED)))
+                    .child(v_divider())
                     .child(
-                        h_flex()
-                            .px_1()
-                            .gap_1()
-                            .items_center()
-                            .child(
-                                icon_button("new-tab", "icons/plus.svg")
-                                    .tooltip(tooltip_text("New tab"))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                        this.new_tab(&NewTab, window, cx)
-                                    })),
-                            )
-                            .child(
-                                icon_button("toggle-preview", "icons/sidebar_right.svg")
-                                    .when(self.dock_is(Panel::Preview), |b| b.bg(rgba(SELECT_MUTED)))
-                                    .tooltip(tooltip_text("Preview (Space)"))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                        this.toggle_preview(&TogglePreview, window, cx)
-                                    })),
-                            ),
+                        h_flex().px_1().items_center().child(
+                            icon_button("toggle-preview", "icons/sidebar_right.svg")
+                                .when(self.dock_is(Panel::Preview), |b| b.bg(rgba(SELECT_MUTED)))
+                                .tooltip(tooltip_text("Preview (Space)"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.toggle_preview(&TogglePreview, window, cx)
+                                })),
+                        ),
                     ),
             )
     }
@@ -139,8 +138,9 @@ impl Workspace {
             .on_drop(cx.listener(move |this, d: &DraggedEntry, window, cx| {
                 this.drop_into_tab(id, d, window.modifiers(), cx)
             }))
-            .on_drag(DraggedTab { id, title: SharedString::from(title.clone()) }, |d, _, _, cx| {
-                cx.new(|_| DragLabel { text: d.title.clone() })
+            .on_drag(DraggedTab { id, title: SharedString::from(title.clone()) }, |d, offset, _, cx| {
+                let title = d.title.clone();
+                cx.new(move |_| DragLabel::new(title, offset))
             })
             .drag_over::<DraggedTab>(|s, _, _, _| s.bg(rgba(SELECT)))
             .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| this.reorder_tab(d.id, id, cx)))
