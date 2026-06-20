@@ -10,7 +10,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
-        self.menu_item_toned(label, icon, FG, FG_MUTED, cx, action)
+        self.menu_item_toned(label, label, icon, FG, FG_MUTED, cx, action)
     }
 
     /// A destructive menu item, tinted with the danger color.
@@ -21,12 +21,48 @@ impl Workspace {
         cx: &mut Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
-        self.menu_item_toned(label, icon, DANGER, DANGER, cx, action)
+        self.menu_item_toned(label, label, icon, DANGER, DANGER, cx, action)
+    }
+
+    /// Render a declarative [`MenuSpec`] into a popover at `pos`. The single source
+    /// for selection-aware menus (entries, tasks): callers describe rows; rows wire
+    /// to `menu_item_toned`, separators to a hairline. Each item closes the menu.
+    fn render_menu(
+        &self,
+        id: &'static str,
+        pos: Point<Pixels>,
+        spec: MenuSpec,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // Resolve separators structurally: a boundary becomes a divider only with
+        // an item on both sides, so a divider never leads, trails, or doubles up no
+        // matter which conditional groups are empty.
+        let mut items: Vec<AnyElement> = Vec::with_capacity(spec.rows.len());
+        let mut pending_divider = false;
+        for row in spec.rows {
+            match row {
+                MenuRow::Separator => pending_divider = !items.is_empty(),
+                MenuRow::Item { id, label, icon, danger, action } => {
+                    if std::mem::take(&mut pending_divider) {
+                        items.push(div().my_1().h(px(1.0)).bg(rgb(BORDER_MUTED)).into_any_element());
+                    }
+                    let (text, icon_color) = if danger { (DANGER, DANGER) } else { (FG, FG_MUTED) };
+                    items.push(
+                        self.menu_item_toned(id, label, icon, text, icon_color, cx, move |this, w, cx| {
+                            action(this, w, cx)
+                        })
+                        .into_any_element(),
+                    );
+                }
+            }
+        }
+        self.popover(id, pos, gpui::Anchor::TopLeft, items, cx)
     }
 
     fn menu_item_toned(
         &self,
-        label: &'static str,
+        id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         icon: &'static str,
         text: u32,
         icon_color: u32,
@@ -34,7 +70,7 @@ impl Workspace {
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         h_flex()
-            .id(label)
+            .id(id.into())
             .w_full()
             .gap_2()
             .px_2()
@@ -49,7 +85,7 @@ impl Workspace {
                 cx.notify();
             }))
             .child(svg().path(icon).size(rem(15.0)).flex_shrink_0().text_color(rgb(icon_color)))
-            .child(label)
+            .child(label.into())
     }
 
     /// Close every transient popover.
@@ -99,72 +135,66 @@ impl Workspace {
             .priority(2)
     }
 
+    /// The entry context menu, adapted to the selection. Selection-wide actions
+    /// (Download, Copy, Cut, Delete) always show and pluralize with a count;
+    /// single-target actions (Open, Rename, Paste-into) appear only for one entry.
+    /// `entry` is the right-clicked row — the right-click handler has already made
+    /// it the lone selection if it wasn't already part of one.
     pub(crate) fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (entry, pos) = self.menus.context.clone().unwrap();
         let remote = self.active().open_remote.clone().unwrap_or_default();
-        let mut items: Vec<AnyElement> = Vec::new();
+        let sel = self.selected_entries(cx);
+        let n = sel.len().max(1);
+        let single = n == 1;
+        let has_clip = self.clipboard.is_some();
+        let count = |verb: &str| if single { verb.to_string() } else { format!("{verb} {n} items") };
+        let paths: Vec<String> = if single {
+            vec![format!("{}:{}", remote, entry.path)]
+        } else {
+            sel.iter().map(|e| format!("{}:{}", remote, e.path)).collect()
+        };
 
-        if entry.is_dir {
-            let (e, r) = (entry.clone(), remote.clone());
-            items.push(
-                self.menu_item("Open", "icons/folder_open.svg", cx, move |this, _, cx| {
+        let spec = MenuSpec::new()
+            .when(single && entry.is_dir, |m| {
+                let (e, r) = (entry.clone(), remote.clone());
+                m.item("ctx-open", "Open", "icons/folder_open.svg", move |this, _, cx| {
                     this.navigate(r.clone(), e.path.clone(), None, cx)
                 })
-                .into_any_element(),
-            );
-        }
-        items.push(
-            self.menu_item("Download", "icons/download.svg", cx, move |this, _, cx| {
+            })
+            .item("ctx-download", count("Download"), "icons/download.svg", |this, _, cx| {
                 this.download_selected(cx)
             })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item("Copy", "icons/copy.svg", cx, move |this, _, cx| {
+            .item("ctx-copy", count("Copy"), "icons/copy.svg", |this, _, cx| {
                 this.set_clipboard(TransferMode::Copy, cx)
             })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item("Cut", "icons/scissors.svg", cx, move |this, _, cx| {
+            .item("ctx-cut", count("Cut"), "icons/scissors.svg", |this, _, cx| {
                 this.set_clipboard(TransferMode::Move, cx)
             })
-            .into_any_element(),
-        );
-        if self.clipboard.is_some() {
-            // Paste into the folder when the target is one; a file pastes alongside
-            // it, into the current directory (modern file-explorer behaviour).
-            let into = entry.is_dir.then(|| entry.path.clone());
-            items.push(
-                self.menu_item("Paste", "icons/clipboard.svg", cx, move |this, _, cx| match &into {
+            // Paste targets a single folder (into it) or the current dir; it has no
+            // meaning while a multi-selection is the operand.
+            .when(has_clip && single, |m| {
+                let into = entry.is_dir.then(|| entry.path.clone());
+                m.item("ctx-paste", "Paste", "icons/clipboard.svg", move |this, _, cx| match &into {
                     Some(dir) => this.paste_clipboard_into(dir.clone(), cx),
                     None => this.paste_clipboard(cx),
                 })
-                .into_any_element(),
-            );
-        }
-        let (e_rn, r_rn) = (entry.clone(), remote.clone());
-        items.push(
-            self.menu_item("Rename", "icons/edit.svg", cx, move |this, _, cx| {
-                this.begin_rename(r_rn.clone(), e_rn.clone(), cx)
             })
-            .into_any_element(),
-        );
-        let (e_cp, r_cp) = (entry.clone(), remote.clone());
-        items.push(
-            self.menu_item("Copy path", "icons/copy.svg", cx, move |this, _, cx| {
-                this.copy_to_clipboard(format!("{}:{}", r_cp, e_cp.path), cx)
+            .separator()
+            .when(single, |m| {
+                let (e, r) = (entry.clone(), remote.clone());
+                m.item("ctx-rename", "Rename", "icons/edit.svg", move |this, _, cx| {
+                    this.begin_rename(r.clone(), e.clone(), cx)
+                })
             })
-            .into_any_element(),
-        );
-        items.push(
-            self.menu_item_danger("Delete", "icons/trash.svg", cx, |this, _, cx| {
+            .item("ctx-copy-path", if single { "Copy path" } else { "Copy paths" }, "icons/copy.svg", move |this, _, cx| {
+                this.copy_to_clipboard(paths.join("\n"), cx)
+            })
+            .separator()
+            .danger("ctx-delete", count("Delete"), "icons/trash.svg", |this, _, cx| {
                 this.request_delete_selected(cx)
-            })
-            .into_any_element(),
-        );
+            });
 
-        self.popover("context-menu", pos, gpui::Anchor::TopLeft, items, cx)
+        self.render_menu("context-menu", pos, spec, cx)
     }
 
     pub(crate) fn render_tab_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -300,60 +330,97 @@ impl Workspace {
         self.popover("remote-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
 
+    /// The task-row menu, over the current task selection. One job → the full
+    /// single-row menu (reveal/copy endpoints + cancel/retry/remove); many → bulk
+    /// actions that fold over the selection (retry failed, cancel running, remove
+    /// finished, copy commands). Jobs are snapshotted live so the menu reflects
+    /// state at open time even though it's described declaratively.
     pub(crate) fn render_task_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (data, pos) = self.menus.task_menu.clone().unwrap();
-        let mut items: Vec<AnyElement> = Vec::new();
-        // Reveal endpoints in the explorer (source first, then destination).
-        for (label, target) in [("Open source", data.targets.first()), ("Open destination", data.targets.get(1))] {
-            if let Some(target) = target.cloned() {
-                items.push(
-                    self.menu_item(label, "icons/folder_open.svg", cx, move |this, _, cx| {
-                        this.reveal_target_in_explorer(target.clone(), cx)
-                    })
-                    .into_any_element(),
-                );
-            }
-        }
-        if !data.command.is_empty() {
-            let command = data.command.clone();
-            items.push(
-                self.menu_item("Copy command", "icons/copy.svg", cx, move |this, _, cx| {
-                    this.copy_to_clipboard(command.clone(), cx)
+        let (ids, pos) = self.menus.task_menu.clone().unwrap();
+        let sel: Vec<TaskSnap> = {
+            let jobs = self.jobs.read(cx);
+            ids.iter()
+                .filter_map(|id| jobs.items().iter().find(|j| j.id == *id))
+                .map(|j| TaskSnap {
+                    id: j.id,
+                    command: j.command.clone(),
+                    targets: j.targets.clone(),
+                    running: !j.done,
+                    can_retry: j.done && j.error.is_some(),
+                    can_remove: j.done,
                 })
-                .into_any_element(),
-            );
-        }
-        for (label, target) in [("Copy source path", data.targets.first()), ("Copy destination path", data.targets.get(1))] {
-            if let Some(target) = target.cloned() {
-                let path = format!("{}:{}", target.remote, target.path);
-                items.push(
-                    self.menu_item(label, "icons/copy.svg", cx, move |this, _, cx| {
-                        this.copy_to_clipboard(path.clone(), cx)
+                .collect()
+        };
+
+        let spec = if let [t] = sel.as_slice() {
+            let (id, command, targets) = (t.id, t.command.clone(), t.targets.clone());
+            let (src, dst) = (targets.first().cloned(), targets.get(1).cloned());
+            MenuSpec::new()
+                .when(src.is_some(), |m| {
+                    let t = src.clone().unwrap();
+                    m.item("task-open-src", "Open source", "icons/folder_open.svg", move |this, _, cx| {
+                        this.reveal_target_in_explorer(t.clone(), cx)
                     })
-                    .into_any_element(),
-                );
-            }
-        }
-        let id = data.job_id;
-        if data.running {
-            items.push(
-                self.menu_item_danger("Cancel", "icons/x.svg", cx, move |this, _, cx| this.request_cancel_job(id, cx))
-                    .into_any_element(),
-            );
-        }
-        if data.can_retry {
-            items.push(
-                self.menu_item("Retry", "icons/refresh.svg", cx, move |this, _, cx| this.retry_job(id, cx))
-                    .into_any_element(),
-            );
-        }
-        if data.can_remove {
-            items.push(
-                self.menu_item_danger("Remove", "icons/trash.svg", cx, move |this, _, cx| this.clear_job(id, cx))
-                    .into_any_element(),
-            );
-        }
-        self.popover("task-menu", pos, gpui::Anchor::TopLeft, items, cx)
+                })
+                .when(dst.is_some(), |m| {
+                    let t = dst.clone().unwrap();
+                    m.item("task-open-dst", "Open destination", "icons/folder_open.svg", move |this, _, cx| {
+                        this.reveal_target_in_explorer(t.clone(), cx)
+                    })
+                })
+                .when(!command.is_empty(), |m| {
+                    m.item("task-copy-cmd", "Copy command", "icons/copy.svg", move |this, _, cx| {
+                        this.copy_to_clipboard(command.clone(), cx)
+                    })
+                })
+                .when(src.is_some(), |m| {
+                    let p = src.map(|t| format!("{}:{}", t.remote, t.path)).unwrap_or_default();
+                    m.item("task-copy-src", "Copy source path", "icons/copy.svg", move |this, _, cx| {
+                        this.copy_to_clipboard(p.clone(), cx)
+                    })
+                })
+                .when(dst.is_some(), |m| {
+                    let p = dst.map(|t| format!("{}:{}", t.remote, t.path)).unwrap_or_default();
+                    m.item("task-copy-dst", "Copy destination path", "icons/copy.svg", move |this, _, cx| {
+                        this.copy_to_clipboard(p.clone(), cx)
+                    })
+                })
+                .separator()
+                .when(t.running, |m| m.danger("task-cancel", "Cancel", "icons/x.svg", move |this, _, cx| this.request_cancel_job(id, cx)))
+                .when(t.can_retry, |m| m.item("task-retry", "Retry", "icons/refresh.svg", move |this, _, cx| this.retry_job(id, cx)))
+                .when(t.can_remove, |m| m.danger("task-remove", "Remove", "icons/trash.svg", move |this, _, cx| this.clear_job(id, cx)))
+        } else {
+            let retry_n = sel.iter().filter(|t| t.can_retry).count();
+            let cancel_n = sel.iter().filter(|t| t.running).count();
+            let remove_n = sel.iter().filter(|t| t.can_remove).count();
+            let commands: Vec<String> = sel.iter().filter(|t| !t.command.is_empty()).map(|t| t.command.clone()).collect();
+            MenuSpec::new()
+                .when(retry_n > 0, |m| {
+                    let ids = ids.clone();
+                    m.item("task-retry-all", format!("Retry {retry_n}"), "icons/refresh.svg", move |this, _, cx| {
+                        this.retry_selected_tasks(&ids, cx)
+                    })
+                })
+                .when(cancel_n > 0, |m| {
+                    let ids = ids.clone();
+                    m.danger("task-cancel-all", format!("Cancel {cancel_n}"), "icons/x.svg", move |this, _, cx| {
+                        this.cancel_selected_tasks(ids.clone(), cx)
+                    })
+                })
+                .when(!commands.is_empty(), |m| {
+                    m.item("task-copy-cmds", "Copy commands", "icons/copy.svg", move |this, _, cx| {
+                        this.copy_to_clipboard(commands.join("\n"), cx)
+                    })
+                })
+                .separator()
+                .when(remove_n > 0, |m| {
+                    let ids = ids.clone();
+                    m.danger("task-remove-all", format!("Remove {remove_n}"), "icons/trash.svg", move |this, _, cx| {
+                        this.remove_selected_tasks(&ids, cx)
+                    })
+                })
+        };
+        self.render_menu("task-menu", pos, spec, cx)
     }
 
     pub(crate) fn render_bg_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -386,4 +453,63 @@ impl Workspace {
         );
         self.popover("bg-menu", pos, gpui::Anchor::TopLeft, items, cx)
     }
+}
+
+/// A handler bound to a menu row; runs against the workspace when chosen.
+type MenuAction = Box<dyn Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static>;
+
+enum MenuRow {
+    Item { id: gpui::ElementId, label: SharedString, icon: &'static str, danger: bool, action: MenuAction },
+    Separator,
+}
+
+/// A declarative context-menu, built fluently (Zed `ContextMenu`-style) and
+/// rendered by [`Workspace::render_menu`]. Keeping rows as data — rather than
+/// pushing pre-rendered elements — lets a caller compose a menu from the live
+/// selection (count-aware labels, conditional rows) without touching styling.
+#[derive(Default)]
+pub(crate) struct MenuSpec {
+    rows: Vec<MenuRow>,
+}
+
+impl MenuSpec {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn row(mut self, id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, icon: &'static str, danger: bool, action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static) -> Self {
+        self.rows.push(MenuRow::Item { id: id.into(), label: label.into(), icon, danger, action: Box::new(action) });
+        self
+    }
+
+    fn item(self, id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, icon: &'static str, action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static) -> Self {
+        self.row(id, label, icon, false, action)
+    }
+
+    fn danger(self, id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, icon: &'static str, action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static) -> Self {
+        self.row(id, label, icon, true, action)
+    }
+
+    /// Append `f`'s rows only when `cond` holds — the conditional-row primitive.
+    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond { f(self) } else { self }
+    }
+
+    /// A group boundary. [`Workspace::render_menu`] draws it as a divider only when
+    /// both sides have items, so callers add one between any two optional groups
+    /// without tracking which were emitted.
+    fn separator(mut self) -> Self {
+        self.rows.push(MenuRow::Separator);
+        self
+    }
+}
+
+/// A live snapshot of a selected job, taken when the task menu opens.
+struct TaskSnap {
+    id: usize,
+    command: String,
+    targets: Vec<JobTarget>,
+    running: bool,
+    can_retry: bool,
+    can_remove: bool,
 }

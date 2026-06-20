@@ -14,6 +14,8 @@ mod panels;
 mod action_bar;
 mod preview;
 mod query;
+mod selection;
+mod tasks_pane;
 mod remotes;
 mod sidebar;
 mod spring;
@@ -52,6 +54,8 @@ use rspace_rclone_rc::{
 };
 
 use preview::PreviewPane;
+use selection::Selection;
+use tasks_pane::TasksPane;
 use action_bar::ActionBar;
 use spring::SpringLoad;
 use command_palette::CommandPaletteDelegate;
@@ -191,21 +195,11 @@ struct Menus {
     remote_menu: Option<(String, Point<Pixels>)>,
     /// Tab right-click menu: the tab's id and the cursor position.
     tab_menu: Option<(usize, Point<Pixels>)>,
-    /// Task-row right-click menu: the row's actions and the cursor position.
-    task_menu: Option<(TaskMenuData, Point<Pixels>)>,
+    /// Task-row right-click menu: the selected job ids it acts on and the cursor
+    /// position. One id → the full single-row menu; many → bulk actions.
+    task_menu: Option<(Vec<usize>, Point<Pixels>)>,
     /// The rc-daemon health popover (status bar).
     rc_popover_open: bool,
-}
-
-/// What a Tasks-row context menu acts on — captured at right-click.
-#[derive(Clone)]
-struct TaskMenuData {
-    job_id: usize,
-    command: String,
-    targets: Vec<JobTarget>,
-    running: bool,
-    can_retry: bool,
-    can_remove: bool,
 }
 
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
@@ -430,6 +424,8 @@ struct Workspace {
     /// The rcd status item (owns daemon health + popover).
     daemon: Entity<DaemonStatus>,
     clipboard: Option<Clipboard>,
+    /// The Tasks panel (own entity; owns its selection + focus). Reads `jobs`.
+    tasks: Entity<TasksPane>,
 }
 
 impl Workspace {
@@ -501,6 +497,7 @@ impl Workspace {
         let preview =
             cx.new(|cx| PreviewPane::new(weak.clone(), tab.explorer.clone(), service.clone(), cx));
         let action_bar = cx.new(|cx| ActionBar::new(weak.clone(), tab.explorer.clone(), cx));
+        let tasks = cx.new(|cx| TasksPane::new(weak.clone(), jobs.clone(), cx));
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
@@ -565,6 +562,7 @@ impl Workspace {
             action_bar,
             daemon,
             clipboard: None,
+            tasks,
         };
         this.load_remotes(cx);
         this

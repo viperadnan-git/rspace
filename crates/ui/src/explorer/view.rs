@@ -192,7 +192,7 @@ impl Render for Explorer {
                             if renaming {
                                 return prompt.as_ref().unwrap().clone().into_any_element();
                             }
-                            let selected = this.selected.contains(&entry.path);
+                            let selected = this.sel.contains(&entry.path);
                             let is_dir = entry.is_dir;
                             let size_label = if is_dir { "--".to_string() } else { human_size(entry.size) };
                             let date_label = human_date(&entry.mod_time);
@@ -254,7 +254,7 @@ impl Render for Explorer {
                                     cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                                         cx.stop_propagation();
                                         this.focus.focus(window, cx);
-                                        if !this.selected.contains(&ctx_entry.path) {
+                                        if !this.sel.contains(&ctx_entry.path) {
                                             this.select_only(ix);
                                         }
                                         cx.emit(ExplorerEvent::Context(ctx_entry.clone(), ev.position));

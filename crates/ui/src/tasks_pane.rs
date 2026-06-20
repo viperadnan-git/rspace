@@ -1,41 +1,79 @@
-//! The Tasks panel: live (in-memory) job progress.
+//! The Tasks panel as a first-class entity (like [`Explorer`]/[`Sidebar`]): it
+//! owns the job-list rendering, the multi-selection, and keyboard focus. Side
+//! effects — retry/cancel/remove, reveal, confirm dialogs, dock — stay on the
+//! [`Workspace`]; this reaches them through the weak handle. It reads the shared
+//! [`Jobs`] entity and re-renders when it changes.
+
+use gpui::{Entity, WeakEntity};
 
 use super::*;
 
-impl Workspace {
-    /// The Tasks panel body (the dock supplies width, header, and close). A plain
-    /// scrollable list (not `uniform_list`) so rows can be variable height — the
-    /// second line wraps instead of clipping.
-    pub(crate) fn render_tasks_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        let n = self.jobs.read(cx).items().len();
-        if n == 0 {
-            return centered("No tasks", FG_SUBTLE).into_any_element();
-        }
-        // Newest first. Clone one job per row (releasing the borrow each time)
-        // rather than the whole list; history is capped so `n` stays bounded.
-        let rows: Vec<AnyElement> = (0..n)
-            .rev()
-            .map(|i| {
-                let job = self.jobs.read(cx).items()[i].clone();
-                div()
-                    .border_b_1()
-                    .border_color(rgb(BORDER_MUTED))
-                    .child(self.job_row(&job, cx))
-                    .into_any_element()
-            })
-            .collect();
-        v_flex()
-            .id("tasks")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .children(rows)
-            .into_any_element()
+pub(crate) struct TasksPane {
+    workspace: WeakEntity<Workspace>,
+    jobs: Entity<Jobs>,
+    focus: FocusHandle,
+    /// Multi-selection by job id; pruned against live jobs each render.
+    sel: Selection<usize>,
+    _obs: gpui::Subscription,
+}
+
+impl Focusable for TasksPane {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
+}
+
+impl TasksPane {
+    pub(crate) fn new(
+        workspace: WeakEntity<Workspace>,
+        jobs: Entity<Jobs>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let obs = cx.observe(&jobs, |_, _, cx| cx.notify());
+        Self { workspace, jobs, focus: cx.focus_handle(), sel: Selection::new(), _obs: obs }
+    }
+
+    // --- selection ------------------------------------------------------------
+
+    /// Job ids in render order (newest first), for shift-range and select-all.
+    fn ordered_ids(&self, cx: &App) -> Vec<usize> {
+        self.jobs.read(cx).items().iter().rev().map(|j| j.id).collect()
+    }
+
+    fn select_only(&mut self, id: usize, cx: &mut Context<Self>) {
+        self.sel.select_only(id);
+        cx.notify();
+    }
+
+    fn toggle(&mut self, id: usize, cx: &mut Context<Self>) {
+        self.sel.toggle(id);
+        cx.notify();
+    }
+
+    fn range_to(&mut self, id: usize, cx: &mut Context<Self>) {
+        let order = self.ordered_ids(cx);
+        self.sel.range_to(&order, id);
+        cx.notify();
+    }
+
+    fn clear(&mut self, cx: &mut Context<Self>) {
+        if !self.sel.is_empty() {
+            self.sel.clear();
+            cx.notify();
+        }
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let order = self.ordered_ids(cx);
+        self.sel.all(&order);
+        cx.notify();
+    }
+
+    // --- rendering ------------------------------------------------------------
 
     /// A clickable job endpoint: reveals it in the explorer on click, full
     /// `remote:path` on hover. `label` is the text shown (the file name).
-    fn job_target_chip(
+    fn target_chip(
         &self,
         el_id: SharedString,
         target: JobTarget,
@@ -52,12 +90,16 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.bg(rgba(OVERLAY)))
             .tooltip(tooltip_text(full_path))
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.reveal_target(target.clone(), window, cx)))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                let target = target.clone();
+                this.workspace.update(cx, |ws, cx| ws.reveal_target(target, window, cx)).ok();
+            }))
             .child(label.into())
     }
 
-    /// A live job → row data + its live action buttons (cancel / retry / clear).
-    fn job_row(&self, job: &Job, cx: &mut Context<Self>) -> AnyElement {
+    /// A live job → row data + its inline action buttons (retry / remove).
+    fn job_row(&self, job: &Job, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = job.id;
         let status = if job.cancelled {
             TaskStatus::Cancelled
@@ -68,24 +110,29 @@ impl Workspace {
         } else {
             TaskStatus::Running
         };
-        let (running, can_retry, can_remove) =
-            (!job.done, job.done && job.error.is_some(), job.done);
+        let (can_retry, can_remove) = (job.done && job.error.is_some(), job.done);
         let action_button = move |suffix: &str, svg_icon: &'static str, tip: &'static str| {
             icon_button(SharedString::from(format!("{suffix}-{id}")), svg_icon).tooltip(tooltip_text(tip))
         };
         // Cancel lives in the row's right-click menu, not as an inline button.
+        // Inner controls swallow the left press so they don't also change selection.
         let actions = h_flex()
             .flex_shrink_0()
             .gap_0p5()
             .items_center()
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
             .when(can_retry, |el| {
                 el.child(action_button("retry", "icons/refresh.svg", "Retry").on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_job(id, cx)),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.workspace.update(cx, |ws, cx| ws.retry_job(id, cx)).ok();
+                    }),
                 ))
             })
             .when(can_remove, |el| {
                 el.child(action_button("clear", "icons/trash.svg", "Remove").on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.clear_job(id, cx)),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.workspace.update(cx, |ws, cx| ws.clear_job(id, cx)).ok();
+                    }),
                 ))
             })
             .into_any_element();
@@ -100,23 +147,17 @@ impl Workspace {
             transfers: job.transfers,
             total_transfers: job.total_transfers,
             elapsed_ms: job.elapsed_ms,
-            menu: TaskMenuData {
-                job_id: id,
-                command: job.command.clone(),
-                targets: job.targets.clone(),
-                running,
-                can_retry,
-                can_remove,
-            },
+            id,
+            selected,
         };
-        self.render_task_row(data, actions, cx)
+        self.task_row(data, actions, cx)
     }
 
     /// One task as a compact two-line cell. Progress is ambient: a wash sweeps the
     /// row background to the percent done (danger for a failure, neutral for a
     /// cancel). Line 1: status icon + name + metric; line 2: type badge + actions,
     /// with size/ETA pinned right.
-    fn render_task_row(&self, d: RowData, actions: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    fn task_row(&self, d: RowData, actions: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let RowData {
             key,
             verb,
@@ -128,7 +169,8 @@ impl Workspace {
             transfers,
             total_transfers,
             elapsed_ms,
-            menu,
+            id,
+            selected,
         } = d;
         let pct = if total > 0 { (bytes as f64 / total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let time = human_duration(elapsed_ms);
@@ -209,11 +251,36 @@ impl Workspace {
             .px_3()
             .py_2()
             .gap_0p5()
+            .when(selected, |el| el.bg(rgba(SELECT_MUTED)))
+            // Left selects (Cmd toggles, Shift extends); stop propagation so the
+            // empty-space handler doesn't then clear it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.focus.focus(window, cx);
+                    let m = e.modifiers;
+                    if m.secondary() {
+                        this.toggle(id, cx);
+                    } else if m.shift {
+                        this.range_to(id, cx);
+                    } else {
+                        this.select_only(id, cx);
+                    }
+                }),
+            )
+            // Right opens the menu over the selection; an unselected row becomes the
+            // lone selection first (Finder-style).
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                    this.close_menus();
-                    this.menus.task_menu = Some((menu.clone(), e.position));
+                    cx.stop_propagation();
+                    if !this.sel.contains(&id) {
+                        this.sel.select_only(id);
+                    }
+                    let ids: Vec<usize> = this.sel.iter().copied().collect();
+                    let pos = e.position;
+                    this.workspace.update(cx, |ws, cx| ws.open_task_menu(ids, pos, cx)).ok();
                     cx.notify();
                 }),
             )
@@ -229,7 +296,7 @@ impl Workspace {
                     .child(div().flex_shrink_0().child(icon))
                     .child(
                         h_flex().flex_1().min_w(px(0.0)).text_color(rgb(FG)).children(head.map(|t| {
-                            self.job_target_chip(SharedString::from(format!("{key}-name")), t.clone(), name, cx)
+                            self.target_chip(SharedString::from(format!("{key}-name")), t.clone(), name, cx)
                         })),
                     )
                     .child(div().flex_shrink_0().text_xs().text_color(rgb(primary_color)).child(primary))
@@ -240,7 +307,53 @@ impl Workspace {
     }
 }
 
-/// Status of a task row, shared by live jobs and persisted history.
+impl Render for TasksPane {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Self-heal the selection: drop ids whose jobs are gone (cleared/retried).
+        let live: HashSet<usize> = self.jobs.read(cx).items().iter().map(|j| j.id).collect();
+        self.sel.retain(|id| live.contains(id));
+
+        let n = self.jobs.read(cx).items().len();
+        if n == 0 {
+            return centered("No tasks", FG_SUBTLE).into_any_element();
+        }
+        // Newest first. Clone one job per row (releasing the borrow each time)
+        // rather than the whole list; history is capped so `n` stays bounded.
+        let rows: Vec<AnyElement> = (0..n)
+            .rev()
+            .map(|i| {
+                let job = self.jobs.read(cx).items()[i].clone();
+                let selected = self.sel.contains(&job.id);
+                div()
+                    .border_b_1()
+                    .border_color(rgb(BORDER_MUTED))
+                    .child(self.job_row(&job, selected, cx))
+                    .into_any_element()
+            })
+            .collect();
+        v_flex()
+            .id("tasks")
+            .track_focus(&self.focus)
+            .key_context("Tasks")
+            .on_action(cx.listener(Self::select_all))
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            // Click in empty space focuses the panel (so Select-all routes here) and
+            // clears the selection (rows stop propagation).
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.focus.focus(window, cx);
+                    this.clear(cx);
+                }),
+            )
+            .children(rows)
+            .into_any_element()
+    }
+}
+
+/// Status of a task row.
 enum TaskStatus {
     Running,
     Done,
@@ -248,7 +361,7 @@ enum TaskStatus {
     Failed(SharedString),
 }
 
-/// Everything [`Workspace::render_task_row`] needs from a live `Job`.
+/// Everything [`TasksPane::task_row`] needs from a live [`Job`].
 struct RowData {
     key: SharedString,
     /// Operation name shown as a badge on line 2 (Copy, Move, Delete…).
@@ -261,6 +374,7 @@ struct RowData {
     transfers: u64,
     total_transfers: u64,
     elapsed_ms: u64,
-    /// What the row's right-click menu acts on.
-    menu: TaskMenuData,
+    /// This row's job id and whether it's in the panel's multi-selection.
+    id: usize,
+    selected: bool,
 }

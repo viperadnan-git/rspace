@@ -34,9 +34,32 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Open the task context menu over `ids` (the TasksPane's selection) at `pos`.
+    pub(crate) fn open_task_menu(&mut self, ids: Vec<usize>, pos: Point<Pixels>, cx: &mut Context<Self>) {
+        self.close_menus();
+        self.menus.task_menu = Some((ids, pos));
+        cx.notify();
+    }
+
     /// Whether the explorer pane currently holds keyboard focus.
     pub(crate) fn explorer_focused(&self, window: &Window, cx: &App) -> bool {
         self.explorer().focus_handle(cx).contains_focused(window, cx)
+    }
+
+    /// Whether any focusable surface owns the keyboard — the registry the
+    /// focus-restore guard consults. Add a new pane's handle here rather than
+    /// growing the guard with another special case. The search field is listed
+    /// explicitly because it lives on the action bar, outside the explorer subtree.
+    pub(crate) fn any_pane_focused(&self, window: &Window, cx: &App) -> bool {
+        [
+            self.explorer().focus_handle(cx),
+            self.sidebar.focus_handle(cx),
+            self.tasks.focus_handle(cx),
+            self.explorer().read(cx).search_input().focus_handle(cx),
+            self.focus.clone(),
+        ]
+        .iter()
+        .any(|h| h.contains_focused(window, cx))
     }
 
     pub(crate) fn focus_explorer_pane(&self, window: &mut Window, cx: &mut Context<Self>) {

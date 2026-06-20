@@ -526,6 +526,70 @@ impl Workspace {
         cx.notify();
     }
 
+    // --- Tasks-panel bulk actions ---------------------------------------------
+    // The TasksPane owns the selection and prunes it against live jobs each render,
+    // so these executors only need the explicit id list captured at menu open.
+
+    /// Re-enqueue the failed jobs among `ids` (retrying a running/done-ok job would
+    /// duplicate it). Retry assigns fresh ids; the old ones prune out on render.
+    pub(crate) fn retry_selected_tasks(&mut self, ids: &[usize], cx: &mut Context<Self>) {
+        let failed: Vec<usize> = {
+            let jobs = self.jobs.read(cx);
+            ids.iter()
+                .copied()
+                .filter(|id| jobs.items().iter().any(|j| j.id == *id && j.done && j.error.is_some()))
+                .collect()
+        };
+        self.jobs.update(cx, |jobs, cx| {
+            for id in &failed {
+                jobs.retry(*id, cx);
+            }
+        });
+    }
+
+    /// Remove the finished jobs among `ids`; running ones are left untouched.
+    pub(crate) fn remove_selected_tasks(&mut self, ids: &[usize], cx: &mut Context<Self>) {
+        let done: Vec<usize> = {
+            let jobs = self.jobs.read(cx);
+            ids.iter().copied().filter(|id| jobs.items().iter().any(|j| j.id == *id && j.done)).collect()
+        };
+        self.jobs.update(cx, |jobs, cx| {
+            for id in &done {
+                jobs.clear_job(*id, cx);
+            }
+        });
+        if self.jobs.read(cx).is_empty() && self.dock_is(Panel::Tasks) {
+            self.close_dock(cx);
+        }
+        cx.notify();
+    }
+
+    /// Cancel the running jobs among `ids`, behind one confirmation.
+    pub(crate) fn cancel_selected_tasks(&mut self, ids: Vec<usize>, cx: &mut Context<Self>) {
+        let running: Vec<usize> = {
+            let jobs = self.jobs.read(cx);
+            ids.iter().copied().filter(|id| jobs.items().iter().any(|j| j.id == *id && !j.done)).collect()
+        };
+        let n = running.len();
+        if n == 0 {
+            return;
+        }
+        self.ask_confirm(
+            format!("Cancel {n} task{}?", if n == 1 { "" } else { "s" }),
+            "Stop the selected running tasks? Work already done is kept.".to_string(),
+            "Cancel tasks",
+            true,
+            move |this, cx| {
+                this.jobs.update(cx, |jobs, cx| {
+                    for id in &running {
+                        jobs.cancel(*id, cx);
+                    }
+                });
+            },
+            cx,
+        );
+    }
+
     pub(crate) fn request_cancel_job(&mut self, id: usize, cx: &mut Context<Self>) {
         let Some(label) = self.jobs.read(cx).label_of(id) else {
             return;

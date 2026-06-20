@@ -115,10 +115,10 @@ impl Workspace {
         }
     }
 
-    fn render_dock_body(&self, panel: Panel, cx: &mut Context<Self>) -> AnyElement {
+    fn render_dock_body(&self, panel: Panel, _cx: &mut Context<Self>) -> AnyElement {
         match panel {
             Panel::Preview => self.preview().into_any_element(),
-            Panel::Tasks => self.render_tasks_body(cx),
+            Panel::Tasks => self.tasks.clone().into_any_element(),
         }
     }
 }

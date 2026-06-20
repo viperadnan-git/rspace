@@ -61,12 +61,12 @@ pub(crate) struct Explorer {
     view: Vec<Entry>,
     view_sig: Option<(String, usize)>,
     /// The cursor / selection lead row, or `None` when nothing is selected
-    /// (Finder-style: a fresh directory has no cursor). Invariant: `Some` iff
-    /// `selected` is non-empty.
+    /// (Finder-style: a fresh directory has no cursor). Invariant: `Some` iff `sel`
+    /// is non-empty. The cursor (keyboard nav, preview/rename subject) is distinct
+    /// from the selection set, so it stays here rather than in `sel`.
     entry_sel: Option<usize>,
-    /// Multi-selection by entry path; survives re-sort and refresh.
-    selected: HashSet<String>,
-    sel_anchor: usize,
+    /// Multi-selection by entry path (survives re-sort and refresh) + range anchor.
+    sel: Selection<String>,
     /// Active rubber-band selection (press-drag in empty list space): the press
     /// point and live cursor in window coords, plus the selection that predated
     /// the drag (kept when additive, empty otherwise).
@@ -150,8 +150,7 @@ impl Explorer {
             view: Vec::new(),
             view_sig: None,
             entry_sel: None,
-            selected: HashSet::new(),
-            sel_anchor: 0,
+            sel: Selection::new(),
             marquee: None,
             marquee_anchor: Point::default(),
             entry_scroll: UniformListScrollHandle::new(),
@@ -291,8 +290,7 @@ impl Explorer {
         self.remote = remote;
         self.path = path;
         self.entry_sel = None;
-        self.sel_anchor = 0;
-        self.selected.clear();
+        self.sel.clear();
         self.pending_select = pending;
         if self.remote.is_some() {
             self.load_entries(cx);
@@ -328,11 +326,11 @@ impl Explorer {
         }
         // Drop selected paths that the new listing no longer contains, then keep
         // the cursor in range and consistent with the selection.
-        if !self.selected.is_empty() {
+        if !self.sel.is_empty() {
             let valid: HashSet<String> = self.entries().iter().map(|e| e.path.clone()).collect();
-            self.selected.retain(|p| valid.contains(p));
+            self.sel.retain(|p| valid.contains(p));
         }
-        if self.selected.is_empty() {
+        if self.sel.is_empty() {
             self.entry_sel = None;
         } else if let Some(ix) = self.entry_sel {
             self.entry_sel = Some(ix.min(self.entries().len().saturating_sub(1)));
@@ -453,10 +451,10 @@ impl Explorer {
     // --- selection ------------------------------------------------------------
 
     pub(crate) fn selected_entries(&self) -> Vec<Entry> {
-        if self.selected.is_empty() {
+        if self.sel.is_empty() {
             return Vec::new();
         }
-        self.entries().iter().filter(|e| self.selected.contains(&e.path)).cloned().collect()
+        self.entries().iter().filter(|e| self.sel.contains(&e.path)).cloned().collect()
     }
 
     /// The cursor row's name (used by the preview and back/forward memory).
@@ -472,7 +470,7 @@ impl Explorer {
 
 
     pub(crate) fn selection_len(&self) -> usize {
-        self.selected.len()
+        self.sel.len()
     }
 
     /// Collapse a multi-selection back to just the cursor row.
@@ -489,41 +487,36 @@ impl Explorer {
     }
 
     pub(crate) fn select_only(&mut self, ix: usize) {
-        self.selected.clear();
-        if let Some(e) = self.entries().get(ix) {
-            self.selected.insert(e.path.clone());
-            self.entry_sel = Some(ix);
-            self.sel_anchor = ix;
-        } else {
-            self.entry_sel = None;
+        match self.entries().get(ix).map(|e| e.path.clone()) {
+            Some(p) => {
+                self.sel.select_only(p);
+                self.entry_sel = Some(ix);
+            }
+            None => {
+                self.sel.clear();
+                self.entry_sel = None;
+            }
         }
     }
 
     pub(crate) fn toggle_at(&mut self, ix: usize) {
         if let Some(p) = self.entries().get(ix).map(|e| e.path.clone()) {
-            if !self.selected.remove(&p) {
-                self.selected.insert(p);
-            }
+            self.sel.toggle(p);
         }
-        self.sel_anchor = ix;
-        self.entry_sel = (!self.selected.is_empty()).then_some(ix);
+        self.entry_sel = (!self.sel.is_empty()).then_some(ix);
     }
 
     pub(crate) fn select_range_to(&mut self, ix: usize) {
-        let (lo, hi) = (self.sel_anchor.min(ix), self.sel_anchor.max(ix));
-        self.selected = self
-            .entries()
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i >= lo && *i <= hi)
-            .map(|(_, e)| e.path.clone())
-            .collect();
-        self.entry_sel = (!self.selected.is_empty()).then_some(ix);
+        let order: Vec<String> = self.entries().iter().map(|e| e.path.clone()).collect();
+        if let Some(p) = order.get(ix).cloned() {
+            self.sel.range_to(&order, p);
+        }
+        self.entry_sel = (!self.sel.is_empty()).then_some(ix);
     }
 
     pub(crate) fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        if !self.selected.is_empty() {
-            self.selected.clear();
+        if !self.sel.is_empty() {
+            self.sel.clear();
             self.entry_sel = None;
             cx.notify();
         }
@@ -548,7 +541,7 @@ impl Explorer {
                 if self.entries().is_empty() {
                     return;
                 }
-                let base = if additive { self.selected.clone() } else { HashSet::new() };
+                let base = if additive { self.sel.snapshot().clone() } else { HashSet::new() };
                 self.marquee = Some(Marquee { anchor, current, base });
                 self.start_autoscroll(window, cx);
             }
@@ -581,8 +574,8 @@ impl Explorer {
             }
             lead = Some(if cur_y >= anchor_y { hi } else { lo });
         }
-        self.selected = selected;
-        self.entry_sel = lead.filter(|_| !self.selected.is_empty());
+        self.entry_sel = lead.filter(|_| !selected.is_empty());
+        self.sel.set_to(selected);
     }
 
     /// Edge-scroll loop for a marquee drag; self-terminates once the band ends
@@ -677,7 +670,7 @@ impl Explorer {
     /// On deliberate keyboard entry into the pane, land the cursor on the first
     /// row if nothing is selected — so the list is immediately navigable.
     pub(crate) fn select_first_if_empty(&mut self, cx: &mut Context<Self>) {
-        if self.selected.is_empty() && !self.entries().is_empty() {
+        if self.sel.is_empty() && !self.entries().is_empty() {
             self.select_only(0);
             self.scroll_to_selection();
             cx.notify();
@@ -685,8 +678,8 @@ impl Explorer {
     }
 
     pub(crate) fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
-        self.selected = self.entries().iter().map(|e| e.path.clone()).collect();
-        self.entry_sel = (!self.selected.is_empty()).then(|| self.entry_sel.unwrap_or(0));
+        self.sel.set_to(self.entries().iter().map(|e| e.path.clone()).collect());
+        self.entry_sel = (!self.sel.is_empty()).then(|| self.entry_sel.unwrap_or(0));
         cx.notify();
     }
 
