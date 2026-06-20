@@ -139,7 +139,6 @@ pub(crate) fn commands() -> Vec<Command> {
         // Window
         cmd(Category::Window, "Toggle fullscreen", &["ctrl-cmd-f", "f11"], ToggleFullscreen, None, true),
         cmd(Category::Window, "Zoom window", &[], Zoom, None, true),
-        // Dialogs — contextual, not user-curated commands.
         cmd(Category::Dialogs, "Next item", &["down", "ctrl-n"], ConfigNext, Some("RemoteConfig"), false),
         cmd(Category::Dialogs, "Previous item", &["up", "ctrl-p"], ConfigPrev, Some("RemoteConfig"), false),
         cmd(Category::Dialogs, "Confirm step", &["enter"], ConfigConfirm, Some("RemoteConfig"), false),
@@ -154,7 +153,6 @@ pub(crate) fn commands() -> Vec<Command> {
         cmd(Category::Dialogs, "Commit value", &["enter"], NumberCommit, Some("NumberField"), false),
         cmd(Category::Dialogs, "Run search", &["enter"], SearchSubmit, Some("ExplorerSearch"), false),
         cmd(Category::Dialogs, "Close search", &["escape"], CloseSearch, Some("ExplorerSearch"), false),
-        // Dismiss the keybindings reference itself.
         cmd(Category::Dialogs, "Close shortcuts", &["escape"], DismissKeybindings, Some("Keybindings"), false),
     ];
     // Minimize is a macOS app convention (cmd-m); elsewhere the window manager owns

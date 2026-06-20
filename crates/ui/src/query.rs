@@ -152,7 +152,6 @@ where
         E: Display + 'static,
         Fut: Future<Output = Result<V, E>> + 'static,
     {
-        // Dedup: a fetch for this key is already running.
         if self.in_flight.contains(&key) {
             return;
         }

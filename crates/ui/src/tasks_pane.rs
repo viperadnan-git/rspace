@@ -71,8 +71,6 @@ impl TasksPane {
 
     // --- rendering ------------------------------------------------------------
 
-    /// A clickable job endpoint: reveals it in the explorer on click, full
-    /// `remote:path` on hover. `label` is the text shown (the file name).
     fn target_chip(
         &self,
         el_id: SharedString,
@@ -98,7 +96,6 @@ impl TasksPane {
             .child(label.into())
     }
 
-    /// A live job → row data + its inline action buttons (retry / remove).
     fn job_row(&self, job: &Job, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = job.id;
         let status = if job.cancelled {
@@ -153,10 +150,6 @@ impl TasksPane {
         self.task_row(data, actions, cx)
     }
 
-    /// One task as a compact two-line cell. Progress is ambient: a wash sweeps the
-    /// row background to the percent done (danger for a failure, neutral for a
-    /// cancel). Line 1: status icon + name + metric; line 2: type badge + actions,
-    /// with size/ETA pinned right.
     fn task_row(&self, d: RowData, actions: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let RowData {
             key,
@@ -174,8 +167,6 @@ impl TasksPane {
         } = d;
         let pct = if total > 0 { (bytes as f64 / total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let time = human_duration(elapsed_ms);
-        // Title shows where it's going: the destination if there is one, else the
-        // sole endpoint.
         let head = targets.last();
         let name = head.map(|t| t.name.clone()).unwrap_or_default();
 
@@ -186,8 +177,6 @@ impl TasksPane {
             TaskStatus::Failed(_) => svg().path("icons/alert.svg").size(rem(15.0)).text_color(rgb(DANGER)).into_any_element(),
         };
 
-        // Line-1 primary metric (+ color) and muted line-2 metadata, per state, in
-        // one pass. A failed job's line 2 is its error instead (handled below).
         let (primary, primary_color, secondary): (SharedString, u32, String) = match &status {
             TaskStatus::Running if total > 0 => {
                 let speed_s = (speed > 0.0)
@@ -221,8 +210,6 @@ impl TasksPane {
             TaskStatus::Failed(_) => ("Failed".into(), DANGER, String::new()),
         };
 
-        // Ambient wash: accent→pct while running, full danger on failure, faint
-        // neutral→pct for a cancel (shows how far it got).
         let wash = match &status {
             TaskStatus::Failed(_) => Some((DANGER_SOFT, 1.0_f32)),
             TaskStatus::Running if total > 0 => Some((ACCENT_SOFT, pct)),
@@ -230,7 +217,6 @@ impl TasksPane {
             _ => None,
         };
 
-        // The error wraps to full width; every other state is one ellipsized line.
         let secondary_line: AnyElement = match &status {
             TaskStatus::Failed(msg) => {
                 div().w_full().text_xs().text_color(rgb(DANGER)).child(msg.clone()).into_any_element()
@@ -252,8 +238,7 @@ impl TasksPane {
             .py_2()
             .gap_0p5()
             .when(selected, |el| el.bg(rgba(SELECT_MUTED)))
-            // Left selects (Cmd toggles, Shift extends); stop propagation so the
-            // empty-space handler doesn't then clear it.
+            // stop propagation so the outer empty-space handler doesn't clear selection
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -269,8 +254,7 @@ impl TasksPane {
                     }
                 }),
             )
-            // Right opens the menu over the selection; an unselected row becomes the
-            // lone selection first (Finder-style).
+            // Finder-style: right-click selects the row first if it wasn't already selected.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -317,8 +301,7 @@ impl Render for TasksPane {
         if n == 0 {
             return centered("No tasks", FG_SUBTLE).into_any_element();
         }
-        // Newest first. Clone one job per row (releasing the borrow each time)
-        // rather than the whole list; history is capped so `n` stays bounded.
+        // Clone per row to avoid holding the borrow across the loop body.
         let rows: Vec<AnyElement> = (0..n)
             .rev()
             .map(|i| {
@@ -339,8 +322,7 @@ impl Render for TasksPane {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            // Click in empty space focuses the panel (so Select-all routes here) and
-            // clears the selection (rows stop propagation).
+            // focus so Select-all routes here; row handlers stop propagation so clicks there skip this
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -361,7 +343,6 @@ enum TaskStatus {
     Failed(SharedString),
 }
 
-/// Everything [`TasksPane::task_row`] needs from a live [`Job`].
 struct RowData {
     key: SharedString,
     /// Operation name shown as a badge on line 2 (Copy, Move, Delete…).
@@ -374,7 +355,6 @@ struct RowData {
     transfers: u64,
     total_transfers: u64,
     elapsed_ms: u64,
-    /// This row's job id and whether it's in the panel's multi-selection.
     id: usize,
     selected: bool,
 }

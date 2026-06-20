@@ -26,16 +26,12 @@ pub(crate) fn relaunch() {
     }
 }
 
-/// Pre-workspace setup screen, shown when no usable rclone is configured: the
-/// brand, an install link, a field to point rspace at an rclone binary, and a
-/// link to the project.
 pub(crate) struct StatusScreen {
     rclone: RcloneStatus,
     store: SettingsStore,
     path_input: Entity<TextInput>,
     focus_handle: FocusHandle,
     error: Option<SharedString>,
-    /// The manual-path form is hidden until the user opts into it.
     show_path: bool,
     /// Focus the screen once on open (not every frame, which would steal focus
     /// back from the path input on click).
@@ -87,8 +83,6 @@ impl StatusScreen {
         relaunch();
     }
 
-    /// Re-run detection (e.g. after the user installed rclone); relaunch on
-    /// success so it starts cleanly, else surface that it's still missing.
     fn check_again(&mut self, cx: &mut Context<Self>) {
         if rspace_rclone_rc::detect().is_ok() {
             relaunch();
@@ -149,7 +143,6 @@ impl Render for StatusScreen {
                         )),
                 )
             })
-            // Separate the install actions from the manual-path option.
             .when(missing, |el| el.child(divider()))
             // The manual-path form stays hidden behind a quiet link to keep the
             // first impression minimal.
