@@ -6,6 +6,11 @@ use crate::widgets::rem;
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_handle.is_focused(window);
+        let (_, py_v, gap, text, glyph) = self.size.metrics();
+        // Inputs take less horizontal padding than buttons (Zed uses px_2); the
+        // caret line and clear button track the text size.
+        let line_h = text + rem(4.0);
+        let box_px = py_v + py_v;
         let border = if self.error.is_some() && !self.bare {
             DANGER
         } else if focused {
@@ -47,15 +52,18 @@ impl Render for TextInput {
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
+            .gap(gap)
             .w_full()
-            .text_sm()
-            .line_height(rem(18.0))
+            .text_size(text)
+            .line_height(line_h)
             .cursor_text()
             // Box chrome, unless embedded inline (e.g. a list row supplies its own).
+            // A min-height keeps the field a stable, vertically-centred box (Zed
+            // uses `min_h_8`), independent of the line metrics.
             .when(!self.bare, |el| {
-                el.py_1()
-                    .px_2()
+                el.min_h(line_h + py_v + py_v)
+                    .py(py_v)
+                    .px(box_px)
                     .rounded_md()
                     .bg(rgb(ELEVATED))
                     .border_1()
@@ -69,7 +77,7 @@ impl Render for TextInput {
                     div()
                         .id("ti-clear")
                         .flex_none()
-                        .size(rem(18.0))
+                        .size(line_h)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -79,7 +87,7 @@ impl Render for TextInput {
                         // Don't let the clear click also reposition the caret.
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
-                        .child(svg().path("icons/x.svg").size(rem(11.0)).text_color(rgb(FG_MUTED))),
+                        .child(svg().path("icons/x.svg").size(glyph - rem(3.0)).text_color(rgb(FG_MUTED))),
                 )
             });
         let error = self.error.clone().filter(|_| !self.bare);

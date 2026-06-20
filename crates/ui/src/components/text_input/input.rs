@@ -19,11 +19,17 @@ impl TextInput {
             scroll_offset: px(0.0),
             centered: false,
             clearable: false,
+            size: ControlSize::default(),
         }
     }
 
     pub fn masked(mut self, masked: bool) -> Self {
         self.masked = masked;
+        self
+    }
+
+    pub fn size(mut self, size: ControlSize) -> Self {
+        self.size = size;
         self
     }
 

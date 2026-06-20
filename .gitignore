@@ -25,3 +25,6 @@ rustc-ice-*.txt
 
 # macOS
 .DS_Store
+
+# Local
+.local/

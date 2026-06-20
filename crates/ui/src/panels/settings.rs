@@ -70,7 +70,7 @@ impl Workspace {
                     Some(current),
                     cx,
                 )))
-                .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| {
+                .child(Button::new("choose-dir", "Choose…", ButtonStyle::Soft).size(ControlSize::Small).build(|this, cx| {
                     this.choose_download_dir(cx)
                 }, cx)),
         )
@@ -130,7 +130,7 @@ impl Workspace {
                             cache,
                             cx,
                         )))
-                        .child(Button::new("clear-rclone-cache", "Clear", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| {
+                        .child(Button::new("clear-rclone-cache", "Clear", ButtonStyle::Soft).size(ControlSize::Small).build(|this, cx| {
                             this.request_clear_rclone_cache(cx)
                         }, cx)),
                 ),
@@ -163,9 +163,9 @@ impl Workspace {
                 .gap_1()
                 .items_center()
                 .child(div().flex_1().min_w(px(0.0)).child(input))
-                .child(Button::new(browse_id, "Browse", ButtonStyle::Soft).size(ButtonSize::Small).build(|this, cx| this.browse_rclone_edit(cx), cx))
-                .child(Button::new(cancel_id, "Cancel", ButtonStyle::Secondary).size(ButtonSize::Small).build(|this, cx| this.cancel_rclone_edit(cx), cx))
-                .child(Button::new(save_id, "Save", ButtonStyle::Primary).size(ButtonSize::Small).build(|this, cx| this.confirm_rclone_edit(cx), cx))
+                .child(Button::new(browse_id, "Browse", ButtonStyle::Soft).size(ControlSize::Small).build(|this, cx| this.browse_rclone_edit(cx), cx))
+                .child(Button::new(cancel_id, "Cancel", ButtonStyle::Secondary).size(ControlSize::Small).build(|this, cx| this.cancel_rclone_edit(cx), cx))
+                .child(Button::new(save_id, "Save", ButtonStyle::Primary).size(ControlSize::Small).build(|this, cx| this.confirm_rclone_edit(cx), cx))
                 .into_any_element();
         }
         let current_for_edit = current.clone().unwrap_or_default();
@@ -177,13 +177,13 @@ impl Workspace {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Button::new(change_id, "Change", ButtonStyle::Soft).size(ButtonSize::Small).build(move |this, cx| {
+                    .child(Button::new(change_id, "Change", ButtonStyle::Soft).size(ControlSize::Small).build(move |this, cx| {
                         this.begin_rclone_edit(field, current_for_edit.clone(), cx)
                     }, cx))
                     .when(overridden, |el| {
                         el.child(
                             Button::new(reset_id, "Reset", ButtonStyle::Secondary)
-                                .size(ButtonSize::Small)
+                                .size(ControlSize::Small)
                                 .build(move |this, cx| this.reset_rclone(field, cx), cx)
                                 .tooltip(tooltip_text("Use automatic resolution")),
                         )
@@ -193,7 +193,7 @@ impl Workspace {
     }
 
     fn begin_rclone_edit(&mut self, field: RcloneField, current: String, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| crate::text_input::TextInput::new(cx, field.placeholder()));
+        let input = cx.new(|cx| crate::text_input::TextInput::new(cx, field.placeholder()).size(ControlSize::Small));
         if !current.is_empty() {
             input.update(cx, |i, cx| i.set_text(current, cx));
         }
@@ -367,7 +367,7 @@ impl Workspace {
                     .justify_between()
                     .items_center()
                     .child(div().min_w(px(0.0)).truncate().text_xs().text_color(rgb(FG_MUTED)).child(summary))
-                    .child(Button::new("clean-up", "Clean up", ButtonStyle::Soft).size(ButtonSize::Small).build(
+                    .child(Button::new("clean-up", "Clean up", ButtonStyle::Soft).size(ControlSize::Small).build(
                         |this, cx| this.request_cleanup(cx),
                         cx,
                     )),

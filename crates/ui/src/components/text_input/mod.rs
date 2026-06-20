@@ -13,6 +13,7 @@ use gpui::{
 };
 
 use crate::theme::*;
+use crate::widgets::ControlSize;
 
 actions!(
     text_input,
@@ -138,6 +139,8 @@ pub struct TextInput {
     centered: bool,
     /// Show an inline clear (×) button when focused and non-empty (search fields).
     clearable: bool,
+    /// Control scale, shared with `Button` so a field and a button match.
+    size: ControlSize,
 }
 
 mod element;

@@ -301,11 +301,12 @@ pub enum ButtonStyle {
     Danger,
 }
 
-/// Button scale; `Medium` is the original size. Scales the icon too, which
-/// chaining styles after `build` can't reach.
+/// Shared control scale for buttons and text inputs; `Medium` is the original
+/// button size. A given size yields matching dimensions across both — including
+/// the icon, which chaining styles after `build` can't reach.
 #[derive(Clone, Copy, Default)]
 #[allow(dead_code)] // full scale offered; not every step is in use yet
-pub enum ButtonSize {
+pub enum ControlSize {
     XSmall,
     Small,
     #[default]
@@ -314,17 +315,30 @@ pub enum ButtonSize {
     XLarge,
 }
 
+impl ControlSize {
+    /// `(px, py, gap, text, icon)` in zoom-aware rems.
+    pub fn metrics(self) -> (Rems, Rems, Rems, Rems, Rems) {
+        match self {
+            ControlSize::XSmall => (rem(6.0), rem(1.0), rem(3.0), rem(11.0), rem(11.0)),
+            ControlSize::Small => (rem(8.0), rem(2.0), rem(4.0), rem(12.0), rem(12.0)),
+            ControlSize::Medium => (rem(12.0), rem(4.0), rem(6.0), rem(14.0), rem(14.0)),
+            ControlSize::Large => (rem(16.0), rem(6.0), rem(8.0), rem(16.0), rem(16.0)),
+            ControlSize::XLarge => (rem(20.0), rem(8.0), rem(10.0), rem(18.0), rem(18.0)),
+        }
+    }
+}
+
 pub struct Button {
     id: &'static str,
     label: SharedString,
     style: ButtonStyle,
-    size: ButtonSize,
+    size: ControlSize,
     icon: Option<&'static str>,
 }
 
 impl Button {
     pub fn new(id: &'static str, label: impl Into<SharedString>, style: ButtonStyle) -> Self {
-        Self { id, label: label.into(), style, size: ButtonSize::default(), icon: None }
+        Self { id, label: label.into(), style, size: ControlSize::default(), icon: None }
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
@@ -332,7 +346,7 @@ impl Button {
         self
     }
 
-    pub fn size(mut self, size: ButtonSize) -> Self {
+    pub fn size(mut self, size: ControlSize) -> Self {
         self.size = size;
         self
     }
@@ -347,13 +361,7 @@ impl Button {
             ButtonStyle::Primary | ButtonStyle::Danger => 0xffffff,
             _ => FG,
         };
-        let (px_h, py_v, gap, text, icon_sz) = match self.size {
-            ButtonSize::XSmall => (rem(6.0), rem(1.0), rem(3.0), rem(11.0), rem(11.0)),
-            ButtonSize::Small => (rem(8.0), rem(2.0), rem(4.0), rem(12.0), rem(12.0)),
-            ButtonSize::Medium => (rem(12.0), rem(4.0), rem(6.0), rem(14.0), rem(14.0)),
-            ButtonSize::Large => (rem(16.0), rem(6.0), rem(8.0), rem(16.0), rem(16.0)),
-            ButtonSize::XLarge => (rem(20.0), rem(8.0), rem(10.0), rem(18.0), rem(18.0)),
-        };
+        let (px_h, py_v, gap, text, icon_sz) = self.size.metrics();
         let base = h_flex()
             .id(self.id)
             .flex_shrink_0()

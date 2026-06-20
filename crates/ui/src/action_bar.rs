@@ -112,7 +112,7 @@ impl ActionBar {
                         if active { ButtonStyle::Primary } else { ButtonStyle::Soft },
                     )
                     .icon("icons/corner_down_left.svg")
-                    .size(ButtonSize::Small)
+                    .size(ControlSize::Small)
                     .build(|this, cx| this.explorer.update(cx, |e, cx| e.toggle_subfolder_search(cx)), cx)
                     .tooltip(tooltip_text("Search all subfolders (Enter)")),
                 )
