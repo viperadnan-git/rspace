@@ -399,6 +399,27 @@ impl Service {
         Ok(crate::sync::parse_check(&v))
     }
 
+    /// Reconcile `src_fs` → `dst_fs` (or bidirectionally, for bisync) as an async
+    /// job. Bisync's first run for a pair needs `resync` to establish a baseline.
+    pub async fn run_sync(
+        &self,
+        mode: crate::sync::SyncMode,
+        src_fs: String,
+        dst_fs: String,
+        resync: bool,
+        group: String,
+    ) -> Result<u64, ServiceError> {
+        use crate::sync::SyncMode;
+        let (method, params) = match mode {
+            SyncMode::Copy => ("sync/copy", serde_json::json!({ "srcFs": src_fs, "dstFs": dst_fs })),
+            SyncMode::Mirror => ("sync/sync", serde_json::json!({ "srcFs": src_fs, "dstFs": dst_fs })),
+            SyncMode::Bisync => {
+                ("sync/bisync", serde_json::json!({ "path1": src_fs, "path2": dst_fs, "resync": resync }))
+            }
+        };
+        self.submit(method, params, group).await
+    }
+
     async fn submit(
         &self,
         method: &'static str,

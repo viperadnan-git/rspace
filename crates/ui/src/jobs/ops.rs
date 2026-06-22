@@ -215,6 +215,34 @@ impl Workspace {
         });
     }
 
+    /// Reconcile two folders (Copy/Mirror/Bisync) as a tracked job. Source and
+    /// destination are whole directories.
+    pub(crate) fn spawn_sync(
+        &mut self,
+        mode: SyncMode,
+        src_remote: String,
+        src_path: String,
+        dst_remote: String,
+        dst_path: String,
+        resync: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let leaf = |p: &str, r: &str| p.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(r).to_string();
+        let (src_fs, dst_fs) = (format!("{src_remote}:{src_path}"), format!("{dst_remote}:{dst_path}"));
+        let source = JobTarget::new(leaf(&src_path, &src_remote), src_remote, src_path, true);
+        let dest = JobTarget::new(leaf(&dst_path, &dst_remote), dst_remote, dst_path, true);
+        let mut parts = vec![src_fs.clone(), dst_fs.clone()];
+        if mode == SyncMode::Bisync && resync {
+            parts.push("--resync".to_string());
+        }
+        let command = rclone_cmd(mode.cli_verb(), &parts.iter().map(String::as_str).collect::<Vec<_>>());
+        let service = self.app.service.clone();
+        self.spawn_job(mode.label(), vec![source, dest], command, true, cx, move |group| {
+            let (service, src_fs, dst_fs) = (service.clone(), src_fs.clone(), dst_fs.clone());
+            async move { service.run_sync(mode, src_fs, dst_fs, resync, group).await }
+        });
+    }
+
     pub(crate) fn begin_new_folder(&mut self, cx: &mut Context<Self>) {
         if self.focused_pane().open_remote.is_none() {
             return;

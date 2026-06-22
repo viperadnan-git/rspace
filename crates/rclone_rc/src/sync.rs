@@ -3,6 +3,42 @@
 
 use serde_json::Value;
 
+/// How to reconcile two folders. `Copy` and `Mirror` are one-way (source →
+/// destination); `Bisync` is bidirectional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// Add/update on the destination, never delete (`sync/copy`).
+    Copy,
+    /// Make the destination match the source, deleting extras (`sync/sync`).
+    Mirror,
+    /// Two-way reconcile with conflict handling (`sync/bisync`).
+    Bisync,
+}
+
+impl SyncMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            SyncMode::Copy => "Copy",
+            // rclone's own name for the mirror operation (`rclone sync`).
+            SyncMode::Mirror => "Sync",
+            SyncMode::Bisync => "Bisync",
+        }
+    }
+
+    pub fn cli_verb(self) -> &'static str {
+        match self {
+            SyncMode::Copy => "copy",
+            SyncMode::Mirror => "sync",
+            SyncMode::Bisync => "bisync",
+        }
+    }
+
+    /// Whether running it can delete or overwrite data (worth confirming first).
+    pub fn destructive(self) -> bool {
+        matches!(self, SyncMode::Mirror | SyncMode::Bisync)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffState {
     /// Identical on both sides.

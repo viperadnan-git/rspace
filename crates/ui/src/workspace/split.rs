@@ -58,6 +58,24 @@ impl Workspace {
 
     /// Make group `g` the focused one (keyboard + preview target). Only sets the
     /// flag — gpui focus follows the clicked element on its own.
+    /// Swap the two groups left↔right (source becomes destination). Invalidates the
+    /// compare, since direction reversed.
+    pub(crate) fn swap_panes(&mut self, cx: &mut Context<Self>) {
+        if self.groups.len() < 2 {
+            return;
+        }
+        self.groups.swap(0, 1);
+        self.active_group = 1 - self.active_group;
+        self.clear_compare(cx);
+        self.set_active_polling(cx);
+        self.retarget_preview(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn has_compare(&self) -> bool {
+        self.compare.is_some()
+    }
+
     pub(crate) fn focus_group(&mut self, g: usize, cx: &mut Context<Self>) {
         if g != self.active_group && g < self.groups.len() {
             self.active_group = g;
@@ -156,6 +174,66 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn sync_mode(&self) -> SyncMode {
+        self.sync_mode
+    }
+
+    pub(crate) fn bisync_resync(&self) -> bool {
+        self.bisync_resync
+    }
+
+    pub(crate) fn set_sync_mode(&mut self, mode: SyncMode, cx: &mut Context<Self>) {
+        self.sync_mode = mode;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_resync(&mut self, cx: &mut Context<Self>) {
+        self.bisync_resync = !self.bisync_resync;
+        cx.notify();
+    }
+
+    /// Run the chosen sync between the two panes (left = source, right = dest).
+    /// Destructive modes confirm first; the compare result is the preview.
+    pub(crate) fn start_sync(&mut self, cx: &mut Context<Self>) {
+        if self.groups.len() < 2 {
+            return;
+        }
+        let (mode, resync) = (self.sync_mode, self.bisync_resync);
+        let (lr, lp, rr, rp) = {
+            let left = &self.groups[0].active_tab().pane;
+            let right = &self.groups[1].active_tab().pane;
+            match (left.open_remote.clone(), right.open_remote.clone()) {
+                (Some(lr), Some(rr)) => (lr, left.path.clone(), rr, right.path.clone()),
+                _ => {
+                    self.toast_sticky("Open a folder in both panes to sync".to_string(), true, cx);
+                    return;
+                }
+            }
+        };
+        if mode.destructive() {
+            let message = match mode {
+                SyncMode::Mirror => {
+                    "Make the right folder match the left, deleting anything extra on the right. This can't be undone."
+                }
+                SyncMode::Bisync if resync => {
+                    "Reconcile both folders and establish a new baseline (resync). Existing differences are resolved by preferring the left."
+                }
+                SyncMode::Bisync => "Reconcile both folders two-way, applying each side's changes to the other.",
+                SyncMode::Copy => "",
+            };
+            self.ask_confirm(
+                format!("{}?", mode.label()),
+                message.to_string(),
+                mode.label(),
+                true,
+                move |this, cx| this.spawn_sync(mode, lr, lp, rr, rp, resync, cx),
+                cx,
+            );
+        } else {
+            self.spawn_sync(mode, lr, lp, rr, rp, resync, cx);
+        }
     }
 
     /// Drop the compare result and its row markers (on collapse or a new pairing).

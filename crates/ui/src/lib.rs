@@ -54,7 +54,7 @@ use rspace_core::{
 use rspace_rclone_rc::{
     ArgKind, ArgSpec, ArgValue, ConfigPaths, DiffEntry, DiffState, Entry, InfoOp, InfoResult,
     Matcher, MountConfig, Operation, Provider, RemoteInfo, RemoteOption, Service, ServiceError,
-    TransferMode,
+    SyncMode, TransferMode,
 };
 
 use preview::PreviewPane;
@@ -330,6 +330,9 @@ struct Workspace {
     compare: Option<Vec<DiffEntry>>,
     /// A compare is in flight.
     comparing: bool,
+    /// Chosen sync direction/mode and whether bisync should resync (first run).
+    sync_mode: SyncMode,
+    bisync_resync: bool,
 }
 
 impl Workspace {
@@ -469,6 +472,8 @@ impl Workspace {
             sync_pane,
             compare: None,
             comparing: false,
+            sync_mode: SyncMode::Copy,
+            bisync_resync: false,
         };
         this.load_remotes(cx);
         this
