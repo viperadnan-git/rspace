@@ -53,9 +53,8 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child("Run a command")),
             )
             .when(!has_remotes, |el| {
-                el.child(Button::new("welcome-add", "Add remote", ButtonStyle::Secondary).build(
-                    |this, cx| this.begin_add_remote(cx),
-                    cx,
+                el.child(Button::new("welcome-add", "Add remote", ButtonStyle::Secondary).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.begin_add_remote(cx)),
                 ))
             })
     }

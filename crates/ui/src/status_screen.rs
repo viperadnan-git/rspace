@@ -133,13 +133,11 @@ impl Render for StatusScreen {
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .child(Button::new("setup-install", "Install rclone", ButtonStyle::Primary).build(
-                            move |_, cx| cx.open_url(&install_url),
-                            cx,
+                        .child(Button::new("setup-install", "Install rclone", ButtonStyle::Primary).on_click(
+                            cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&install_url)),
                         ))
-                        .child(Button::new("setup-recheck", "Check again", ButtonStyle::Soft).build(
-                            |this, cx| this.check_again(cx),
-                            cx,
+                        .child(Button::new("setup-recheck", "Check again", ButtonStyle::Soft).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.check_again(cx)),
                         )),
                 )
             })
@@ -164,9 +162,9 @@ impl Render for StatusScreen {
                                 .gap_2()
                                 .items_center()
                                 .child(div().flex_1().min_w(px(0.0)).child(self.path_input.clone()))
-                                .child(Button::new("setup-browse", "Browse\u{2026}", ButtonStyle::Soft).build(|this, cx| {
-                                    this.browse(cx)
-                                }, cx)),
+                                .child(Button::new("setup-browse", "Browse\u{2026}", ButtonStyle::Soft).on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.browse(cx)),
+                                )),
                         )
                         .when_some(self.error.clone(), |el, e| {
                             el.child(div().text_xs().text_color(rgb(DANGER)).child(e))
@@ -174,7 +172,7 @@ impl Render for StatusScreen {
                         .child(
                             h_flex().w_full().justify_center().child(
                                 Button::new("setup-save", "Use this path", ButtonStyle::Primary)
-                                    .build(|this, cx| this.do_submit(cx), cx),
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.do_submit(cx))),
                             ),
                         ),
                 )

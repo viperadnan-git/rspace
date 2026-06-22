@@ -91,7 +91,8 @@ impl Workspace {
                                 vec![self.sync_pane.clone().into_any_element()],
                                 cx,
                             )
-                            .w(rem(360.0)),
+                            .w(rem(360.0))
+                            .rounded_sm(),
                         ),
                     )
                     .priority(3),
@@ -229,6 +230,7 @@ impl Workspace {
         &self,
         id: &'static str,
         icon: &'static str,
+        label: &'static str,
         on: bool,
         enabled: bool,
         tip: impl Into<SharedString>,
@@ -240,45 +242,39 @@ impl Workspace {
         let tip: SharedString = tip.into();
         h_flex()
             .id(id)
-            .gap_1p5()
+            .gap_1()
             .px_1p5()
             .py(px(2.0))
             .rounded_md()
             .cursor_pointer()
+            .text_color(rgb(color))
             .when(on, |el| el.bg(rgba(SELECT_MUTED)))
             .hover(|s| s.bg(rgba(OVERLAY)))
             .tooltip(tooltip_text(tip))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)))
             .child(svg().path(icon).size(rem(14.0)).flex_shrink_0().text_color(rgb(color)))
+            .child(label)
             .children(extra)
     }
 
     fn tasks_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Separate counts so a mixed run reads e.g. "↻2  ✓3  ⚠1".
+        // Only the actionable counts in the status bar — running and failed; the
+        // full breakdown lives in the Tasks panel.
         let jobs = self.jobs.read(cx);
         let active = jobs.items().iter().filter(|j| !j.done).count();
         let failed = jobs.items().iter().filter(|j| j.done && j.error.is_some()).count();
-        let succeeded = jobs.items().iter().filter(|j| j.done && j.error.is_none()).count();
-        let badges = (active > 0 || succeeded > 0 || failed > 0).then(|| {
+        let badges = (active > 0 || failed > 0).then(|| {
             h_flex()
-                .gap_1p5()
-                .when(active > 0, |el| {
-                    el.child(
-                        h_flex()
-                            .gap_1()
-                            .text_color(rgb(ACCENT))
-                            .child(spinner_icon("jobs-active-spin", "icons/refresh.svg", px(13.0), ACCENT))
-                            .child(active.to_string()),
-                    )
-                })
-                .when(succeeded > 0, |el| el.child(count_badge("icons/check.svg", SUCCESS, succeeded)))
-                .when(failed > 0, |el| el.child(count_badge("icons/alert.svg", DANGER, failed)))
+                .gap_1()
+                .when(active > 0, |el| el.child(notification_badge(active, ACCENT, ACCENT_SOFT)))
+                .when(failed > 0, |el| el.child(notification_badge(failed, DANGER, DANGER_SOFT)))
                 .into_any_element()
         });
         let tip = format!("Tasks ({})", if cfg!(target_os = "macos") { "\u{2318}T" } else { "Ctrl T" });
         self.panel_toggle(
             "tasks-toggle",
             "icons/tasks.svg",
+            "Tasks",
             self.dock_is(Panel::Tasks),
             true,
             tip,

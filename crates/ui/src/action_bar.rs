@@ -22,6 +22,12 @@ pub(crate) struct ActionBar {
     /// The input lives on the explorer, so it can only be focused once it's in the
     /// tree — i.e. from this view's render (cf. PromptModal).
     focus_search: bool,
+    /// Horizontal scroll of the breadcrumb (Zed-style): a long path scrolls rather
+    /// than collapsing to an ellipsis; persisted across frames.
+    crumb_scroll: ScrollHandle,
+    /// The location the breadcrumb last rendered, so a navigation scrolls the new
+    /// path's current folder into view once (manual scrolling untouched otherwise).
+    crumb_at: Option<String>,
 }
 
 impl ActionBar {
@@ -37,6 +43,8 @@ impl ActionBar {
             _obs: obs,
             spring: SpringLoad::new(),
             focus_search: false,
+            crumb_scroll: ScrollHandle::new(),
+            crumb_at: None,
         }
     }
 
@@ -106,8 +114,10 @@ impl ActionBar {
                     )
                     .icon("icons/corner_down_left.svg")
                     .size(ControlSize::Small)
-                    .build(|this, cx| this.explorer.update(cx, |e, cx| e.toggle_subfolder_search(cx)), cx)
-                    .tooltip(tooltip_text("Search all subfolders (Enter)")),
+                    .tooltip("Search all subfolders (Enter)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.explorer.update(cx, |e, cx| e.toggle_subfolder_search(cx))
+                    })),
                 )
             })
     }
@@ -125,8 +135,18 @@ impl ActionBar {
             .items_center()
             .gap_1()
             .text_xs()
-            .overflow_hidden();
-        let Some((remote, path)) = self.explorer.read(cx).location() else {
+            // Zed-style: a long path scrolls horizontally instead of collapsing.
+            .overflow_x_scroll()
+            .track_scroll(&self.crumb_scroll);
+
+        let loc = self.explorer.read(cx).location();
+        let key = loc.as_ref().map(|(r, p)| format!("{r}\u{0}{p}"));
+        let navigated = key != self.crumb_at;
+        if navigated {
+            self.crumb_at = key;
+        }
+
+        let Some((remote, path)) = loc else {
             return row.into_any_element();
         };
 
@@ -142,25 +162,18 @@ impl ActionBar {
             }
         }
 
-        // Collapse the middle of a deep path into one clickable `…` so the remote
-        // and the current folder stay readable even in a narrow (split) pane — the
-        // crumbs would otherwise all shrink to ellipses. `…` jumps to the deepest
-        // hidden folder.
-        const HEAD: usize = 1;
-        const TAIL: usize = 2;
-        let mut crumbs: Vec<(String, String, bool)> = Vec::new();
-        if segs.len() > HEAD + TAIL {
-            let tail_start = segs.len() - TAIL;
-            crumbs.push((segs[0].0.clone(), segs[0].1.clone(), false));
-            crumbs.push(("\u{2026}".to_string(), segs[tail_start - 1].1.clone(), true));
-            crumbs.extend(segs[tail_start..].iter().map(|(l, p)| (l.clone(), p.clone(), false)));
-        } else {
-            crumbs.extend(segs.iter().map(|(l, p)| (l.clone(), p.clone(), false)));
+        let n = segs.len();
+        // On navigation, scroll the current folder (the last crumb) into view. gpui
+        // applies this at prepaint with measured bounds — no flicker — and it's a
+        // one-shot, so manual scrolling is untouched afterwards. The row interleaves
+        // a `›` separator before every crumb past the first, so crumb `p` is child
+        // `2p`; the last crumb is child `2(n-1)`.
+        if navigated {
+            self.crumb_scroll.scroll_to_item(2 * (n - 1));
         }
-        let n = crumbs.len();
 
         let mut row = row;
-        for (pos, (label, crumb_path, ellipsis)) in crumbs.into_iter().enumerate() {
+        for (pos, (label, crumb_path)) in segs.into_iter().enumerate() {
             if pos > 0 {
                 row = row.child(div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child("›"));
             }
@@ -170,25 +183,19 @@ impl ActionBar {
             let target = std::rc::Rc::new((remote.clone(), crumb_path));
             let crumb = div()
                 .id(SharedString::from(format!("crumb-{pos}")))
-                // Shrinkable + truncating (Finder). `min_w(0)` lets a flex item
-                // shrink below its content; the current folder shrinks 4× more
-                // reluctantly so it's the last to truncate. The `…` collapse crumb
-                // never shrinks or truncates.
-                .min_w(px(0.0))
-                .map(|d| {
-                    if ellipsis {
-                        d.flex_shrink_0()
-                    } else {
-                        d.flex_shrink(if is_last { 1.0 } else { 4.0 }).truncate()
-                    }
-                })
+                // Never shrinks (the row scrolls for depth), but a single very long
+                // name caps with an ellipsis — careful truncation that can't collapse
+                // the whole path.
+                .flex_shrink_0()
+                .max_w(rem(180.0))
+                .truncate()
                 .px_1()
                 .rounded_md()
                 .cursor_pointer()
                 .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
                 .hover(|s| s.bg(rgba(OVERLAY)))
                 // Full crumb name (not the path), for when it's truncated.
-                .tooltip(tooltip_text(if ellipsis { "Hidden folders".to_string() } else { label.clone() }))
+                .tooltip(tooltip_text(label.clone()))
                 .on_click(cx.listener({
                     let target = target.clone();
                     move |this, _: &ClickEvent, _, cx| {

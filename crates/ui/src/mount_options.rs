@@ -152,13 +152,11 @@ impl Render for MountOptionsModal {
                     .w_full()
                     .justify_end()
                     .gap_2()
-                    .child(Button::new("mo-cancel", "Cancel", ButtonStyle::Secondary).build(
-                        |_, cx| cx.emit(MountOptionsEvent::Dismiss),
-                        cx,
+                    .child(Button::new("mo-cancel", "Cancel", ButtonStyle::Secondary).on_click(
+                        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(MountOptionsEvent::Dismiss)),
                     ))
-                    .child(Button::new("mo-save", "Save", ButtonStyle::Primary).build(
-                        |this, cx| this.emit_save(cx),
-                        cx,
+                    .child(Button::new("mo-save", "Save", ButtonStyle::Primary).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.emit_save(cx)),
                     )),
             )
     }
