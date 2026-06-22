@@ -31,8 +31,8 @@ impl AssetSource for Assets {
             "yandex", "nextcloud", "protondrive", "icloud", "onedrive", "s3", "azureblob", "smb",
             "googlephotos", "internetarchive", "zoho", "seafile", "mailru", "sharefile", "memory",
             "cache", "compress", "chunker", "union", "alias", "hasher", "owncloud", "sidebar_right",
-            "split", "plus", "rclone", "tasks", "github", "search", "corner_down_left",
-            "keyboard", "new_folder"
+            "split", "git_compare", "plus", "rclone", "tasks", "github", "search",
+            "corner_down_left", "keyboard", "new_folder"
         ))
     }
 

@@ -78,7 +78,7 @@ impl Workspace {
                                 .items_center()
                                 .child(
                                     icon_button("toggle-split", "icons/split.svg")
-                                        .when(self.groups.len() > 1, |b| b.bg(rgba(SELECT_MUTED)))
+                                        .when(self.is_split(), |b| b.bg(rgba(SELECT_MUTED)))
                                         .tooltip(tooltip_text("Split editor"))
                                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                             this.toggle_split(&ToggleSplit, window, cx)

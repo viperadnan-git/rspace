@@ -386,6 +386,19 @@ impl Service {
         self.run(move |c| async move { c.call::<serde_json::Value>(method, &params).await }).await
     }
 
+    /// Compare `src_fs` vs `dst_fs` recursively via rclone's own `operations/check`
+    /// (authoritative size/hash comparison). Returns the per-file diff; the call
+    /// itself succeeds even when files differ (`success: false` is a normal result).
+    pub async fn compare(
+        &self,
+        src_fs: String,
+        dst_fs: String,
+    ) -> Result<Vec<crate::sync::DiffEntry>, ServiceError> {
+        let params = serde_json::json!({ "srcFs": src_fs, "dstFs": dst_fs, "match": true });
+        let v = self.query("operations/check", params).await?;
+        Ok(crate::sync::parse_check(&v))
+    }
+
     async fn submit(
         &self,
         method: &'static str,

@@ -56,6 +56,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::action_show_keybindings))
             .on_action(cx.listener(Self::action_restart_daemon))
             .on_action(cx.listener(Self::action_toggle_tasks))
+            .on_action(cx.listener(Self::action_toggle_sync))
             .on_action(cx.listener(Self::zoom_in))
             .on_action(cx.listener(Self::zoom_out))
             .on_action(cx.listener(Self::zoom_reset))
@@ -113,7 +114,9 @@ impl Render for Workspace {
             .when(self.menus.remote_menu.is_some(), |el| el.child(self.render_remote_menu(cx)))
             .when(self.menus.tab_menu.is_some(), |el| el.child(self.render_tab_menu(cx)))
             .when(self.menus.bg_menu.is_some(), |el| el.child(self.render_bg_menu(cx)))
-            .when(self.menus.rc_popover_open, |el| el.child(self.rc_popover_backdrop(cx)))
+            .when(self.menus.rc_popover_open || self.menus.sync_popover_open, |el| {
+                el.child(self.rc_popover_backdrop(cx))
+            })
             .when(self.settings.open, |el| el.child(self.render_settings(cx)))
             .children(self.render_modal(cx))
             .child(self.toasts.clone())

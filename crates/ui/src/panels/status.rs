@@ -45,8 +45,58 @@ impl Workspace {
                     .gap_1()
                     .items_center()
                     .child(div().px_1().child(info))
+                    .when(self.is_split(), |el| el.child(self.sync_status(cx)))
                     .child(self.tasks_toggle(cx)),
             )
+    }
+
+    /// Status-bar sync button (only while split): opens the compare/sync popover
+    /// anchored above it. Mirrors the daemon status button.
+    fn sync_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = self.menus.sync_popover_open;
+        div()
+            .relative()
+            .child(
+                h_flex()
+                    .id("sync-status")
+                    .gap_1()
+                    .p(px(3.0))
+                    .items_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(rgb(FG_MUTED))
+                    .when(open, |el| el.bg(rgba(OVERLAY)))
+                    .hover(|s| s.bg(rgba(OVERLAY)))
+                    .child(
+                        svg()
+                            .path("icons/git_compare.svg")
+                            .size(rem(13.0))
+                            .flex_shrink_0()
+                            .text_color(rgb(FG_MUTED)),
+                    )
+                    .child("Sync")
+                    .when(!open, |el| el.tooltip(tooltip_text("Compare and sync the two panes")))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.close_menus();
+                        this.menus.sync_popover_open = true;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |el| {
+                el.child(
+                    deferred(
+                        div().absolute().bottom_full().right_0().pb_1().child(
+                            self.popover_surface(
+                                "sync-popover",
+                                vec![self.sync_pane.clone().into_any_element()],
+                                cx,
+                            )
+                            .w(rem(360.0)),
+                        ),
+                    )
+                    .priority(3),
+                )
+            })
     }
 
     /// Status-bar daemon button: an icon whose color tracks health (red on

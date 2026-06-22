@@ -11,11 +11,16 @@ impl Workspace {
     /// survivor — nothing is lost).
     pub(crate) fn toggle_split(&mut self, _: &ToggleSplit, window: &mut Window, cx: &mut Context<Self>) {
         if self.groups.len() > 1 {
-            let other = 1 - self.active_group;
-            let mut moved = self.groups.remove(other).tabs;
-            // Only one group remains; the survivor settles at index 0.
+            // Always collapse into the left group, appending the right group's tabs
+            // after it (order preserved); keep the focused tab active.
+            let focused_id = self.active().id;
+            let mut right = self.groups.remove(1).tabs;
+            self.groups[0].tabs.append(&mut right);
             self.active_group = 0;
-            self.groups[0].tabs.append(&mut moved);
+            if let Some(ix) = self.groups[0].tabs.iter().position(|t| t.id == focused_id) {
+                self.groups[0].active = ix;
+            }
+            self.clear_compare(cx);
         } else {
             let new_tab = self.clone_focused_tab(window, cx);
             self.groups.push(PaneGroup::new(new_tab));
@@ -59,6 +64,107 @@ impl Workspace {
             self.retarget_preview(cx);
             cx.notify();
         }
+    }
+
+    pub(crate) fn action_toggle_sync(&mut self, _: &ToggleSync, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_sync_popover(cx);
+    }
+
+    /// Open (or close) the sync popover anchored to the status bar.
+    pub(crate) fn toggle_sync_popover(&mut self, cx: &mut Context<Self>) {
+        let open = self.menus.sync_popover_open;
+        self.close_menus();
+        self.menus.sync_popover_open = !open;
+        cx.notify();
+    }
+
+    pub(crate) fn is_split(&self) -> bool {
+        self.groups.len() > 1
+    }
+
+    pub(crate) fn comparing(&self) -> bool {
+        self.comparing
+    }
+
+    /// `(left, right)` endpoint labels (`remote:path`) when split, for the Sync panel.
+    pub(crate) fn sync_endpoints(&self) -> Option<(String, String)> {
+        if self.groups.len() < 2 {
+            return None;
+        }
+        let label = |p: &Pane| match &p.open_remote {
+            Some(r) if p.path.is_empty() => format!("{r}:"),
+            Some(r) => format!("{r}:{}", p.path),
+            None => "—".to_string(),
+        };
+        Some((label(&self.groups[0].active_tab().pane), label(&self.groups[1].active_tab().pane)))
+    }
+
+    /// `(differ, src_only, dst_only, matched)` from the last compare.
+    pub(crate) fn compare_counts(&self) -> Option<(usize, usize, usize, usize)> {
+        self.compare.as_ref().map(|entries| {
+            let (mut differ, mut src, mut dst, mut matched) = (0, 0, 0, 0);
+            for e in entries {
+                match e.state {
+                    DiffState::Differ => differ += 1,
+                    DiffState::SrcOnly => src += 1,
+                    DiffState::DstOnly => dst += 1,
+                    DiffState::Match => matched += 1,
+                    DiffState::Error => {}
+                }
+            }
+            (differ, src, dst, matched)
+        })
+    }
+
+    /// Compare the two split panes (left = source, right = destination) via rclone's
+    /// own check, then overlay the result onto both file lists.
+    pub(crate) fn run_compare(&mut self, cx: &mut Context<Self>) {
+        if self.groups.len() < 2 {
+            return;
+        }
+        let (lr, lp, rr, rp) = {
+            let left = &self.groups[0].active_tab().pane;
+            let right = &self.groups[1].active_tab().pane;
+            match (left.open_remote.clone(), right.open_remote.clone()) {
+                (Some(lr), Some(rr)) => (lr, left.path.clone(), rr, right.path.clone()),
+                _ => {
+                    self.toast_sticky("Open a folder in both panes to compare".to_string(), true, cx);
+                    return;
+                }
+            }
+        };
+        let left_ex = self.groups[0].active_tab().pane.explorer.clone();
+        let right_ex = self.groups[1].active_tab().pane.explorer.clone();
+        let (src_fs, dst_fs) = (format!("{lr}:{lp}"), format!("{rr}:{rp}"));
+        let service = self.app.service.clone();
+        self.comparing = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let res = service.compare(src_fs, dst_fs).await;
+            this.update(cx, |this, cx| {
+                this.comparing = false;
+                match res {
+                    Ok(entries) => {
+                        left_ex.update(cx, |e, cx| e.set_diff(&entries, &lp, cx));
+                        right_ex.update(cx, |e, cx| e.set_diff(&entries, &rp, cx));
+                        this.compare = Some(entries);
+                    }
+                    Err(e) => this.toast_sticky(format!("Compare failed: {e}"), true, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Drop the compare result and its row markers (on collapse or a new pairing).
+    pub(crate) fn clear_compare(&mut self, cx: &mut Context<Self>) {
+        self.compare = None;
+        for group in &self.groups {
+            group.active_tab().pane.explorer.update(cx, |e, cx| e.clear_diff(cx));
+        }
+        cx.notify();
     }
 
     pub(crate) fn set_split_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {

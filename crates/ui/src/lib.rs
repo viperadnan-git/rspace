@@ -16,6 +16,7 @@ mod action_bar;
 mod preview;
 mod query;
 mod selection;
+mod sync_pane;
 mod tasks_pane;
 mod remotes;
 mod sidebar;
@@ -51,13 +52,15 @@ use rspace_core::{
     dir_size, mount_root, Db, Paths, SettingsStore, SortField, SortOrder, UiState,
 };
 use rspace_rclone_rc::{
-    ArgKind, ArgSpec, ArgValue, ConfigPaths, Entry, InfoOp, InfoResult, Matcher, MountConfig,
-    Operation, Provider, RemoteInfo, RemoteOption, Service, ServiceError, TransferMode,
+    ArgKind, ArgSpec, ArgValue, ConfigPaths, DiffEntry, DiffState, Entry, InfoOp, InfoResult,
+    Matcher, MountConfig, Operation, Provider, RemoteInfo, RemoteOption, Service, ServiceError,
+    TransferMode,
 };
 
 use preview::PreviewPane;
 use selection::Selection;
 use tasks_pane::TasksPane;
+use sync_pane::SyncPane;
 use action_bar::ActionBar;
 use spring::SpringLoad;
 use command_palette::CommandPaletteDelegate;
@@ -118,6 +121,7 @@ actions!(
         OpenSettings,
         RestartDaemon,
         ToggleTasks,
+        ToggleSync,
         ToggleSearch,
         ZoomIn,
         ZoomOut,
@@ -204,6 +208,8 @@ struct Menus {
     task_menu: Option<(Vec<usize>, Point<Pixels>)>,
     /// The rc-daemon health popover (status bar).
     rc_popover_open: bool,
+    /// The sync compare/sync popover (status bar).
+    sync_popover_open: bool,
 }
 
 /// Source for a cross-remote copy/cut, resolved against the destination at paste.
@@ -316,6 +322,14 @@ struct Workspace {
     clipboard: Option<Clipboard>,
     /// The Tasks panel (own entity; owns its selection + focus). Reads `jobs`.
     tasks: Entity<TasksPane>,
+    /// The Sync panel (compare/sync controls for a split), shown in a status-bar
+    /// popover. Reads workspace state.
+    sync_pane: Entity<SyncPane>,
+    /// Last compare result (left vs right), shown as a summary + row markers.
+    /// `None` until a compare runs; cleared when the split collapses.
+    compare: Option<Vec<DiffEntry>>,
+    /// A compare is in flight.
+    comparing: bool,
 }
 
 impl Workspace {
@@ -387,6 +401,7 @@ impl Workspace {
         let preview = cx
             .new(|cx| PreviewPane::new(weak.clone(), tab.pane.explorer.clone(), service.clone(), cx));
         let tasks = cx.new(|cx| TasksPane::new(weak.clone(), jobs.clone(), cx));
+        let sync_pane = cx.new(|cx| SyncPane::new(weak.clone(), cx));
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
@@ -451,6 +466,9 @@ impl Workspace {
             daemon,
             clipboard: None,
             tasks,
+            sync_pane,
+            compare: None,
+            comparing: false,
         };
         this.load_remotes(cx);
         this

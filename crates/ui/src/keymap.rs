@@ -133,6 +133,7 @@ pub(crate) fn commands() -> Vec<Command> {
         cmd(Category::View, "Toggle preview", &["space"], TogglePreview, ws, true),
         cmd(Category::View, "Toggle split", &["secondary-\\"], ToggleSplit, ws_modal, true),
         cmd(Category::View, "Toggle tasks panel", &["secondary-t"], ToggleTasks, ws_modal, true),
+        cmd(Category::View, "Toggle sync panel", &["secondary-y"], ToggleSync, ws_modal, true),
         cmd(Category::View, "Toggle search", &["secondary-f"], ToggleSearch, ws_modal, false),
         cmd(Category::View, "Zoom in", &["secondary-=", "secondary-+"], ZoomIn, ws_modal, false),
         cmd(Category::View, "Zoom out", &["secondary--"], ZoomOut, ws_modal, false),

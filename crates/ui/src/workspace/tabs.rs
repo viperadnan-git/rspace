@@ -118,6 +118,7 @@ impl Workspace {
         }
         self.groups.remove(g);
         self.active_group = 0;
+        self.clear_compare(cx);
         self.sync_to_active_tab(window, cx);
     }
 

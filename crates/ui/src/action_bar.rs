@@ -141,10 +141,26 @@ impl ActionBar {
                 segs.push((part.to_string(), acc.clone()));
             }
         }
-        let n = segs.len();
+
+        // Collapse the middle of a deep path into one clickable `…` so the remote
+        // and the current folder stay readable even in a narrow (split) pane — the
+        // crumbs would otherwise all shrink to ellipses. `…` jumps to the deepest
+        // hidden folder.
+        const HEAD: usize = 1;
+        const TAIL: usize = 2;
+        let mut crumbs: Vec<(String, String, bool)> = Vec::new();
+        if segs.len() > HEAD + TAIL {
+            let tail_start = segs.len() - TAIL;
+            crumbs.push((segs[0].0.clone(), segs[0].1.clone(), false));
+            crumbs.push(("\u{2026}".to_string(), segs[tail_start - 1].1.clone(), true));
+            crumbs.extend(segs[tail_start..].iter().map(|(l, p)| (l.clone(), p.clone(), false)));
+        } else {
+            crumbs.extend(segs.iter().map(|(l, p)| (l.clone(), p.clone(), false)));
+        }
+        let n = crumbs.len();
 
         let mut row = row;
-        for (pos, (label, crumb_path)) in segs.into_iter().enumerate() {
+        for (pos, (label, crumb_path, ellipsis)) in crumbs.into_iter().enumerate() {
             if pos > 0 {
                 row = row.child(div().flex_shrink_0().text_color(rgb(FG_SUBTLE)).child("›"));
             }
@@ -156,17 +172,23 @@ impl ActionBar {
                 .id(SharedString::from(format!("crumb-{pos}")))
                 // Shrinkable + truncating (Finder). `min_w(0)` lets a flex item
                 // shrink below its content; the current folder shrinks 4× more
-                // reluctantly so it's the last to truncate.
+                // reluctantly so it's the last to truncate. The `…` collapse crumb
+                // never shrinks or truncates.
                 .min_w(px(0.0))
-                .flex_shrink(if is_last { 1.0 } else { 4.0 })
-                .truncate()
+                .map(|d| {
+                    if ellipsis {
+                        d.flex_shrink_0()
+                    } else {
+                        d.flex_shrink(if is_last { 1.0 } else { 4.0 }).truncate()
+                    }
+                })
                 .px_1()
                 .rounded_md()
                 .cursor_pointer()
                 .text_color(if is_last { rgb(FG) } else { rgb(FG_MUTED) })
                 .hover(|s| s.bg(rgba(OVERLAY)))
                 // Full crumb name (not the path), for when it's truncated.
-                .tooltip(tooltip_text(label.clone()))
+                .tooltip(tooltip_text(if ellipsis { "Hidden folders".to_string() } else { label.clone() }))
                 .on_click(cx.listener({
                     let target = target.clone();
                     move |this, _: &ClickEvent, _, cx| {

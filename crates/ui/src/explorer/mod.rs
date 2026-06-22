@@ -81,6 +81,12 @@ pub(crate) struct Explorer {
     /// Whether this explorer belongs to the active tab. Background tabs skip the
     /// folder poll so N open tabs don't fan out into N periodic RC listings.
     is_active: bool,
+    /// Compare overlay (full path → state) from the last sync compare; rows render
+    /// a tint for their state. `diff_dirs` holds each ancestor dir's aggregated
+    /// state (all descendants same → that state, else `Differ`). Empty when no
+    /// compare is shown.
+    diff: HashMap<String, DiffState>,
+    diff_dirs: HashMap<String, DiffState>,
 }
 
 /// In-flight rubber-band selection state. See [`Explorer::marquee`].
@@ -156,6 +162,62 @@ impl Explorer {
             col_date_width,
             col_size_width,
             is_active: false,
+            diff: HashMap::new(),
+            diff_dirs: HashMap::new(),
+        }
+    }
+
+    /// Overlay the compare result (paths relative to `root`) onto the listing.
+    /// Matches are dropped; ancestor dirs are flagged so a folder row aggregates.
+    pub(crate) fn set_diff(&mut self, entries: &[DiffEntry], root: &str, cx: &mut Context<Self>) {
+        self.diff.clear();
+        self.diff_dirs.clear();
+        for e in entries {
+            let full = if root.is_empty() { e.path.clone() } else { format!("{root}/{}", e.path) };
+            // Only differing files get a row tint; matches don't.
+            if e.state != DiffState::Match {
+                self.diff.insert(full.clone(), e.state);
+            }
+            // But fold *every* descendant — matches included — into ancestor dirs,
+            // so a folder that exists on both (has matches) reads as "differs" once
+            // it also holds new content, rather than "entirely new".
+            let mut p = full.as_str();
+            while let Some((parent, _)) = p.rsplit_once('/') {
+                self.diff_dirs
+                    .entry(parent.to_string())
+                    .and_modify(|s| {
+                        if *s != e.state {
+                            *s = DiffState::Differ;
+                        }
+                    })
+                    .or_insert(e.state);
+                p = parent;
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn clear_diff(&mut self, cx: &mut Context<Self>) {
+        if !self.diff.is_empty() || !self.diff_dirs.is_empty() {
+            self.diff.clear();
+            self.diff_dirs.clear();
+            cx.notify();
+        }
+    }
+
+    /// The compare marker for a row: its own state, or `Differ` for a folder with a
+    /// differing descendant.
+    pub(crate) fn entry_diff(&self, entry: &Entry) -> Option<DiffState> {
+        if let Some(state) = self.diff.get(&entry.path) {
+            return Some(*state);
+        }
+        if !entry.is_dir {
+            return None;
+        }
+        // A folder of only matches is identical — no tint.
+        match self.diff_dirs.get(&entry.path).copied() {
+            Some(DiffState::Match) | None => None,
+            other => other,
         }
     }
 

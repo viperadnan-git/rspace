@@ -17,6 +17,7 @@ pub const ACCENT_HOVER: u32 = 0x5a9bf0;
 /// Translucent accent fill for selected chips/segments.
 pub const ACCENT_SOFT: u32 = 0x478be626;
 pub const SUCCESS: u32 = 0x57ab5a; // success
+pub const SUCCESS_SOFT: u32 = 0x57ab5a26;
 pub const DANGER: u32 = 0xe5534b; // error
 /// Translucent danger fill for the ambient wash behind a failed task row.
 pub const DANGER_SOFT: u32 = 0xe5534b1f;

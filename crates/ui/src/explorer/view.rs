@@ -195,6 +195,7 @@ impl Render for Explorer {
                             }
                             let selected = this.sel.contains(&entry.path);
                             let is_dir = entry.is_dir;
+                            let diff = this.entry_diff(&entry);
                             let size_label = if is_dir { "--".to_string() } else { human_size(entry.size) };
                             let date_label = human_date(&entry.mod_time);
                             let name = entry.name.clone();
@@ -218,6 +219,11 @@ impl Render for Explorer {
                                 .gap_0()
                                 .border_b_1()
                                 .border_color(rgb(SEPARATOR))
+                                // Compare result: a soft background tint per state
+                                // (selection highlight takes over when selected).
+                                .when(!selected, |row| {
+                                    row.when_some(diff, |row, state| row.bg(rgba(diff_tint(state))))
+                                })
                                 .on_drag(drag, |d, offset, _, app| {
                                     let text: SharedString = match d.items.as_slice() {
                                         [one] => one.name.clone().into(),
@@ -402,5 +408,16 @@ impl Render for Explorer {
                 }
             }))
             .into_any_element()
+    }
+}
+
+/// Soft background tint marking a row's compare state (green = only on this side,
+/// red = only on the other / extra, blue = differs).
+fn diff_tint(state: DiffState) -> u32 {
+    match state {
+        DiffState::SrcOnly => SUCCESS_SOFT,
+        DiffState::DstOnly | DiffState::Error => DANGER_SOFT,
+        DiffState::Differ => ACCENT_SOFT,
+        DiffState::Match => 0x0000_0000,
     }
 }
