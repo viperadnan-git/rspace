@@ -1,8 +1,8 @@
 //! The right dock: a single panel at a time (preview xor tasks), a shared
 //! resizable width, and uniform chrome (header + close + resize). Each panel's
 //! state lives in its own entity; the dock only owns layout and which panel
-//! shows. Adding a panel: add a [`Panel`] variant, a header-actions arm, and a
-//! body arm here — nothing else changes.
+//! shows. Adding a panel: add a [`Panel`] variant, its backing entity, and one arm
+//! in [`Workspace::dock_view`] (title + header actions + body) — nothing else.
 
 use super::*;
 
@@ -35,8 +35,10 @@ impl Workspace {
         }
     }
 
-    /// Re-point the preview at the active tab's explorer (on tab switch); no-op
-    /// unless the preview panel is showing.
+    /// Re-point the preview at the focused tab's explorer; no-op unless the preview
+    /// panel is showing. gpui observation is per-entity, so the subscription must be
+    /// re-pointed when the focused explorer changes — called only from
+    /// `focused_group_changed`, never ad hoc, so it can't be forgotten.
     pub(crate) fn retarget_preview(&mut self, cx: &mut Context<Self>) {
         if self.dock_is(Panel::Preview) {
             let explorer = self.explorer();
@@ -58,7 +60,7 @@ impl Workspace {
     /// The dock, if a panel is open: chrome (width, resize, header) + the panel's
     /// body. Returns `None` (skips the slot) when the dock is closed.
     pub(crate) fn render_dock(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let panel = self.dock?;
+        let view = self.dock_view(self.dock?, cx);
         Some(
             v_flex()
                 .relative()
@@ -70,14 +72,48 @@ impl Workspace {
                 .border_l_1()
                 .border_color(rgb(BORDER_MUTED))
                 .child(self.resize_handle("dock-resize", ResizeTarget::Dock, cx))
-                .child(self.render_dock_header(panel, cx))
+                .child(self.render_dock_header(view.title, view.header_actions, cx))
                 // A flex-column body so the panel's `flex_1` content (the task list,
                 // the preview) gets vertical space — a plain `div` is flex-row.
-                .child(v_flex().flex_1().min_h(px(0.0)).overflow_hidden().child(self.render_dock_body(panel, cx))),
+                .child(v_flex().flex_1().min_h(px(0.0)).overflow_hidden().child(view.body)),
         )
     }
 
-    fn render_dock_header(&self, panel: Panel, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Everything a panel contributes to the dock chrome, built in one place: adding
+    /// a panel is a single arm here, plus its `Panel` variant and backing entity.
+    fn dock_view(&self, panel: Panel, cx: &mut Context<Self>) -> DockView {
+        match panel {
+            Panel::Preview => DockView {
+                title: "PREVIEW",
+                header_actions: Vec::new(),
+                body: self.preview().into_any_element(),
+            },
+            Panel::Tasks => DockView {
+                title: "TASKS",
+                header_actions: self.tasks_header_actions(cx),
+                body: self.tasks.clone().into_any_element(),
+            },
+        }
+    }
+
+    /// The Tasks panel's "clear finished" button — workspace logic (jobs queue), so
+    /// it lives here rather than in the panel.
+    fn tasks_header_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.jobs.read(cx).has_finished() {
+            return Vec::new();
+        }
+        vec![icon_button("clear-finished", "icons/trash.svg")
+            .tooltip(tooltip_text("Clear finished"))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.request_clear_finished(cx)))
+            .into_any_element()]
+    }
+
+    fn render_dock_header(
+        &self,
+        title: &'static str,
+        actions: Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         h_flex()
             .w_full()
             .flex_shrink_0()
@@ -87,38 +123,20 @@ impl Workspace {
             .px_3()
             .border_b_1()
             .border_color(rgb(BORDER_MUTED))
-            .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(panel.title()))
+            .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(title))
             .child(
-                h_flex()
-                    .gap_1()
-                    .children(self.dock_header_actions(panel, cx))
-                    .child(
-                        icon_button("dock-close", "icons/x.svg")
-                            .tooltip(tooltip_text("Close"))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_dock(cx))),
-                    ),
+                h_flex().gap_1().children(actions).child(
+                    icon_button("dock-close", "icons/x.svg")
+                        .tooltip(tooltip_text("Close"))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_dock(cx))),
+                ),
             )
     }
+}
 
-    /// Panel-specific header buttons (left of the close button).
-    fn dock_header_actions(&self, panel: Panel, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        match panel {
-            Panel::Tasks if self.jobs.read(cx).has_finished() => vec![
-                icon_button("clear-finished", "icons/trash.svg")
-                    .tooltip(tooltip_text("Clear finished"))
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.request_clear_finished(cx)),
-                    )
-                    .into_any_element(),
-            ],
-            _ => Vec::new(),
-        }
-    }
-
-    fn render_dock_body(&self, panel: Panel, _cx: &mut Context<Self>) -> AnyElement {
-        match panel {
-            Panel::Preview => self.preview().into_any_element(),
-            Panel::Tasks => self.tasks.clone().into_any_element(),
-        }
-    }
+/// One panel's contribution to the dock chrome (see [`Workspace::dock_view`]).
+struct DockView {
+    title: &'static str,
+    header_actions: Vec<AnyElement>,
+    body: AnyElement,
 }

@@ -173,19 +173,28 @@ struct Location {
     selected: Option<String>,
 }
 
-/// Settings-panel state, grouped off the workspace. The panel is rendered by
-/// `panels::settings` and orchestrated by `workspace::settings`.
+/// Transient state of the settings panel — never the source of truth. Persisted
+/// preferences live in [`Workspace::store`] (`SettingsStore` → disk); this struct
+/// holds only the panel's working copies and read-only fetches:
+///   - **input widgets** (`rclone_edit`, `refresh_field`, `ui_font_field`) are
+///     edit buffers seeded from `store` and written back to it on commit — they
+///     mirror `store`, they don't own the value;
+///   - **fetched displays** (`storage_size`, `rclone_paths`, `rclone_cache_size`,
+///     `rclone_bin`) are read-only info pulled from the daemon/env for display,
+///     not settings at all.
+/// Rendered by `panels::settings`, orchestrated by `workspace::settings`.
 struct SettingsView {
     open: bool,
-    /// The rclone binary path in use (shown in the rclone setting).
+    /// The rclone binary path in use (fetched, shown in the rclone setting).
     rclone_bin: String,
     /// In-progress rclone binary/config override edit (field + input).
     rclone_edit: Option<(RcloneField, Entity<TextInput>)>,
     /// Focus the rclone edit input once when it opens (not every frame, which
     /// would trap focus in it).
     rclone_edit_focus: bool,
+    /// Edit buffer for `store`'s refresh interval; committed on change.
     refresh_field: Entity<NumberField>,
-    /// UI font-size stepper in px (mirrors `ui_font_size`).
+    /// Edit buffer for `store`'s `ui_font_size` (px); committed on change.
     ui_font_field: Entity<NumberField>,
     storage_size: Option<(u64, u64)>,
     rclone_paths: Option<ConfigPaths>,
@@ -252,15 +261,6 @@ pub(crate) enum Panel {
     Tasks,
 }
 
-impl Panel {
-    fn title(self) -> &'static str {
-        match self {
-            Panel::Preview => "PREVIEW",
-            Panel::Tasks => "TASKS",
-        }
-    }
-}
-
 struct Workspace {
     app: AppState,
     version: String,
@@ -293,8 +293,12 @@ struct Workspace {
     /// across tabs (a convenience cache, not part of any one browse context).
     remote_paths: HashMap<String, String>,
     copied: Option<CopySource>,
+    /// Persisted user preferences (sort, refresh interval, rclone path, font size)
+    /// — the source of truth backing the settings panel, written to disk on change.
+    /// `SettingsView`'s input widgets are working copies of these values.
     store: SettingsStore,
-    /// Cached layout state, mirrored to `db` on change via [`Self::save_ui`].
+    /// Cached window-layout state (sidebar/pane/dock widths, split ratio), distinct
+    /// from `store`'s preferences; mirrored to `db` on change via [`Self::save_ui`].
     ui: UiState,
     pinned: Vec<String>,
     /// Recently-opened remote names (newest first); refreshed on navigate, read
