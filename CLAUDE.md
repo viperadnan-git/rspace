@@ -25,3 +25,8 @@
   - `SCREAMING_SNAKE_CASE` — constants, statics.
 - Directory and file names: `snake_case`.
 - Lay out the repo per standard Cargo conventions.
+
+## File size
+- No file may exceed 800 lines. When one would, split it along a real
+  responsibility boundary — not by arbitrary line cuts.
+- Split per idiomatic Rust/Cargo module/directory structure, with expressive, intent-revealing file names.
