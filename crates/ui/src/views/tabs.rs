@@ -6,30 +6,33 @@ const TAB_MIN_W: f32 = 90.0;
 const TAB_MAX_W: f32 = 200.0;
 
 impl Workspace {
-    pub(crate) fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.active;
-        let mut tab_els = Vec::with_capacity(self.tabs.len());
-        for (ix, tab) in self.tabs.iter().enumerate() {
-            tab_els.push(self.render_tab(ix, tab, ix == active, cx));
+    pub(crate) fn render_tab_strip(&self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let group = &self.groups[g];
+        let active = group.active;
+        // Zed-style: the right-hand controls (split / preview) live only on the last strip.
+        let is_last = g + 1 == self.groups.len();
+        let mut tab_els = Vec::with_capacity(group.tabs.len());
+        for (ix, tab) in group.tabs.iter().enumerate() {
+            tab_els.push(self.render_tab(g, ix, tab, ix == active, cx));
         }
         let tabs = h_flex()
-            .id("tabs")
+            .id(SharedString::from(format!("tabs-{g}")))
             .h_full()
             .overflow_x_scroll()
-            .track_scroll(&self.tab_scroll)
+            .track_scroll(&group.tab_scroll)
             .children(tab_els)
             // New-tab button trails the last tab and scrolls with them (Chrome-style).
             .child(
-                icon_button("new-tab", "icons/plus.svg")
+                icon_button(SharedString::from(format!("new-tab-{g}")), "icons/plus.svg")
                     .flex_none()
                     .ml_1()
                     .tooltip(tooltip_text("New tab"))
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.new_tab(&NewTab, window, cx)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.new_tab_in_group(g, window, cx)
                     })),
             );
         h_flex()
-            .id("tab-bar")
+            .id(SharedString::from(format!("tab-bar-{g}")))
             .w_full()
             .flex_none()
             .h(px(PANE_HEADER_H))
@@ -43,6 +46,11 @@ impl Workspace {
                     .flex_1()
                     .h_full()
                     .overflow_x_hidden()
+                    // Dropping a tab on the strip's empty area moves it into this group.
+                    .drag_over::<DraggedTab>(|s, _, _, _| s.bg(rgba(SELECT_MUTED)))
+                    .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                        this.drop_tab_in_group(d.id, g, window, cx)
+                    }))
                     .child(
                         div()
                             .absolute()
@@ -54,32 +62,46 @@ impl Workspace {
                     )
                     .child(tabs),
             )
-            .child(
-                h_flex()
-                    .flex_none()
-                    .h_full()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(BORDER_MUTED))
-                    .child(v_divider())
-                    .child(
-                        h_flex().px_1().items_center().child(
-                            icon_button("toggle-preview", "icons/sidebar_right.svg")
-                                .when(self.dock_is(Panel::Preview), |b| b.bg(rgba(SELECT_MUTED)))
-                                .tooltip(tooltip_text("Preview (Space)"))
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.toggle_preview(&TogglePreview, window, cx)
-                                })),
+            .when(is_last, |bar| {
+                bar.child(
+                    h_flex()
+                        .flex_none()
+                        .h_full()
+                        .items_center()
+                        .border_b_1()
+                        .border_color(rgb(BORDER_MUTED))
+                        .child(v_divider())
+                        .child(
+                            h_flex()
+                                .px_1()
+                                .gap_1()
+                                .items_center()
+                                .child(
+                                    icon_button("toggle-split", "icons/split.svg")
+                                        .when(self.groups.len() > 1, |b| b.bg(rgba(SELECT_MUTED)))
+                                        .tooltip(tooltip_text("Split editor"))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            this.toggle_split(&ToggleSplit, window, cx)
+                                        })),
+                                )
+                                .child(
+                                    icon_button("toggle-preview", "icons/sidebar_right.svg")
+                                        .when(self.dock_is(Panel::Preview), |b| b.bg(rgba(SELECT_MUTED)))
+                                        .tooltip(tooltip_text("Preview (Space)"))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            this.toggle_preview(&TogglePreview, window, cx)
+                                        })),
+                                ),
                         ),
-                    ),
-            )
+                )
+            })
     }
 
-    fn render_tab(&self, ix: usize, tab: &Tab, active: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tab(&self, _g: usize, _ix: usize, tab: &Tab, active: bool, cx: &mut Context<Self>) -> AnyElement {
         let title = self.tab_title(tab);
         let id = tab.id;
         let pinned = tab.pinned;
-        let icon = tab.open_remote.as_deref().map(|name| {
+        let icon = tab.pane.open_remote.as_deref().map(|name| {
             let kind =
                 self.remotes.iter().find(|r| r.name == name).map(|r| r.kind.as_str()).unwrap_or("");
             remote_icon(kind)
@@ -106,7 +128,7 @@ impl Workspace {
                 }
             })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.select_tab(ix, window, cx)
+                this.select_tab_id(id, window, cx)
             }))
             .on_mouse_down(
                 MouseButton::Middle,
@@ -143,7 +165,7 @@ impl Workspace {
                 cx.new(move |_| DragLabel::new(title, offset))
             })
             .drag_over::<DraggedTab>(|s, _, _, _| s.bg(rgba(SELECT)))
-            .on_drop(cx.listener(move |this, d: &DraggedTab, _, cx| this.reorder_tab(d.id, id, cx)))
+            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| this.drop_tab_on(d.id, id, window, cx)))
             .when_some(icon, |el, icon| {
                 el.child(svg().path(icon).size(rem(13.0)).flex_shrink_0().text_color(rgb(FG_MUTED)))
             })
@@ -166,7 +188,7 @@ impl Workspace {
                             cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.close_tab_at(ix, window, cx)
+                            this.close_tab_id(id, window, cx)
                         }))
                         .child(svg().path("icons/x.svg").size(rem(12.0)).text_color(rgb(FG_MUTED))),
                 )

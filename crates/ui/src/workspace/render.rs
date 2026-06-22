@@ -20,7 +20,7 @@ impl Render for Workspace {
             }
         } else if !self.any_pane_focused(window, cx) {
             // Focus lost (e.g. a modal closed): route to the active pane.
-            if self.active().open_remote.is_some() {
+            if self.focused_pane().open_remote.is_some() {
                 self.focus_explorer_pane(window, cx);
             } else {
                 self.focus_sidebar_pane(window, cx);
@@ -49,6 +49,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::rename))
             .on_action(cx.listener(Self::toggle_preview))
+            .on_action(cx.listener(Self::toggle_split))
             .on_action(cx.listener(Self::toggle_palette))
             .on_action(cx.listener(Self::action_add_remote))
             .on_action(cx.listener(Self::action_open_settings))
@@ -84,6 +85,7 @@ impl Render for Workspace {
                         let w = px(from_right.clamp(PREVIEW_MIN, PREVIEW_MAX));
                         this.set_dock_width(w, cx);
                     }
+                    ResizeTarget::PaneSplit => this.resize_split(x, window, cx),
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::persist_pane_widths))

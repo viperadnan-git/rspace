@@ -3,8 +3,8 @@
 //! actions (refresh, search toggle, `+` menu). It's a thin view over the active
 //! `(Explorer, Workspace)`: navigation and file ops live on the workspace, search
 //! data lives per-tab on the explorer; this only renders them and owns the bar's
-//! own interactions (search toggle/focus, spring-loaded crumbs). Re-pointed at the
-//! active tab's explorer on tab switch, like the preview.
+//! own interactions (search toggle/focus, spring-loaded crumbs). One per pane,
+//! bound to that pane's explorer for life.
 
 use gpui::{svg, Entity, WeakEntity};
 
@@ -38,13 +38,6 @@ impl ActionBar {
             spring: SpringLoad::new(),
             focus_search: false,
         }
-    }
-
-    /// Re-point at the active tab's explorer (on tab switch).
-    pub(crate) fn set_explorer(&mut self, explorer: Entity<Explorer>, cx: &mut Context<Self>) {
-        self._obs = cx.observe(&explorer, |_, _, cx| cx.notify());
-        self.explorer = explorer;
-        cx.notify();
     }
 
     /// Toggle the search field; opening arms the one-shot focus so the input takes

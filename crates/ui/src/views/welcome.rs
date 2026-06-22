@@ -3,7 +3,7 @@
 use super::*;
 
 impl Workspace {
-    pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let palette_key: &str = if cfg!(target_os = "macos") { "\u{2318}K" } else { "Ctrl K" };
         let has_remotes = !self.remotes.is_empty();
         let prompt = if has_remotes {

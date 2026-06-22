@@ -23,7 +23,7 @@ impl Workspace {
     pub(crate) fn show_panel(&mut self, panel: Option<Panel>, cx: &mut Context<Self>) {
         self.dock = panel;
         if panel == Some(Panel::Preview) {
-            let explorer = self.active().explorer.clone();
+            let explorer = self.explorer();
             self.preview.update(cx, |p, cx| p.set_explorer(explorer, cx));
         }
         cx.notify();
@@ -39,7 +39,7 @@ impl Workspace {
     /// unless the preview panel is showing.
     pub(crate) fn retarget_preview(&mut self, cx: &mut Context<Self>) {
         if self.dock_is(Panel::Preview) {
-            let explorer = self.active().explorer.clone();
+            let explorer = self.explorer();
             self.preview.update(cx, |p, cx| p.set_explorer(explorer, cx));
         }
     }

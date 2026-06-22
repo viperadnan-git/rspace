@@ -63,6 +63,7 @@ impl Explorer {
             Column::Date => "col-resize-date",
             Column::Size => "col-resize-size",
         };
+        let owner = cx.entity_id();
         deferred(
             h_flex()
                 .id(id)
@@ -74,9 +75,9 @@ impl Explorer {
                 .justify_center()
                 .cursor_col_resize()
                 .occlude()
-                .on_drag(DragColumn(col), move |_, _, _, cx| {
+                .on_drag(DragColumn { col, owner }, move |_, _, _, cx| {
                     cx.stop_propagation();
-                    cx.new(|_| DragColumn(col))
+                    cx.new(move |_| DragColumn { col, owner })
                 })
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if e.click_count() >= 2 {
@@ -309,6 +310,7 @@ impl Render for Explorer {
         };
 
         let show_table = !matches!(self.dir_query.status(), Status::Loading | Status::Error(_));
+        let owner = cx.entity_id();
         v_flex()
             .key_context("Explorer")
             .track_focus(&self.focus)
@@ -324,6 +326,9 @@ impl Render for Explorer {
                 this.on_column_drag(e, window, cx);
             }))
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DragMarquee>, window, cx| {
+                if e.drag(cx).owner != cx.entity_id() {
+                    return;
+                }
                 let m = window.modifiers();
                 let additive = m.secondary() || m.shift;
                 this.drag_marquee(this.marquee_anchor, e.event.position, additive, window, cx);
@@ -341,9 +346,9 @@ impl Render for Explorer {
                     .min_w(px(0.0))
                     // Press-drag in empty list space draws a rubber-band; rows stop
                     // propagation on mouse-down so their own drag wins instead.
-                    .on_drag(DragMarquee, |_, _, _, cx| {
+                    .on_drag(DragMarquee { owner }, move |_, _, _, cx| {
                         cx.stop_propagation();
-                        cx.new(|_| DragMarquee)
+                        cx.new(move |_| DragMarquee { owner })
                     })
                     .child(body)
                     .when_some(self.marquee_rect(), |el, (left, top, w, h)| {

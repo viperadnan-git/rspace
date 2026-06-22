@@ -221,10 +221,17 @@ impl Explorer {
     /// Resize a column by dragging its left divider. Widths are measured from the
     /// table's right content edge (the Name column flex-grows to fill).
     pub(crate) fn on_column_drag(&mut self, e: &DragMoveEvent<DragColumn>, _: &mut Window, cx: &mut Context<Self>) {
+        let (owner, col) = {
+            let drag = e.drag(cx);
+            (drag.owner, drag.col)
+        };
+        if owner != cx.entity_id() {
+            return;
+        }
         let x = f32::from(e.event.position.x);
         let right = f32::from(e.bounds.right()) - TABLE_PAD;
         let date_w = f32::from(self.col_date_width);
-        let (raw, current) = match e.drag(cx).0 {
+        let (raw, current) = match col {
             Column::Date => (right - x, &mut self.col_date_width),
             Column::Size => (right - date_w - x, &mut self.col_size_width),
         };

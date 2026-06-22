@@ -3,6 +3,7 @@
 mod command_palette;
 mod components;
 mod daemon;
+mod drag;
 mod explorer;
 mod fuzzy;
 mod jobs;
@@ -29,6 +30,7 @@ mod workspace;
 // Re-export the reusable components at the crate root so existing `use <c>::…`
 // and `crate::<c>::…` paths resolve unchanged after the move under `components`.
 pub(crate) use components::{confirm, number_field, picker, prompt, text_input, toast, widgets};
+pub(crate) use drag::*;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -65,6 +67,7 @@ use picker::Picker;
 use prompt::PromptModal;
 use toast::{ToastBody, Toasts};
 use workspace::modal::ActiveModal;
+use workspace::pane::{Pane, PaneGroup};
 use transfers::{Job, JobTarget, Jobs, JobsEvent};
 use number_field::{NumberField, NumberFieldEvent};
 use explorer::{Explorer, ExplorerEvent};
@@ -109,6 +112,7 @@ actions!(
         NewFile,
         Rename,
         TogglePreview,
+        ToggleSplit,
         TogglePalette,
         AddRemote,
         OpenSettings,
@@ -210,107 +214,6 @@ struct Clipboard {
     mode: TransferMode,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum ResizeTarget {
-    Sidebar,
-    Dock,
-}
-
-#[derive(Clone)]
-struct DragResize(ResizeTarget);
-
-impl Render for DragResize {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Column {
-    Date,
-    Size,
-}
-
-#[derive(Clone)]
-struct DragColumn(Column);
-
-impl Render for DragColumn {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
-}
-
-/// Rubber-band selection in the file list. Carries no state — the band's anchor
-/// and live selection live on the [`Explorer`]; this just drives gpui's drag
-/// lifecycle (press-move-release) and renders no preview.
-#[derive(Clone)]
-struct DragMarquee;
-
-impl Render for DragMarquee {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
-}
-
-struct DraggedRemote {
-    name: String,
-}
-
-/// A tab being dragged to reorder it within the strip.
-#[derive(Clone)]
-struct DraggedTab {
-    id: usize,
-    title: SharedString,
-}
-
-/// One entry inside a [`DraggedEntry`].
-#[derive(Clone)]
-struct DragItem {
-    path: String,
-    name: String,
-    is_dir: bool,
-}
-
-/// A drag from the file list — self-contained so a drop is correct anywhere,
-/// regardless of the active tab. `remote` and `items` are snapshotted at drag
-/// start: `items` is the whole selection (or the single dragged row), each with
-/// its full path.
-#[derive(Clone)]
-struct DraggedEntry {
-    remote: String,
-    items: Vec<DragItem>,
-}
-
-struct DragLabel {
-    text: SharedString,
-    /// Cursor position within the grabbed element at drag start. gpui paints the
-    /// drag preview at `cursor - offset`, so shifting the label back by `offset`
-    /// re-anchors it to the cursor regardless of where a wide row was grabbed.
-    offset: Point<Pixels>,
-}
-
-impl DragLabel {
-    fn new(text: impl Into<SharedString>, offset: Point<Pixels>) -> Self {
-        Self { text: text.into(), offset }
-    }
-}
-
-impl Render for DragLabel {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().pl(self.offset.x + px(12.0)).pt(self.offset.y + px(8.0)).child(
-            div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .bg(rgb(ELEVATED))
-                .shadow_lg()
-                .text_xs()
-                .text_color(rgb(FG))
-                .child(self.text.clone()),
-        )
-    }
-}
-
 /// The app's shared, cheap-to-clone dependencies, bundled so the workspace holds
 /// one field instead of three; cloned out to async tasks as needed.
 #[derive(Clone)]
@@ -320,11 +223,9 @@ struct AppState {
     paths: Paths,
 }
 
-/// One browse context — the unit a tab owns. Everything here is independent per
-/// tab: the open location, the file-list pane (selection/search/sort/scroll),
-/// and back/forward history. The workspace holds a `Vec<Tab>` and renders the
-/// active one. The split point for future side-by-side panes is to group these
-/// under a `Pane`; nothing in `Tab` would change.
+/// One browse context — the unit a tab owns: its [`Pane`] (explorer + action bar
+/// + the location/history it's browsing). Lives in a [`PaneGroup`]; the workspace
+/// renders the active tab of each group.
 struct Tab {
     /// Stable identity (survives reordering on pin/unpin); used to track the
     /// active tab and to target context-menu actions.
@@ -332,15 +233,7 @@ struct Tab {
     /// Session-only pin. Pinned tabs sort before unpinned, render compact with no
     /// close button, and close only via the context menu.
     pinned: bool,
-    open_remote: Option<String>,
-    /// Empty = root.
-    path: String,
-    /// The file-list pane: owns the listing, selection, search, and sort.
-    explorer: Entity<Explorer>,
-    /// Routes this explorer's events to the workspace; dropped when the tab closes.
-    _explorer_sub: gpui::Subscription,
-    history: Vec<Location>,
-    history_pos: usize,
+    pane: Pane,
 }
 
 /// A panel that can occupy the right dock. At most one shows at a time; toggling
@@ -379,17 +272,17 @@ struct Workspace {
     /// Per-remote mount config (cache mode, read-only, limits); cached from the
     /// DB, edited via the mount-options modal, read when mounting.
     mount_configs: HashMap<String, MountConfig>,
-    /// Open tabs; each is an independent browse context. Always non-empty.
-    tabs: Vec<Tab>,
-    /// Index of the active tab in `tabs`.
-    active: usize,
-    /// Monotonic source of `Tab::id`.
+    /// Pane groups: one, or two side by side when split. Each owns its own tab
+    /// strip and tabs. Always non-empty; capped at two.
+    groups: Vec<PaneGroup>,
+    /// Index of the focused group in `groups` (keyboard + preview target).
+    active_group: usize,
+    /// Left group's width fraction when split (the right group fills the rest).
+    split_ratio: f32,
+    /// Monotonic source of `Tab::id` (unique across groups).
     next_tab_id: usize,
     /// Spring-loaded tabs: a drag dwelling on a tab id activates it.
     spring: SpringLoad<usize>,
-    /// Horizontal scroll offset of the tab strip (persists across frames so the
-    /// strip stays put when tabs overflow).
-    tab_scroll: ScrollHandle,
     /// Last folder viewed per remote; reopening a remote returns to it. Shared
     /// across tabs (a convenience cache, not part of any one browse context).
     remote_paths: HashMap<String, String>,
@@ -416,11 +309,8 @@ struct Workspace {
     /// Right-dock width, shared by every panel (resizable; persisted).
     dock_width: Pixels,
     /// The preview panel (owns its subject, fetch, and cache). Workspace-level
-    /// and re-targeted onto the active tab's explorer on switch.
+    /// and re-targeted onto the focused pane's explorer on switch.
     preview: Entity<PreviewPane>,
-    /// The breadcrumb path bar (its own entity for a definite width). Re-targeted
-    /// onto the active tab's explorer on switch.
-    action_bar: Entity<ActionBar>,
     /// The rcd status item (owns daemon health + popover).
     daemon: Entity<DaemonStatus>,
     clipboard: Option<Clipboard>,
@@ -491,12 +381,11 @@ impl Workspace {
             cx,
         );
         // The first tab is active: only it polls its folder.
-        tab.explorer.update(cx, |e, cx| e.set_active(true, cx));
-        // One shared preview, bound to the active tab's explorer (re-targeted on
-        // tab switch). The dock owns its width and visibility.
-        let preview =
-            cx.new(|cx| PreviewPane::new(weak.clone(), tab.explorer.clone(), service.clone(), cx));
-        let action_bar = cx.new(|cx| ActionBar::new(weak.clone(), tab.explorer.clone(), cx));
+        tab.pane.explorer.update(cx, |e, cx| e.set_active(true, cx));
+        // One shared preview, bound to the active pane's explorer (re-targeted on
+        // tab switch / split focus change). The dock owns its width and visibility.
+        let preview = cx
+            .new(|cx| PreviewPane::new(weak.clone(), tab.pane.explorer.clone(), service.clone(), cx));
         let tasks = cx.new(|cx| TasksPane::new(weak.clone(), jobs.clone(), cx));
         let daemon = cx.new(|cx| DaemonStatus::new(weak.clone(), service.clone(), window, cx));
         // Re-render the status bar when the daemon's health changes.
@@ -539,11 +428,11 @@ impl Workspace {
                 rclone_cache_size: None,
             },
             mount_configs,
-            tabs: vec![tab],
-            active: 0,
+            groups: vec![PaneGroup::new(tab)],
+            active_group: 0,
+            split_ratio: 0.5,
             next_tab_id: 1,
             spring: SpringLoad::new(),
-            tab_scroll: ScrollHandle::new(),
             remote_paths: HashMap::new(),
             copied: None,
             store,
@@ -559,7 +448,6 @@ impl Workspace {
             dock: None,
             dock_width,
             preview,
-            action_bar,
             daemon,
             clipboard: None,
             tasks,
@@ -580,34 +468,44 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Tab {
-        let explorer = cx.new(|cx| {
-            Explorer::new(weak.clone(), service.clone(), sort, refresh_secs, cols, window, cx)
-        });
-        let explorer_sub = cx.subscribe(&explorer, Self::on_explorer_event);
-        Tab {
-            id,
-            pinned: false,
-            open_remote: None,
-            path: String::new(),
-            explorer,
-            _explorer_sub: explorer_sub,
-            history: Vec::new(),
-            history_pos: 0,
-        }
+        let pane = Pane::new(weak, service, sort, refresh_secs, cols, window, cx);
+        Tab { id, pinned: false, pane }
     }
 
+    fn active_group(&self) -> &PaneGroup {
+        &self.groups[self.active_group]
+    }
+
+    fn active_group_mut(&mut self) -> &mut PaneGroup {
+        &mut self.groups[self.active_group]
+    }
+
+    /// The focused group's active tab.
     fn active(&self) -> &Tab {
-        &self.tabs[self.active]
+        self.active_group().active_tab()
     }
 
     fn active_mut(&mut self) -> &mut Tab {
-        &mut self.tabs[self.active]
+        self.active_group_mut().active_tab_mut()
     }
 
-    /// The active tab's explorer (cheap `Arc` clone; lets call sites read/update
-    /// without holding a borrow on the workspace).
+    /// The focused tab's pane.
+    fn focused_pane(&self) -> &Pane {
+        &self.active().pane
+    }
+
+    fn focused_pane_mut(&mut self) -> &mut Pane {
+        &mut self.active_mut().pane
+    }
+
+    /// The active tab's focused explorer (cheap `Arc` clone; lets call sites
+    /// read/update without holding a borrow on the workspace).
     fn explorer(&self) -> Entity<Explorer> {
-        self.active().explorer.clone()
+        self.focused_pane().explorer.clone()
+    }
+
+    fn action_bar(&self) -> Entity<ActionBar> {
+        self.focused_pane().action_bar.clone()
     }
 
     fn preview(&self) -> Entity<PreviewPane> {
@@ -620,7 +518,7 @@ impl Workspace {
     fn on_explorer_event(&mut self, _: Entity<Explorer>, event: &ExplorerEvent, cx: &mut Context<Self>) {
         match event {
             ExplorerEvent::OpenDir(path) => {
-                let remote = self.active().open_remote.clone().unwrap_or_default();
+                let remote = self.focused_pane().open_remote.clone().unwrap_or_default();
                 self.navigate(remote, path.clone(), None, cx);
             }
             ExplorerEvent::OpenFile => self.open_preview(cx),

@@ -31,6 +31,8 @@ impl Workspace {
                         match target {
                             ResizeTarget::Sidebar => this.sidebar.update(cx, |s, cx| s.reset_width(cx)),
                             ResizeTarget::Dock => this.reset_dock_width(cx),
+                            // The split divider has its own reset (see `pane_divider`).
+                            ResizeTarget::PaneSplit => {}
                         }
                     }
                 })),

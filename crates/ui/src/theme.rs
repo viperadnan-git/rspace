@@ -56,6 +56,9 @@ pub const PREVIEW_MIN: f32 = 220.0;
 pub const PREVIEW_MAX: f32 = 640.0;
 pub const SIDEBAR_MAX: f32 = 480.0;
 pub const RESIZE_HANDLE_W: f32 = 6.0;
+/// Min/max width fraction of the left pane in a split.
+pub const SPLIT_MIN: f32 = 0.2;
+pub const SPLIT_MAX: f32 = 0.8;
 pub const TITLE_BAR_H: f32 = 36.0;
 /// Shared height of the top header of each column — the sidebar "REMOTES" bar,
 /// the tab strip, and the dock header — so the three align into one line.

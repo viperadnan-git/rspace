@@ -81,7 +81,7 @@ impl DaemonStatus {
         self.workspace
             .update(cx, |ws, cx| {
                 ws.load_remotes(cx);
-                if ws.active().open_remote.is_some() {
+                if ws.focused_pane().open_remote.is_some() {
                     ws.force_reload_entries(cx);
                 }
             })

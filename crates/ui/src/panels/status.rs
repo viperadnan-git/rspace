@@ -6,7 +6,7 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let info = if self.active().open_remote.is_some() {
+        let info = if self.focused_pane().open_remote.is_some() {
             let exp = self.explorer();
             let exp = exp.read(cx);
             if exp.selection_len() > 1 {

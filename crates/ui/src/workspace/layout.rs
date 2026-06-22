@@ -76,7 +76,7 @@ impl Workspace {
     pub(crate) fn toggle_pane(&mut self, _: &TogglePane, window: &mut Window, cx: &mut Context<Self>) {
         if self.explorer_focused(window, cx) {
             self.focus_sidebar_pane(window, cx);
-        } else if self.active().open_remote.is_some() {
+        } else if self.focused_pane().open_remote.is_some() {
             self.enter_explorer(window, cx);
         }
     }
@@ -86,15 +86,15 @@ impl Workspace {
     }
 
     pub(crate) fn focus_explorer(&mut self, _: &FocusExplorer, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active().open_remote.is_some() {
+        if self.focused_pane().open_remote.is_some() {
             self.enter_explorer(window, cx);
         }
     }
 
     pub(crate) fn copy_text(&self) -> String {
-        let tab = self.active();
-        match &tab.open_remote {
-            Some(r) => format!("{r}:{}", tab.path),
+        let pane = self.focused_pane();
+        match &pane.open_remote {
+            Some(r) => format!("{r}:{}", pane.path),
             None => String::new(),
         }
     }

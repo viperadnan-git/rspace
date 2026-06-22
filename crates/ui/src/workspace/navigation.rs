@@ -22,7 +22,7 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_search_action(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
-        self.action_bar.update(cx, |ab, cx| ab.toggle_search(window, cx));
+        self.action_bar().update(cx, |ab, cx| ab.toggle_search(window, cx));
     }
 
     /// Open the directory-actions menu (New folder / Upload / Paste / Copy path)
@@ -51,15 +51,16 @@ impl Workspace {
     /// growing the guard with another special case. The search field is listed
     /// explicitly because it lives on the action bar, outside the explorer subtree.
     pub(crate) fn any_pane_focused(&self, window: &Window, cx: &App) -> bool {
-        [
-            self.explorer().focus_handle(cx),
-            self.sidebar.focus_handle(cx),
-            self.tasks.focus_handle(cx),
-            self.explorer().read(cx).search_input().focus_handle(cx),
-            self.focus.clone(),
-        ]
-        .iter()
-        .any(|h| h.contains_focused(window, cx))
+        let mut handles =
+            vec![self.sidebar.focus_handle(cx), self.tasks.focus_handle(cx), self.focus.clone()];
+        // Either group's visible pane can own the keyboard, plus its search field
+        // (which lives on the action bar, outside the explorer subtree).
+        for group in &self.groups {
+            let pane = &group.active_tab().pane;
+            handles.push(pane.explorer.focus_handle(cx));
+            handles.push(pane.explorer.read(cx).search_input().focus_handle(cx));
+        }
+        handles.iter().any(|h| h.contains_focused(window, cx))
     }
 
     pub(crate) fn focus_explorer_pane(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -78,14 +79,14 @@ impl Workspace {
     }
 
     pub(crate) fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active().open_remote.is_none() {
+        if self.focused_pane().open_remote.is_none() {
             return;
         }
-        let tab = self.active_mut();
-        tab.open_remote = None;
-        tab.path = String::new();
-        tab.history.clear();
-        tab.history_pos = 0;
+        let pane = self.focused_pane_mut();
+        pane.open_remote = None;
+        pane.path = String::new();
+        pane.history.clear();
+        pane.history_pos = 0;
         self.prompt = None;
         self.menus.context = None;
         self.menus.bg_menu = None;
@@ -97,7 +98,7 @@ impl Workspace {
     /// Push a new location onto the active tab's history, selecting `want` (by
     /// name) on arrival. Saves the current row first so going back restores it.
     pub(crate) fn navigate(&mut self, remote: String, path: String, want: Option<String>, cx: &mut Context<Self>) {
-        if self.active().open_remote.as_deref() != Some(remote.as_str()) {
+        if self.focused_pane().open_remote.as_deref() != Some(remote.as_str()) {
             self.app.db.record_remote(&remote);
             self.recent_remotes = self.app.db.recent_remotes(RECENT_REMOTES_FETCH);
         }
@@ -106,12 +107,12 @@ impl Workspace {
         self.select_remote(Some(&remote), cx);
         self.remember_sel(cx);
         self.remote_paths.insert(remote.clone(), path.clone());
-        let tab = self.active_mut();
-        tab.open_remote = Some(remote.clone());
-        tab.path = path.clone();
-        tab.history.truncate(tab.history_pos + 1);
-        tab.history.push(Location { remote: remote.clone(), path: path.clone(), selected: None });
-        tab.history_pos = tab.history.len() - 1;
+        let pane = self.focused_pane_mut();
+        pane.open_remote = Some(remote.clone());
+        pane.path = path.clone();
+        pane.history.truncate(pane.history_pos + 1);
+        pane.history.push(Location { remote: remote.clone(), path: path.clone(), selected: None });
+        pane.history_pos = pane.history.len() - 1;
         self.explorer().update(cx, |e, cx| e.show(Some(remote), path, want, cx));
         cx.notify();
     }
@@ -137,26 +138,26 @@ impl Workspace {
     /// Remember the cursor row of the current location, so going back restores it.
     pub(crate) fn remember_sel(&mut self, cx: &mut Context<Self>) {
         let name = self.explorer().read(cx).cursor_name();
-        let tab = self.active_mut();
-        let pos = tab.history_pos;
-        if let Some(loc) = tab.history.get_mut(pos) {
+        let pane = self.focused_pane_mut();
+        let pos = pane.history_pos;
+        if let Some(loc) = pane.history.get_mut(pos) {
             loc.selected = name;
         }
     }
 
     pub(crate) fn can_back(&self) -> bool {
-        self.active().history_pos > 0
+        self.focused_pane().history_pos > 0
     }
 
     pub(crate) fn can_forward(&self) -> bool {
-        let tab = self.active();
-        tab.history_pos + 1 < tab.history.len()
+        let pane = self.focused_pane();
+        pane.history_pos + 1 < pane.history.len()
     }
 
     pub(crate) fn go_back(&mut self, cx: &mut Context<Self>) {
         if self.can_back() {
             self.remember_sel(cx);
-            self.active_mut().history_pos -= 1;
+            self.focused_pane_mut().history_pos -= 1;
             self.restore_history(cx);
         }
     }
@@ -164,16 +165,17 @@ impl Workspace {
     pub(crate) fn go_forward(&mut self, cx: &mut Context<Self>) {
         if self.can_forward() {
             self.remember_sel(cx);
-            self.active_mut().history_pos += 1;
+            self.focused_pane_mut().history_pos += 1;
             self.restore_history(cx);
         }
     }
 
     pub(crate) fn restore_history(&mut self, cx: &mut Context<Self>) {
-        let loc = self.active().history[self.active().history_pos].clone();
-        let tab = self.active_mut();
-        tab.open_remote = Some(loc.remote.clone());
-        tab.path = loc.path.clone();
+        let pane = self.focused_pane();
+        let loc = pane.history[pane.history_pos].clone();
+        let pane = self.focused_pane_mut();
+        pane.open_remote = Some(loc.remote.clone());
+        pane.path = loc.path.clone();
         self.explorer().update(cx, |e, cx| e.show(Some(loc.remote), loc.path, loc.selected, cx));
         cx.notify();
     }
@@ -190,14 +192,14 @@ impl Workspace {
         if !self.explorer_focused(window, cx) {
             return;
         }
-        if self.active().path.is_empty() {
+        if self.focused_pane().path.is_empty() {
             self.focus_sidebar_pane(window, cx);
             cx.notify();
         } else {
-            let path = self.active().path.clone();
+            let path = self.focused_pane().path.clone();
             let child = path.rsplit('/').next().unwrap_or_default().to_string();
             let parent = parent_of(&path).to_string();
-            let remote = self.active().open_remote.clone().unwrap_or_default();
+            let remote = self.focused_pane().open_remote.clone().unwrap_or_default();
             self.navigate(remote, parent, Some(child), cx);
         }
     }

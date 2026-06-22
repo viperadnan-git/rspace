@@ -142,7 +142,7 @@ impl Workspace {
     /// it the lone selection if it wasn't already part of one.
     pub(crate) fn render_context_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (entry, pos) = self.menus.context.clone().unwrap();
-        let remote = self.active().open_remote.clone().unwrap_or_default();
+        let remote = self.focused_pane().open_remote.clone().unwrap_or_default();
         let sel = self.selected_entries(cx);
         let n = sel.len().max(1);
         let single = n == 1;
@@ -227,7 +227,7 @@ impl Workspace {
         );
         items.push(
             self.menu_item("Close All", "icons/trash.svg", cx, move |this, window, cx| {
-                this.close_all_tabs(window, cx)
+                this.close_all_tabs(id, window, cx)
             })
             .into_any_element(),
         );

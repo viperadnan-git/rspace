@@ -55,13 +55,16 @@ impl Workspace {
                     Ok(()) => {
                         // Reset any tab parked on the now-deleted remote back to
                         // the welcome screen, clearing its explorer listing too.
-                        for tab in &mut this.tabs {
-                            if tab.open_remote.as_deref() == Some(name.as_str()) {
-                                tab.open_remote = None;
-                                tab.path = String::new();
-                                tab.history.clear();
-                                tab.history_pos = 0;
-                                tab.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));
+                        for group in &mut this.groups {
+                            for tab in &mut group.tabs {
+                                let pane = &mut tab.pane;
+                                if pane.open_remote.as_deref() == Some(name.as_str()) {
+                                    pane.open_remote = None;
+                                    pane.path = String::new();
+                                    pane.history.clear();
+                                    pane.history_pos = 0;
+                                    pane.explorer.update(cx, |e, cx| e.show(None, String::new(), None, cx));
+                                }
                             }
                         }
                         this.remote_paths.remove(&name);
@@ -102,7 +105,7 @@ impl Workspace {
     }
 
     pub(crate) fn has_open_remote(&self) -> bool {
-        self.active().open_remote.is_some()
+        self.focused_pane().open_remote.is_some()
     }
 
     pub(crate) fn mounted_set(&self) -> HashSet<String> {

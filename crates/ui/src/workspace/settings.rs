@@ -18,7 +18,7 @@ impl Workspace {
         // Pinned-first (pin order preserved), matching the sidebar; the palette's
         // stable fuzzy sort keeps this order on empty query and score ties.
         let remotes = self.ordered_remotes();
-        let current_remote = self.active().open_remote.clone();
+        let current_remote = self.focused_pane().open_remote.clone();
         let palette = cx.new(|cx| {
             let delegate = CommandPaletteDelegate::new(
                 previous_focus,
@@ -186,8 +186,10 @@ impl Workspace {
     /// Mirror the refresh cadence into every tab's explorer (shared setting).
     pub(crate) fn set_refresh(&mut self, secs: u64, cx: &mut Context<Self>) {
         self.store.update(|s| s.refresh_secs = secs);
-        for tab in &self.tabs {
-            tab.explorer.update(cx, |e, _| e.set_refresh(secs));
+        for group in &self.groups {
+            for tab in &group.tabs {
+                tab.pane.explorer.update(cx, |e, _| e.set_refresh(secs));
+            }
         }
         cx.notify();
     }

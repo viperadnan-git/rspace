@@ -216,7 +216,7 @@ impl Workspace {
     }
 
     pub(crate) fn begin_new_folder(&mut self, cx: &mut Context<Self>) {
-        if self.active().open_remote.is_none() {
+        if self.focused_pane().open_remote.is_none() {
             return;
         }
         self.begin_edit("", "Folder name", true, None, |this, name, cx| this.create_folder(name, cx), cx);
@@ -230,7 +230,7 @@ impl Workspace {
         if !self.explorer_focused(window, cx) {
             return;
         }
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
         if let Some(entry) = self.explorer().read(cx).cursor_entry() {
@@ -279,10 +279,10 @@ impl Workspace {
     }
 
     fn create_folder(&mut self, name: String, cx: &mut Context<Self>) {
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
-        let path = join_path(&self.active().path, &name);
+        let path = join_path(&self.focused_pane().path, &name);
         self.explorer().update(cx, |e, _| e.set_pending(name.clone()));
         let folder = JobTarget::new(name, remote.clone(), path.clone(), true);
         let command = rclone_cmd("mkdir", &[&format!("{remote}:{path}")]);
@@ -294,7 +294,7 @@ impl Workspace {
     }
 
     pub(crate) fn begin_upload(&mut self, cx: &mut Context<Self>) {
-        if self.active().open_remote.is_none() {
+        if self.focused_pane().open_remote.is_none() {
             return;
         }
         let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -312,10 +312,10 @@ impl Workspace {
     }
 
     pub(crate) fn upload_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
-        let dst_dir = self.active().path.clone();
+        let dst_dir = self.focused_pane().path.clone();
         for path in paths {
             let is_dir = path.is_dir();
             let local = path.to_string_lossy().into_owned();
@@ -359,7 +359,7 @@ impl Workspace {
     }
 
     pub(crate) fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
         let entries = self.selected_entries(cx);
@@ -408,7 +408,7 @@ impl Workspace {
     }
 
     fn download_entry(&mut self, entry: &Entry, cx: &mut Context<Self>) {
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
         let dest = self.store.get().download_dir();
@@ -427,7 +427,7 @@ impl Workspace {
     }
 
     pub(crate) fn set_clipboard(&mut self, mode: TransferMode, cx: &mut Context<Self>) {
-        let Some(remote) = self.active().open_remote.clone() else {
+        let Some(remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
         let entries = self.selected_entries(cx);
@@ -440,7 +440,7 @@ impl Workspace {
 
     /// Paste every clipboard item into the open directory, one job each.
     pub(crate) fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
-        self.paste_clipboard_into(self.active().path.clone(), cx);
+        self.paste_clipboard_into(self.focused_pane().path.clone(), cx);
     }
 
     /// Paste every clipboard item into `dst_dir`, one job each. A cut clears the
@@ -449,7 +449,7 @@ impl Workspace {
         let Some(clip) = self.clipboard.clone() else {
             return;
         };
-        let Some(dst_remote) = self.active().open_remote.clone() else {
+        let Some(dst_remote) = self.focused_pane().open_remote.clone() else {
             return;
         };
         for entry in &clip.entries {
