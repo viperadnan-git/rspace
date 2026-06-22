@@ -410,8 +410,13 @@ impl Workspace {
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&jobs, |this, _, event, cx| match event {
             JobsEvent::ReloadEntries => this.force_reload_entries(cx),
-            JobsEvent::Finished { label, ok, error } => {
+            JobsEvent::Finished { verb, label, ok, error } => {
                 if *ok {
+                    // A completed bisync establishes the baseline; consume the one-shot
+                    // resync so the next run reconciles instead of resyncing again.
+                    if verb.as_ref() == SyncMode::Bisync.label() {
+                        this.bisync_resync = false;
+                    }
                     this.toast(label.clone(), false, cx);
                 } else {
                     // Surface rclone's own reason, not just "failed".

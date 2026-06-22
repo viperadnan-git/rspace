@@ -73,7 +73,7 @@ pub(crate) enum JobsEvent {
     ReloadEntries,
     /// A job finished: notify (success toasts auto-dismiss; failures stay until
     /// dismissed, showing rclone's error).
-    Finished { label: SharedString, ok: bool, error: Option<SharedString> },
+    Finished { verb: SharedString, label: SharedString, ok: bool, error: Option<SharedString> },
 }
 
 pub(crate) struct Jobs {
@@ -146,7 +146,7 @@ impl Jobs {
                     let alive = this.update(cx, |this, cx| {
                         let mut reload = false;
                         // Set when the job finishes this tick, to emit after the borrow.
-                        let mut finished: Option<(SharedString, bool, Option<SharedString>)> = None;
+                        let mut finished: Option<(SharedString, SharedString, bool, Option<SharedString>)> = None;
                         if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
                             if let Some(s) = &stats {
                                 j.bytes = s.bytes;
@@ -175,12 +175,12 @@ impl Jobs {
                                         j.error = Some(msg);
                                     }
                                     let err = if st.success { None } else { j.error.clone() };
-                                    finished = Some((j.label().into(), st.success, err.map(Into::into)));
+                                    finished = Some((j.verb.clone(), j.label().into(), st.success, err.map(Into::into)));
                                 }
                             }
                         }
-                        if let Some((label, ok, error)) = finished {
-                            cx.emit(JobsEvent::Finished { label, ok, error });
+                        if let Some((verb, label, ok, error)) = finished {
+                            cx.emit(JobsEvent::Finished { verb, label, ok, error });
                         }
                         if reload {
                             cx.emit(JobsEvent::ReloadEntries);
@@ -268,7 +268,7 @@ impl Jobs {
 
     fn on_job_submitted(&mut self, id: usize, result: Result<u64, ServiceError>, cx: &mut Context<Self>) {
         // A job that fails to start never reaches the poll loop, so settle it here.
-        let mut failed: Option<(SharedString, SharedString)> = None;
+        let mut failed: Option<(SharedString, SharedString, SharedString)> = None;
         if let Some(j) = self.items.iter_mut().find(|j| j.id == id) {
             match result {
                 Ok(jobid) => j.jobid = Some(jobid),
@@ -277,12 +277,12 @@ impl Jobs {
                     tracing::warn!(command = %j.command, error = %err, "job submit failed");
                     j.done = true;
                     j.error = Some(err.clone());
-                    failed = Some((j.label().into(), err.into()));
+                    failed = Some((j.verb.clone(), j.label().into(), err.into()));
                 }
             }
         }
-        if let Some((label, err)) = failed {
-            cx.emit(JobsEvent::Finished { label, ok: false, error: Some(err) });
+        if let Some((verb, label, err)) = failed {
+            cx.emit(JobsEvent::Finished { verb, label, ok: false, error: Some(err) });
         }
         cx.notify();
     }

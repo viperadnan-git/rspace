@@ -163,11 +163,8 @@ impl ActionBar {
         }
 
         let n = segs.len();
-        // On navigation, scroll the current folder (the last crumb) into view. gpui
-        // applies this at prepaint with measured bounds — no flicker — and it's a
-        // one-shot, so manual scrolling is untouched afterwards. The row interleaves
-        // a `›` separator before every crumb past the first, so crumb `p` is child
-        // `2p`; the last crumb is child `2(n-1)`.
+        // A `›` separator precedes every crumb past the first, so crumb `p` is child
+        // `2p`; the last crumb (current folder) is `2(n-1)`.
         if navigated {
             self.crumb_scroll.scroll_to_item(2 * (n - 1));
         }

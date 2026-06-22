@@ -117,6 +117,24 @@ impl Workspace {
         Some((label(&self.groups[0].active_tab().pane), label(&self.groups[1].active_tab().pane)))
     }
 
+    /// The two endpoints (`src_remote`, `src_path`, `dst_remote`, `dst_path`) for a
+    /// compare or sync — left is source, right is destination. `None` (with a toast
+    /// naming `action`) when the view isn't split or a pane has no folder open.
+    fn pane_endpoints(&mut self, action: &str, cx: &mut Context<Self>) -> Option<(String, String, String, String)> {
+        if self.groups.len() < 2 {
+            return None;
+        }
+        let left = &self.groups[0].active_tab().pane;
+        let right = &self.groups[1].active_tab().pane;
+        match (left.open_remote.clone(), right.open_remote.clone()) {
+            (Some(lr), Some(rr)) => Some((lr, left.path.clone(), rr, right.path.clone())),
+            _ => {
+                self.toast_sticky(format!("Open a folder in both panes to {action}"), true, cx);
+                None
+            }
+        }
+    }
+
     /// `(differ, src_only, dst_only, matched)` from the last compare.
     pub(crate) fn compare_counts(&self) -> Option<(usize, usize, usize, usize)> {
         self.compare.as_ref().map(|entries| {
@@ -137,19 +155,8 @@ impl Workspace {
     /// Compare the two split panes (left = source, right = destination) via rclone's
     /// own check, then overlay the result onto both file lists.
     pub(crate) fn run_compare(&mut self, cx: &mut Context<Self>) {
-        if self.groups.len() < 2 {
+        let Some((lr, lp, rr, rp)) = self.pane_endpoints("compare", cx) else {
             return;
-        }
-        let (lr, lp, rr, rp) = {
-            let left = &self.groups[0].active_tab().pane;
-            let right = &self.groups[1].active_tab().pane;
-            match (left.open_remote.clone(), right.open_remote.clone()) {
-                (Some(lr), Some(rr)) => (lr, left.path.clone(), rr, right.path.clone()),
-                _ => {
-                    self.toast_sticky("Open a folder in both panes to compare".to_string(), true, cx);
-                    return;
-                }
-            }
         };
         let left_ex = self.groups[0].active_tab().pane.explorer.clone();
         let right_ex = self.groups[1].active_tab().pane.explorer.clone();
@@ -197,20 +204,9 @@ impl Workspace {
     /// Run the chosen sync between the two panes (left = source, right = dest).
     /// Destructive modes confirm first; the compare result is the preview.
     pub(crate) fn start_sync(&mut self, cx: &mut Context<Self>) {
-        if self.groups.len() < 2 {
-            return;
-        }
         let (mode, resync) = (self.sync_mode, self.bisync_resync);
-        let (lr, lp, rr, rp) = {
-            let left = &self.groups[0].active_tab().pane;
-            let right = &self.groups[1].active_tab().pane;
-            match (left.open_remote.clone(), right.open_remote.clone()) {
-                (Some(lr), Some(rr)) => (lr, left.path.clone(), rr, right.path.clone()),
-                _ => {
-                    self.toast_sticky("Open a folder in both panes to sync".to_string(), true, cx);
-                    return;
-                }
-            }
+        let Some((lr, lp, rr, rp)) = self.pane_endpoints("sync", cx) else {
+            return;
         };
         if mode.destructive() {
             let message = match mode {
