@@ -10,26 +10,21 @@ impl Workspace {
     /// right group), or merge back to one (the other group's tabs append to the
     /// survivor — nothing is lost).
     pub(crate) fn toggle_split(&mut self, _: &ToggleSplit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.groups.len() > 1 {
+        let (g, ix) = if self.groups.len() > 1 {
             // Always collapse into the left group, appending the right group's tabs
             // after it (order preserved); keep the focused tab active.
             let focused_id = self.active().id;
             let mut right = self.groups.remove(1).tabs;
             self.groups[0].tabs.append(&mut right);
-            self.active_group = 0;
-            if let Some(ix) = self.groups[0].tabs.iter().position(|t| t.id == focused_id) {
-                self.groups[0].active = ix;
-            }
+            let ix = self.groups[0].tabs.iter().position(|t| t.id == focused_id).unwrap_or(0);
             self.clear_compare(cx);
+            (0, ix)
         } else {
             let new_tab = self.clone_focused_tab(window, cx);
             self.groups.push(PaneGroup::new(new_tab));
-            self.active_group = self.groups.len() - 1;
-        }
-        self.set_active_polling(cx);
-        self.retarget_preview(cx);
-        self.focus_active_tab(window, cx);
-        cx.notify();
+            (self.groups.len() - 1, 0)
+        };
+        self.activate_tab(g, ix, window, cx);
     }
 
     /// A fresh tab showing the same location as the focused one.
@@ -67,9 +62,7 @@ impl Workspace {
         self.groups.swap(0, 1);
         self.active_group = 1 - self.active_group;
         self.clear_compare(cx);
-        self.set_active_polling(cx);
-        self.retarget_preview(cx);
-        cx.notify();
+        self.focused_group_changed(cx);
     }
 
     pub(crate) fn has_compare(&self) -> bool {
@@ -79,8 +72,7 @@ impl Workspace {
     pub(crate) fn focus_group(&mut self, g: usize, cx: &mut Context<Self>) {
         if g != self.active_group && g < self.groups.len() {
             self.active_group = g;
-            self.retarget_preview(cx);
-            cx.notify();
+            self.focused_group_changed(cx);
         }
     }
 

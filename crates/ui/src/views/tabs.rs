@@ -8,7 +8,7 @@ const TAB_MAX_W: f32 = 200.0;
 impl Workspace {
     pub(crate) fn render_tab_strip(&self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let group = &self.groups[g];
-        let active = group.active;
+        let active = group.active();
         // Zed-style: the right-hand controls (split / preview) live only on the last strip.
         let is_last = g + 1 == self.groups.len();
         let mut tab_els = Vec::with_capacity(group.tabs.len());

@@ -47,8 +47,10 @@ impl Pane {
 /// single group, or two side by side when split.
 pub(crate) struct PaneGroup {
     pub(crate) tabs: Vec<Tab>,
-    /// Index of the active tab within this group.
-    pub(crate) active: usize,
+    /// Index of the active tab. Private: writes go through `set_active`/`clamp_active`
+    /// so it stays in range; the focus re-sync that must follow a change is the
+    /// workspace's job (`Workspace::active_context_changed`).
+    active: usize,
     /// Horizontal scroll of this group's tab strip (persists across frames).
     pub(crate) tab_scroll: ScrollHandle,
 }
@@ -56,6 +58,20 @@ pub(crate) struct PaneGroup {
 impl PaneGroup {
     pub(crate) fn new(tab: Tab) -> Self {
         Self { tabs: vec![tab], active: 0, tab_scroll: ScrollHandle::new() }
+    }
+
+    pub(crate) fn active(&self) -> usize {
+        self.active
+    }
+
+    /// Set the active tab, clamped into range.
+    pub(crate) fn set_active(&mut self, ix: usize) {
+        self.active = ix.min(self.tabs.len().saturating_sub(1));
+    }
+
+    /// Re-clamp after the tab set shrank.
+    pub(crate) fn clamp_active(&mut self) {
+        self.active = self.active.min(self.tabs.len().saturating_sub(1));
     }
 
     pub(crate) fn active_tab(&self) -> &Tab {

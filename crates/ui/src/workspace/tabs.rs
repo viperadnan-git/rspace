@@ -40,14 +40,9 @@ impl Workspace {
         let tab = Self::build_tab(id, &weak, &self.app.service, sort, refresh_secs, cols, window, cx);
         let group = self.active_group_mut();
         group.tabs.push(tab);
-        group.active = group.tabs.len() - 1;
-        self.set_active_polling(cx);
-        self.retarget_preview(cx);
-        // A fresh tab opens on the welcome screen, so clear the sidebar highlight.
-        self.select_remote(None, cx);
-        self.close_menus();
-        self.focus_active_tab(window, cx);
-        cx.notify();
+        let last = group.tabs.len() - 1;
+        // The funnel highlights the focused pane's remote — None here, a welcome tab.
+        self.set_active_tab(last, window, cx);
     }
 
     /// Open a new tab in group `g`, making that group active first (the `+` button
@@ -76,7 +71,7 @@ impl Workspace {
     }
 
     pub(crate) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
-        let (g, ix) = (self.active_group, self.active_group().active);
+        let (g, ix) = (self.active_group, self.active_group().active());
         self.close_tab_at(g, ix, window, cx);
     }
 
@@ -97,14 +92,12 @@ impl Workspace {
         }
         let group = &mut self.groups[g];
         group.tabs.remove(ix);
-        if ix < group.active {
-            group.active -= 1;
+        if ix < group.active() {
+            group.set_active(group.active() - 1);
         }
-        if group.active >= group.tabs.len() {
-            group.active = group.tabs.len() - 1;
-        }
+        group.clamp_active();
         if g == self.active_group {
-            self.sync_to_active_tab(window, cx);
+            self.active_context_changed(window, cx);
         } else {
             self.set_active_polling(cx);
             cx.notify();
@@ -117,26 +110,22 @@ impl Workspace {
             return;
         }
         self.groups.remove(g);
-        self.active_group = 0;
         self.clear_compare(cx);
-        self.sync_to_active_tab(window, cx);
+        self.set_active_pane(0, window, cx);
     }
 
     pub(crate) fn select_tab_id(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((g, ix)) = self.locate_tab(id) else { return };
-        if g == self.active_group && ix == self.groups[g].active {
+        if g == self.active_group && ix == self.groups[g].active() {
             return;
         }
-        self.active_group = g;
-        self.groups[g].active = ix;
-        self.sync_to_active_tab(window, cx);
+        self.activate_tab(g, ix, window, cx);
     }
 
     /// Switch to tab `ix` within the focused group (next/prev/jump).
     fn select_in_active_group(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix < self.active_group().tabs.len() && ix != self.active_group().active {
-            self.active_group_mut().active = ix;
-            self.sync_to_active_tab(window, cx);
+        if ix < self.active_group().tabs.len() && ix != self.active_group().active() {
+            self.set_active_tab(ix, window, cx);
         }
     }
 
@@ -144,7 +133,7 @@ impl Workspace {
         let g = self.active_group();
         let n = g.tabs.len();
         if n > 1 {
-            self.select_in_active_group((g.active + 1) % n, window, cx);
+            self.select_in_active_group((g.active() + 1) % n, window, cx);
         }
     }
 
@@ -152,15 +141,48 @@ impl Workspace {
         let g = self.active_group();
         let n = g.tabs.len();
         if n > 1 {
-            self.select_in_active_group((g.active + n - 1) % n, window, cx);
+            self.select_in_active_group((g.active() + n - 1) % n, window, cx);
         }
     }
 
-    /// After the focused tab changes: re-sync polling, the preview target, the
-    /// sidebar highlight, and focus.
-    fn sync_to_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Make group `g` the focused one and re-sync. The one way to change which pane
+    /// is focused.
+    pub(crate) fn set_active_pane(&mut self, g: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if g < self.groups.len() {
+            self.activate_tab(g, self.groups[g].active(), window, cx);
+        }
+    }
+
+    /// Activate tab `ix` in the focused group and re-sync.
+    pub(crate) fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate_tab(self.active_group, ix, window, cx);
+    }
+
+    /// Single entry point for any focus change: point at `(g, ix)` then funnel the
+    /// re-sync, so no path can set one without the other.
+    pub(crate) fn activate_tab(&mut self, g: usize, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if g >= self.groups.len() {
+            return;
+        }
+        self.active_group = g;
+        self.active_group_mut().set_active(ix);
+        self.active_context_changed(window, cx);
+    }
+
+    /// Preview + polling re-sync after the focused group changes, without moving
+    /// keyboard focus (gpui follows clicks itself). The sole caller of
+    /// `retarget_preview`.
+    pub(crate) fn focused_group_changed(&mut self, cx: &mut Context<Self>) {
         self.set_active_polling(cx);
         self.retarget_preview(cx);
+        cx.notify();
+    }
+
+    /// Full re-sync when the focused tab changes: polling, preview, sidebar
+    /// highlight, menus, and focus. Every focus-changing path funnels here, so none
+    /// can forget a step.
+    fn active_context_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focused_group_changed(cx);
         let remote = self.focused_pane().open_remote.clone();
         self.select_remote(remote.as_deref(), cx);
         self.close_menus();
@@ -172,7 +194,7 @@ impl Workspace {
     pub(crate) fn set_active_polling(&mut self, cx: &mut Context<Self>) {
         for group in &self.groups {
             for (ix, tab) in group.tabs.iter().enumerate() {
-                let active = ix == group.active;
+                let active = ix == group.active();
                 tab.pane.explorer.update(cx, |e, cx| e.set_active(active, cx));
             }
         }
@@ -199,11 +221,12 @@ impl Workspace {
     /// Re-point group `g`'s active tab at `id`, clamping if it's gone.
     fn set_active_in_group(&mut self, g: usize, id: usize) {
         let group = &mut self.groups[g];
-        group.active = group
+        let ix = group
             .tabs
             .iter()
             .position(|t| t.id == id)
-            .unwrap_or_else(|| group.active.min(group.tabs.len().saturating_sub(1)));
+            .unwrap_or_else(|| group.active());
+        group.set_active(ix);
     }
 
     /// Pin/unpin a tab, regrouping so pinned tabs stay at the front of their strip
@@ -276,7 +299,7 @@ impl Workspace {
             }
             let active_id = self.active_id();
             self.groups[g].tabs.retain(|t| t.id == active_id);
-            self.groups[g].active = 0;
+            self.groups[g].set_active(0);
             self.go_home(window, cx);
             self.set_active_polling(cx);
             return;
@@ -287,7 +310,7 @@ impl Workspace {
         self.groups[g].tabs.retain(|t| keep.contains(&t.id));
         self.set_active_in_group(g, prefer);
         if g == self.active_group {
-            self.sync_to_active_tab(window, cx);
+            self.active_context_changed(window, cx);
         } else {
             self.set_active_polling(cx);
             cx.notify();
@@ -368,20 +391,19 @@ impl Workspace {
         let tab = self.groups[src].tabs.remove(st);
         {
             let s = &mut self.groups[src];
-            if st < s.active {
-                s.active -= 1;
+            if st < s.active() {
+                s.set_active(s.active() - 1);
             }
-            s.active = s.active.min(s.tabs.len().saturating_sub(1));
+            s.clamp_active();
         }
         let d = &mut self.groups[dest];
         let idx = at.unwrap_or(d.tabs.len()).min(d.tabs.len());
         d.tabs.insert(idx, tab);
-        d.active = idx;
-        self.active_group = dest;
+        d.set_active(idx);
         if self.groups[src].tabs.is_empty() {
             self.close_group(src, window, cx);
         } else {
-            self.sync_to_active_tab(window, cx);
+            self.activate_tab(dest, idx, window, cx);
         }
     }
 
