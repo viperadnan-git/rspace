@@ -66,11 +66,32 @@ impl Job {
         let names: Vec<&str> = self.targets.iter().map(|t| t.name.as_ref()).collect();
         format!("{} {}", self.verb, names.join(" → "))
     }
+
+    /// `(remote, dir)` listings this job may have changed: each target's parent
+    /// (where it appears/disappears) plus the target itself when it's a directory
+    /// (its contents change — paste/sync into it). Deduped.
+    fn affected_dirs(&self) -> Vec<(String, String)> {
+        let mut dirs: Vec<(String, String)> = Vec::new();
+        let mut push = |remote: &str, dir: String| {
+            let key = (remote.to_string(), dir);
+            if !dirs.contains(&key) {
+                dirs.push(key);
+            }
+        };
+        for t in &self.targets {
+            push(&t.remote, rspace_rclone_rc::split_parent(&t.path).0);
+            if t.is_dir {
+                push(&t.remote, t.path.clone());
+            }
+        }
+        dirs
+    }
 }
 
 pub(crate) enum JobsEvent {
-    /// A successful job that should refresh the open listing.
-    ReloadEntries,
+    /// A successful mutating job: these `(remote, dir)` listings may have changed,
+    /// so any view showing one should refetch (and others drop their stale cache).
+    Invalidate(Vec<(String, String)>),
     /// A job finished: notify (success toasts auto-dismiss; failures stay until
     /// dismissed, showing rclone's error).
     Finished { verb: SharedString, label: SharedString, ok: bool, error: Option<SharedString> },
@@ -144,7 +165,8 @@ impl Jobs {
                     let status = service.job_status(jobid).await.ok();
                     let stats = service.stats(group).await.ok();
                     let alive = this.update(cx, |this, cx| {
-                        let mut reload = false;
+                        // Dirs to invalidate once the borrow on `j` ends (empty = nothing).
+                        let mut invalidate: Vec<(String, String)> = Vec::new();
                         // Set when the job finishes this tick, to emit after the borrow.
                         let mut finished: Option<(SharedString, SharedString, bool, Option<SharedString>)> = None;
                         if let Some(j) = this.items.iter_mut().find(|j| j.id == id) {
@@ -163,7 +185,9 @@ impl Jobs {
                                         j.elapsed_ms = (st.duration * 1000.0) as u64;
                                     }
                                     if st.success {
-                                        reload = j.reload_on_done;
+                                        if j.reload_on_done {
+                                            invalidate = j.affected_dirs();
+                                        }
                                         tracing::debug!(job = %j.label(), elapsed_ms = j.elapsed_ms, "job done");
                                     } else {
                                         let msg = if st.error.is_empty() {
@@ -182,8 +206,8 @@ impl Jobs {
                         if let Some((verb, label, ok, error)) = finished {
                             cx.emit(JobsEvent::Finished { verb, label, ok, error });
                         }
-                        if reload {
-                            cx.emit(JobsEvent::ReloadEntries);
+                        if !invalidate.is_empty() {
+                            cx.emit(JobsEvent::Invalidate(invalidate));
                         }
                         cx.notify();
                     });

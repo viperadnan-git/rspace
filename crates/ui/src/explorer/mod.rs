@@ -340,6 +340,20 @@ impl Explorer {
         });
     }
 
+    /// Invalidate the cached listing for `remote:dir`; if this explorer is showing
+    /// it, refetch now (otherwise the next visit refetches). Driven by job
+    /// completion — the dir a job touched may be open here or in another pane.
+    pub(crate) fn invalidate_dir(&mut self, remote: &str, dir: &str, cx: &mut Context<Self>) {
+        let service = self.service.clone();
+        let (field, order) = (self.sort_field, self.sort_order);
+        let key = (remote.to_string(), dir.to_string());
+        self.dir_query.invalidate(&key, cx, |this| &mut this.dir_query, move |(remote, path)| async move {
+            let mut entries = service.list_dir(&remote, &path).await?;
+            sort_entries(&mut entries, field, order);
+            Ok::<_, ServiceError>(entries)
+        });
+    }
+
     /// Show `remote:path`, resetting selection and search (Finder-style: a fresh
     /// directory has no selection unless `pending` names a row to land on).
     pub(crate) fn show(

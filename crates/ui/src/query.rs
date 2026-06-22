@@ -141,6 +141,27 @@ where
         self.spawn_fetch(key, cx, access, fetch);
     }
 
+    /// Invalidate `key`: drop its cached entry, and if it's the query currently
+    /// shown, refetch it now (keeping the stale data visible meanwhile) — like
+    /// invalidating an active query in TanStack. Other keys simply become a miss,
+    /// so the next `load` of them refetches.
+    pub fn invalidate<View, E, Fut>(
+        &mut self,
+        key: &K,
+        cx: &mut Context<View>,
+        access: fn(&mut View) -> &mut Self,
+        fetch: impl FnOnce(K) -> Fut,
+    ) where
+        View: 'static,
+        E: Display + 'static,
+        Fut: Future<Output = Result<V, E>> + 'static,
+    {
+        self.cache.invalidate(key);
+        if self.current.as_ref() == Some(key) {
+            self.reload(cx, access, fetch);
+        }
+    }
+
     fn spawn_fetch<View, E, Fut>(
         &mut self,
         key: K,

@@ -17,6 +17,21 @@ impl Workspace {
         self.explorer().update(cx, |e, cx| e.force_reload_entries(cx));
     }
 
+    /// Invalidate `dirs` in every pane's explorer: a job-touched dir may be open in
+    /// more than one tab/group, so any showing it refetches and the rest drop their
+    /// stale cache.
+    pub(crate) fn invalidate_dirs(&mut self, dirs: &[(String, String)], cx: &mut Context<Self>) {
+        let explorers: Vec<Entity<Explorer>> =
+            self.groups.iter().flat_map(|g| g.tabs.iter().map(|t| t.pane.explorer.clone())).collect();
+        for explorer in explorers {
+            explorer.update(cx, |e, cx| {
+                for (remote, dir) in dirs {
+                    e.invalidate_dir(remote, dir, cx);
+                }
+            });
+        }
+    }
+
     pub(crate) fn reload(&mut self, _: &Reload, _window: &mut Window, cx: &mut Context<Self>) {
         self.force_reload_entries(cx);
     }

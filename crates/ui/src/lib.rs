@@ -413,7 +413,7 @@ impl Workspace {
         // Re-render the status bar when the daemon's health changes.
         cx.observe(&daemon, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&jobs, |this, _, event, cx| match event {
-            JobsEvent::ReloadEntries => this.force_reload_entries(cx),
+            JobsEvent::Invalidate(dirs) => this.invalidate_dirs(dirs, cx),
             JobsEvent::Finished { verb, label, ok, error } => {
                 if *ok {
                     // A completed bisync establishes the baseline; consume the one-shot
