@@ -56,19 +56,77 @@ pub struct Startup {
     pub db: Db,
 }
 
+/// The native menu bar. Items dispatch the same actions as the keymap, so gpui
+/// shows each shortcut automatically; an item is inert unless the focused view
+/// handles its action (the workspace handles all of these).
+fn app_menus() -> Vec<Menu> {
+    vec![
+        Menu::new("rspace").items([
+            MenuItem::action("Settings", OpenSettings),
+            MenuItem::action("Restart Daemon", RestartDaemon),
+            MenuItem::separator(),
+            MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Quit rspace", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("New Tab", NewTab),
+            MenuItem::action("New Folder", NewFolder),
+            MenuItem::action("New File", NewFile),
+            MenuItem::separator(),
+            MenuItem::action("Add Remote\u{2026}", AddRemote),
+            MenuItem::separator(),
+            MenuItem::action("Close Tab", CloseTab),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::action("Copy", CopyEntry),
+            MenuItem::action("Cut", CutEntry),
+            MenuItem::action("Paste", PasteEntry),
+            MenuItem::separator(),
+            MenuItem::action("Rename\u{2026}", Rename),
+            MenuItem::action("Delete", DeleteEntry),
+            MenuItem::separator(),
+            MenuItem::action("Select All", SelectAll),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Reload", Reload),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Preview", TogglePreview),
+            MenuItem::action("Toggle Tasks Panel", ToggleTasks),
+            MenuItem::action("Toggle Sync Panel", ToggleSync),
+            MenuItem::action("Toggle Split", ToggleSplit),
+            MenuItem::action("Toggle Search", ToggleSearch),
+            MenuItem::separator(),
+            MenuItem::action("Zoom In", ZoomIn),
+            MenuItem::action("Zoom Out", ZoomOut),
+            MenuItem::action("Reset Zoom", ZoomReset),
+        ]),
+        Menu::new("Go").items([
+            MenuItem::action("Back", GoBack),
+            MenuItem::action("Forward", GoForward),
+            MenuItem::action("Enclosing Folder", GoUp),
+            MenuItem::separator(),
+            MenuItem::action("Next Tab", NextTab),
+            MenuItem::action("Previous Tab", PrevTab),
+        ]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", Minimize),
+            MenuItem::action("Zoom", Zoom),
+            MenuItem::action("Toggle Full Screen", ToggleFullscreen),
+        ]),
+        Menu::new("Help").items([
+            MenuItem::action("Command Palette\u{2026}", TogglePalette),
+            MenuItem::action("Keyboard Shortcuts", ShowKeybindings),
+        ]),
+    ]
+}
+
 pub fn run(startup: Startup) {
     application().with_assets(Assets).run(move |cx: &mut App| {
         keymap::bind(cx);
         text_input::bind_keys(cx);
         picker::bind_keys(cx);
-        cx.set_menus(vec![
-            Menu::new("rspace").items([MenuItem::action("Quit rspace", Quit)]),
-            Menu::new("Window").items([
-                MenuItem::action("Minimize", Minimize),
-                MenuItem::action("Zoom", Zoom),
-                MenuItem::action("Toggle Full Screen", ToggleFullscreen),
-            ]),
-        ]);
+        cx.set_menus(app_menus());
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
