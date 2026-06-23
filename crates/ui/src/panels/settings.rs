@@ -360,7 +360,7 @@ impl Workspace {
                     .justify_between()
                     .items_center()
                     .child(div().text_sm().text_color(rgb(FG)).child("rspace"))
-                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(self.version.clone())),
+                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(VERSION)),
             )
             .child(paths)
             .child(

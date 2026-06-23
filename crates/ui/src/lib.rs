@@ -87,6 +87,13 @@ use widgets::*;
 const RECENT_REMOTES_FETCH: usize = 20;
 const RECENT_REMOTES_SHOWN: usize = 5;
 
+/// App version. CI is the single source of truth: it sets `RSPACE_VERSION` (from
+/// the release tag) at build time. Local/dev builds fall back to the crate version.
+pub const VERSION: &str = match option_env!("RSPACE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 actions!(
     rspace,
     [
@@ -263,6 +270,7 @@ pub(crate) enum Panel {
 
 struct Workspace {
     app: AppState,
+    /// The running rclone binary's version (shown in the status bar).
     version: String,
     focus: FocusHandle,
     remotes: Vec<RemoteInfo>,
