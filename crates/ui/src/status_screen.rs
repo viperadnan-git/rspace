@@ -133,23 +133,27 @@ impl Render for StatusScreen {
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .child(Button::new("setup-install", "Install rclone", ButtonStyle::Primary).on_click(
-                            cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&install_url)),
-                        ))
+                        .child(
+                            Button::new("setup-install", "Install rclone", ButtonStyle::Primary)
+                                .icon("icons/external_link.svg")
+                                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&install_url))),
+                        )
                         .child(Button::new("setup-recheck", "Check again", ButtonStyle::Soft).on_click(
                             cx.listener(|this, _: &ClickEvent, _, cx| this.check_again(cx)),
                         )),
                 )
             })
-            .when(missing, |el| el.child(divider()))
             // The manual-path form stays hidden behind a quiet link to keep the
             // first impression minimal.
             .when(!self.show_path, |el| {
-                el.child(text_link("setup-reveal-path", "Enter rclone path manually", None, |this, window, cx| {
-                    this.show_path = true;
-                    this.path_input.read(cx).focus_handle(cx).focus(window, cx);
-                    cx.notify();
-                }, cx))
+                el.child(
+                    text_link("setup-reveal-path", "Enter rclone path manually", None, |this, window, cx| {
+                        this.show_path = true;
+                        this.path_input.read(cx).focus_handle(cx).focus(window, cx);
+                        cx.notify();
+                    }, cx)
+                    .text_xs(),
+                )
             })
             .when(self.show_path, |el| {
                 el.child(
