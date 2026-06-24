@@ -1,9 +1,13 @@
 [package]
-name = "rspace-app"
+name = "rspace"
+description = "All your cloud storage in one fast, native app."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "rspace"

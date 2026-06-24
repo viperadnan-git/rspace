@@ -1,9 +1,13 @@
 [package]
 name = "rspace-ui"
+description = "rspace UI: the gpui desktop shell — browsing, previews, mounts, and sync."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 gpui.workspace = true
@@ -13,6 +17,7 @@ rspace-rclone-rc.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+axoupdater = { version = "0.10.0", features = ["blocking"] }
 
 [lints]
 workspace = true

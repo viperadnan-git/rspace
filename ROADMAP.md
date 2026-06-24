@@ -1,7 +1,7 @@
 # rspace — Roadmap
 
-A fast, keyboard-first GUI for rclone: browse remotes like a file manager and
-mount them with **zero extra installs**, using rclone's built-in NFS server and
+A fast, keyboard-first app for your cloud storage: browse every remote like a
+file manager and mount it with **zero extra installs**, using rclone's built-in NFS server and
 the OS's native NFS client (no macFUSE/WinFsp kernel extension). Native
 sync-provider APIs (File Provider / CFAPI) are a backlog aspiration — they need
 paid developer programs.

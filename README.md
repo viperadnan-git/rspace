@@ -1,7 +1,8 @@
 # rspace
 
-A fast, keyboard-first GUI for rclone: browse remotes like a file manager and
-mount them through native OS sync-provider APIs. See [ROADMAP.md](ROADMAP.md).
+All your cloud storage in one fast, native app — every remote feels like local
+files, mounted with zero extra installs. Powered by rclone.
+See [ROADMAP.md](ROADMAP.md).
 
 ## Prerequisites
 
@@ -21,7 +22,7 @@ mount them through native OS sync-provider APIs. See [ROADMAP.md](ROADMAP.md).
 ```sh
 cargo build --workspace      # build everything
 cargo test --workspace       # run tests
-cargo run -p rspace-app      # launch the app
+cargo run -p rspace          # launch the app
 ```
 
 ## Layout
@@ -29,3 +30,10 @@ cargo run -p rspace-app      # launch the app
 Cargo workspace under `crates/`: `core` (storage, manifest, accounting),
 `rclone_rc` (detection, daemon, RC client), `ui` (gpui shell), `app` (binary),
 and `platform_{macos,windows,linux}` (mount integration, later phases).
+
+## License
+
+[GPL-3.0-or-later](LICENSE). rspace is free software — you may use, study,
+share, and modify it, but any distributed derivative must also be released
+under the GPL; it cannot be taken closed-source. (gpui, which rspace builds on,
+is Apache-2.0 — compatible with the GPL.)

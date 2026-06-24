@@ -355,12 +355,24 @@ impl Workspace {
         v_flex()
             .gap_2()
             .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .child(div().text_sm().text_color(rgb(FG)).child("rspace"))
-                    .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(VERSION)),
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .items_center()
+                            .child(div().text_sm().text_color(rgb(FG)).child("rspace"))
+                            .child(div().text_xs().text_color(rgb(FG_SUBTLE)).child(VERSION)),
+                    )
+                    // GPL asks an interactive program to surface its license; this is
+                    // rspace's "about" line.
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(FG_SUBTLE))
+                            .child("GPL-3.0-or-later \u{00b7} \u{00a9} Adnan Ahmad"),
+                    ),
             )
             .child(paths)
             .child(
