@@ -62,6 +62,8 @@ pub struct Startup {
 fn app_menus() -> Vec<Menu> {
     vec![
         Menu::new("rspace").items([
+            MenuItem::action("Check for Updates", CheckForUpdates),
+            MenuItem::separator(),
             MenuItem::action("Settings", OpenSettings),
             MenuItem::action("Restart Daemon", RestartDaemon),
             MenuItem::separator(),

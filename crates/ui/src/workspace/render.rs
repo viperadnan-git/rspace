@@ -55,6 +55,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::action_open_settings))
             .on_action(cx.listener(Self::action_show_keybindings))
             .on_action(cx.listener(Self::action_restart_daemon))
+            .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::action_toggle_tasks))
             .on_action(cx.listener(Self::action_toggle_sync))
             .on_action(cx.listener(Self::zoom_in))

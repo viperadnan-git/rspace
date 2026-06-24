@@ -23,6 +23,7 @@ mod sidebar;
 mod spring;
 mod theme;
 mod transfers;
+mod update;
 mod views;
 mod bootstrap;
 mod status_screen;
@@ -127,6 +128,7 @@ actions!(
         AddRemote,
         OpenSettings,
         RestartDaemon,
+        CheckForUpdates,
         ToggleTasks,
         ToggleSync,
         ToggleSearch,
