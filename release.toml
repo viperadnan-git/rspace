@@ -1,0 +1,10 @@
+# cargo-release config. A release bumps the shared workspace version, commits,
+# and tags `vX.Y.Z` — the tag format `dist` releases from. No crates.io publish
+# (the workspace is `publish = false`); pushing the tag triggers the dist CI.
+#
+# Usage: `cargo release patch` (or minor/major) — add `--execute` to apply.
+shared-version = true
+tag-name = "v{{version}}"
+tag-message = "rspace {{version}}"
+pre-release-commit-message = "chore(release): v{{version}}"
+publish = false

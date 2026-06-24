@@ -13,6 +13,11 @@ homepage.workspace = true
 name = "rspace"
 path = "src/main.rs"
 
+# Mark this crate's binary as distable: the workspace is `publish = false`, which
+# would otherwise hide it from `dist`.
+[package.metadata.dist]
+dist = true
+
 # `cargo bundle` packages crates/app into rspace.app with this icon.
 [package.metadata.bundle]
 name = "rspace"
