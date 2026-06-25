@@ -1,8 +1,9 @@
 # rspace
 
-All your cloud storage in one fast, native app — every remote feels like local
-files, mounted with zero extra installs. Powered by rclone.
-See [ROADMAP.md](ROADMAP.md).
+rspace is a fast, native desktop app for your cloud storage. Connect Drive, S3,
+Dropbox, and 70+ more providers, then browse, move, and sync files across all of
+them from one window — no command line required. Built on rclone, with a clean
+native UI on top.
 
 ## Prerequisites
 

@@ -257,6 +257,14 @@ pub fn brand_mark() -> impl IntoElement {
                 .text_color(rgb(FG))
                 .child("rspace"),
         )
+        .child(
+            div()
+                .max_w(rem(280.0))
+                .text_sm()
+                .text_center()
+                .text_color(rgb(FG_MUTED))
+                .child("A fast, native desktop app to manage and sync all your cloud storage. Powered by rclone."),
+        )
 }
 
 pub fn text_link<V: 'static>(

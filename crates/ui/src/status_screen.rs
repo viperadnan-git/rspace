@@ -98,59 +98,112 @@ impl StatusScreen {
 
 }
 
-impl Render for StatusScreen {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        focus_once(&mut self.focused, &self.focus_handle, window, cx);
-        let missing = matches!(self.rclone, RcloneStatus::Missing { .. });
-        let (heading, sub): (SharedString, SharedString) = match &self.rclone {
-            RcloneStatus::Error { message } => ("rclone won't start".into(), message.clone().into()),
-            _ => (
-                "Set up rclone".into(),
-                "rspace uses the rclone binary to reach your cloud storage.".into(),
-            ),
-        };
+/// A tinted glyph chip leading the card header — accent when rclone is merely
+/// missing, danger when it's present but won't start.
+fn state_badge(icon: &'static str, tint: u32, soft: u32) -> impl IntoElement {
+    h_flex()
+        .flex_shrink_0()
+        .size(rem(34.0))
+        .justify_center()
+        .rounded_lg()
+        .bg(rgba(soft))
+        .child(svg().path(icon).size(rem(18.0)).text_color(rgb(tint)))
+}
 
-        let header = v_flex()
-            .items_center()
-            .gap_1p5()
+/// One numbered step in the install track: ordinal chip, title + caption, and
+/// the step's own action. The text column flexes/wraps (Zed `Callout` idiom) so
+/// long captions never push the action past the card edge.
+fn step_row(n: &'static str, title: &'static str, caption: &'static str, action: impl IntoElement) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .gap_2p5()
+        .items_center()
+        .child(
+            h_flex()
+                .flex_shrink_0()
+                .size(rem(20.0))
+                .justify_center()
+                .rounded_full()
+                .bg(rgba(ACCENT_SOFT))
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(ACCENT))
+                .child(n),
+        )
+        .child(
+            v_flex()
+                .min_w_0()
+                .flex_1()
+                .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(rgb(FG)).child(title))
+                .child(div().text_xs().text_color(rgb(FG_MUTED)).child(caption)),
+        )
+        .child(div().flex_shrink_0().child(action))
+}
+
+impl StatusScreen {
+    fn reveal_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_path = true;
+        self.path_input.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    /// The install → detect track, shown when no rclone binary was found.
+    fn install_track(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let install_url = rspace_rclone_rc::INSTALL_URL.to_string();
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(step_row(
+                "1",
+                "Install rclone",
+                "Free and open source. Takes about a minute.",
+                Button::new("setup-install", "Install", ButtonStyle::Primary)
+                    .icon("icons/external_link.svg")
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&install_url))),
+            ))
+            .child(step_row(
+                "2",
+                "Let rspace find it",
+                "Scans your PATH and the usual install spots.",
+                Button::new("setup-recheck", "Check again", ButtonStyle::Soft)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.check_again(cx))),
+            ))
+    }
+
+    /// The failure block, shown when rclone is present but the daemon won't start.
+    fn error_block(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_3()
             .child(
                 div()
-                    .text_size(rem(21.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .w_full()
+                    .p_3()
+                    .rounded_md()
+                    .bg(rgba(DANGER_SOFT))
+                    .text_xs()
                     .text_color(rgb(FG))
-                    .child(heading),
+                    .child(message.to_string()),
             )
-            .child(div().max_w(rem(300.0)).text_sm().text_center().text_color(rgb(FG_MUTED)).child(sub));
+            .child(
+                Button::new("setup-retry", "Try again", ButtonStyle::Primary)
+                    .icon("icons/refresh.svg")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.check_again(cx))),
+            )
+    }
 
-        let install_url = rspace_rclone_rc::INSTALL_URL.to_string();
-        let actions = v_flex()
+    /// The manual-path disclosure shared by both states: a quiet link that opens
+    /// an inline path field with Browse.
+    fn manual_path(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
             .w_full()
-            .max_w(rem(340.0))
-            .items_center()
-            .gap_4()
-            .when(missing, |el| {
-                el.child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Button::new("setup-install", "Install rclone", ButtonStyle::Primary)
-                                .icon("icons/external_link.svg")
-                                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&install_url))),
-                        )
-                        .child(Button::new("setup-recheck", "Check again", ButtonStyle::Soft).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.check_again(cx)),
-                        )),
-                )
-            })
-            // The manual-path form stays hidden behind a quiet link to keep the
-            // first impression minimal.
+            .gap_2()
+            .child(divider())
             .when(!self.show_path, |el| {
                 el.child(
-                    text_link("setup-reveal-path", "Enter rclone path manually", None, |this, window, cx| {
-                        this.show_path = true;
-                        this.path_input.read(cx).focus_handle(cx).focus(window, cx);
-                        cx.notify();
+                    text_link("setup-reveal-path", "Already installed? Set the rclone path", None, |this, window, cx| {
+                        this.reveal_path(window, cx);
                     }, cx)
                     .text_xs(),
                 )
@@ -160,6 +213,7 @@ impl Render for StatusScreen {
                     v_flex()
                         .w_full()
                         .gap_2()
+                        .child(div().text_xs().text_color(rgb(FG_MUTED)).child("Path to the rclone binary"))
                         .child(
                             h_flex()
                                 .w_full()
@@ -168,25 +222,77 @@ impl Render for StatusScreen {
                                 .child(div().flex_1().min_w(px(0.0)).child(self.path_input.clone()))
                                 .child(Button::new("setup-browse", "Browse\u{2026}", ButtonStyle::Soft).on_click(
                                     cx.listener(|this, _: &ClickEvent, _, cx| this.browse(cx)),
+                                ))
+                                .child(Button::new("setup-save", "Use", ButtonStyle::Primary).on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.do_submit(cx)),
                                 )),
                         )
                         .when_some(self.error.clone(), |el, e| {
                             el.child(div().text_xs().text_color(rgb(DANGER)).child(e))
-                        })
-                        .child(
-                            h_flex().w_full().justify_center().child(
-                                Button::new("setup-save", "Use this path", ButtonStyle::Primary)
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.do_submit(cx))),
-                            ),
-                        ),
+                        }),
                 )
-            });
+            })
+    }
+}
+
+impl Render for StatusScreen {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        focus_once(&mut self.focused, &self.focus_handle, window, cx);
+
+        let (badge, heading, sub): (_, SharedString, SharedString) = match &self.rclone {
+            RcloneStatus::Error { .. } => (
+                state_badge("icons/alert.svg", DANGER, DANGER_SOFT),
+                "rclone won't start".into(),
+                "It's installed, but the background service failed to launch.".into(),
+            ),
+            _ => (
+                state_badge("icons/rclone.svg", ACCENT, ACCENT_SOFT),
+                "Connect rclone".into(),
+                "Point rspace at rclone once — then your remotes show up here.".into(),
+            ),
+        };
+
+        let card_header = h_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .items_center()
+            .child(badge)
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .flex_1()
+                    .child(div().text_size(rem(17.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgb(FG)).child(heading))
+                    .child(div().text_xs().text_color(rgb(FG_MUTED)).child(sub)),
+            );
+
+        let body = match &self.rclone {
+            RcloneStatus::Error { message } => self.error_block(message, cx).into_any_element(),
+            _ => self.install_track(cx).into_any_element(),
+        };
+
+        let card = v_flex()
+            .w_full()
+            .max_w(rem(460.0))
+            .min_w_0()
+            .gap_2p5()
+            .p_3()
+            .rounded_lg()
+            .bg(rgb(ELEVATED))
+            .border_1()
+            .border_color(rgb(BORDER_MUTED))
+            .shadow_lg()
+            .overflow_x_hidden()
+            .child(card_header)
+            .child(body)
+            .child(self.manual_path(cx));
 
         let footer = h_flex().w_full().justify_center().pb_8().child(
             text_link("gh-link", "viperadnan-git/rspace", Some("icons/github.svg"), |_, _, cx| {
                 cx.open_url(REPO_URL)
             }, cx)
-            .tooltip(tooltip_text(REPO_URL)),
+            .tooltip(tooltip_text(REPO_URL))
+            .text_xs(),
         );
 
         v_flex()
@@ -198,15 +304,17 @@ impl Render for StatusScreen {
             .on_action(cx.listener(Self::submit))
             .child(
                 v_flex()
+                    .id("setup-scroll")
                     .flex_1()
                     .min_h(px(0.0))
                     .items_center()
                     .justify_center()
-                    .gap_7()
-                    .p_8()
+                    .gap_4()
+                    .p_5()
+                    .pt_2()
+                    .overflow_y_scroll() // ponytail: justify_center clips top when content > viewport, but onboarding fits; scroll is the backstop
                     .child(brand_mark())
-                    .child(header)
-                    .child(actions),
+                    .child(card),
             )
             .child(footer)
     }

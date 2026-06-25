@@ -1,6 +1,6 @@
 [package]
 name = "rspace"
-description = "All your cloud storage in one fast, native app."
+description = "A fast, native desktop app to manage and sync all your cloud storage. Powered by rclone."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
