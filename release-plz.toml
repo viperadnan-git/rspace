@@ -1,0 +1,25 @@
+# release-plz: maintains a "Release" PR that bumps the shared workspace version
+# and the changelog from Conventional Commits. Merging it creates a single tag
+# `vX.Y.Z`, which triggers cargo-dist (release.yml) to build + publish the
+# GitHub Release. release-plz itself neither publishes to crates.io (the
+# workspace is publish = false) nor creates the GitHub Release — dist owns that.
+
+[workspace]
+git_tag_name = "v{{ version }}"   # one unified tag, matches dist's trigger
+git_release_enable = false        # cargo-dist creates the GitHub Release
+publish = false                   # no crates.io
+changelog_update = true
+
+# Only the dist-able binary cuts the release/tag; the libraries ride the shared
+# version and contribute to the changelog but never tag on their own.
+[[package]]
+name = "rspace-core"
+release = false
+
+[[package]]
+name = "rspace-rclone-rc"
+release = false
+
+[[package]]
+name = "rspace-ui"
+release = false

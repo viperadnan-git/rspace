@@ -1,0 +1,47 @@
+# release-plz: on every push to main, keep the Release PR up to date; when that
+# PR merges, cut the tag. Uses a PAT (RELEASE_PLZ_TOKEN) so the tag push it
+# creates triggers the cargo-dist release workflow — the default GITHUB_TOKEN
+# would not. Split into two jobs per release-plz's recommended setup.
+name: release-plz
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Create the tag (and thus trigger dist) once the Release PR is merged.
+  release-plz-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+  # Open/update the Release PR (version bump + changelog).
+  release-plz-pr:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

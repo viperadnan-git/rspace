@@ -47,6 +47,18 @@ Cargo workspace under `crates/`: `core` (storage, manifest, accounting),
 `rclone_rc` (detection, daemon, RC client), `ui` (gpui shell), `app` (binary),
 and `platform_{macos,windows,linux}` (mount integration, later phases).
 
+## Releasing
+
+Releases are automated by [release-plz](https://release-plz.dev): every push to
+`main` keeps a **Release PR** open that bumps the shared version and updates
+`CHANGELOG.md` from the Conventional Commit history. **Merge that PR** to ship —
+release-plz tags `vX.Y.Z`, which triggers [cargo-dist](https://github.com/axodotdev/cargo-dist)
+(`.github/workflows/release.yml`) to build the macOS/Linux/Windows artifacts and
+publish the GitHub Release. No local release commands.
+
+One-time setup: add a repo secret `RELEASE_PLZ_TOKEN` (a PAT with `contents` +
+`pull-requests` write) so release-plz's tag can trigger the dist workflow.
+
 ## License
 
 [GPL-3.0-or-later](LICENSE). rspace is free software — you may use, study,
