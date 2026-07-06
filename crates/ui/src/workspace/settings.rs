@@ -100,6 +100,20 @@ impl Workspace {
         self.daemon.update(cx, |d, cx| d.restart(cx));
     }
 
+    pub(crate) fn action_uninstall(&mut self, _: &Uninstall, _: &mut Window, cx: &mut Context<Self>) {
+        self.ask_confirm(
+            "Uninstall rspace?",
+            "Removes rspace and all its data — settings, pinned remotes, history, logs, and cache. Your rclone config and cloud files are left untouched.",
+            "Uninstall",
+            true,
+            |this, cx| {
+                rspace_core::uninstall::run(&this.app.paths);
+                cx.quit(); // triggers the daemon shutdown in main's quit path
+            },
+            cx,
+        );
+    }
+
     pub(crate) fn action_toggle_tasks(&mut self, _: &ToggleTasks, _: &mut Window, cx: &mut Context<Self>) {
         self.toggle_panel(Panel::Tasks, cx);
     }

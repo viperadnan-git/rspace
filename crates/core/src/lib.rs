@@ -5,6 +5,7 @@ pub mod db;
 pub mod paths;
 pub mod settings;
 pub mod sort;
+pub mod uninstall;
 
 pub use cache::{Lookup, QueryCache};
 pub use db::{Db, UiState};

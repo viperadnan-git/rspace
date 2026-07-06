@@ -129,6 +129,7 @@ actions!(
         OpenSettings,
         RestartDaemon,
         CheckForUpdates,
+        Uninstall,
         ToggleTasks,
         ToggleSync,
         ToggleSearch,

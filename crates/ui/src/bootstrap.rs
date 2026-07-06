@@ -69,6 +69,7 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
             MenuItem::separator(),
+            MenuItem::action("Uninstall rspace", Uninstall),
             MenuItem::action("Quit rspace", Quit),
         ]),
         Menu::new("File").items([

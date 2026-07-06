@@ -98,8 +98,13 @@ impl Paths {
         self.cache.join("rcd.pid")
     }
 
+    /// The four state dirs (config, data, cache, logs) — for bulk create/wipe.
+    pub fn state_dirs(&self) -> [&Path; 4] {
+        [&self.config, &self.data, &self.cache, &self.logs]
+    }
+
     pub fn ensure(&self) -> std::io::Result<()> {
-        for dir in [&self.config, &self.data, &self.cache, &self.logs] {
+        for dir in self.state_dirs() {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())

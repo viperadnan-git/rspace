@@ -5,6 +5,21 @@ Dropbox, and 70+ more providers, then browse, move, and sync files across all of
 them from one window — no command line required. Built on rclone, with a clean
 native UI on top.
 
+## Install
+
+Grab the archive for your platform from [Releases](https://github.com/viperadnan-git/rspace/releases),
+or use the one-line installer linked there.
+
+On **macOS**, the app is ad-hoc signed (not notarized), so Gatekeeper quarantines
+it on first launch. Clear the flag once after moving it to Applications:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/rspace.app
+```
+
+To uninstall, use **rspace → Uninstall rspace** — it wipes all app data and moves
+the app to the Trash. Your rclone config and cloud files are left untouched.
+
 ## Prerequisites
 
 - **Rust** — current stable (edition 2024; `rustc` ≥ 1.85).
