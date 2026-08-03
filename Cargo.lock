@@ -4881,7 +4881,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rspace"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "rspace-core",
@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "rspace-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "directories",
  "rusqlite",
@@ -4907,7 +4907,7 @@ dependencies = [
 
 [[package]]
 name = "rspace-rclone-rc"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rand 0.8.6",
  "reqwest",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "rspace-ui"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "cargo-packager-updater",
