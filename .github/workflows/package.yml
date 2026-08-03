@@ -26,26 +26,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # updater_ext = cargo-packager's file for the updater_format (its output
-          # contract); it's renamed per-platform since both macOS arches emit the
+          # Both macOS arches build on the Apple-Silicon runner (x86_64 cross-
+          # compiles natively) — avoids the scarce macos-13 Intel runners and keeps
+          # per-arch installers minimal. updater_ext = cargo-packager's file for the
+          # updater_format; renamed per-platform since both macOS arches emit the
           # same rspace.app.tar.gz.
-          - os: macos-14        # Apple Silicon
+          - os: macos-14
             platform: macos-aarch64
+            target: aarch64-apple-darwin
             formats: app,dmg
             updater_ext: ".app.tar.gz"
             updater_format: app
-          - os: macos-13        # Intel
+          - os: macos-14
             platform: macos-x86_64
+            target: x86_64-apple-darwin
             formats: app,dmg
             updater_ext: ".app.tar.gz"
             updater_format: app
           - os: ubuntu-22.04
             platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
             formats: appimage,deb
             updater_ext: ".AppImage"
             updater_format: appimage
           - os: windows-latest
             platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
             formats: nsis,wix
             updater_ext: "-setup.exe"
             updater_format: nsis
@@ -53,6 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       # gpui build deps (from Zed's script/linux) + AppImage tooling (FUSE, file).
       - if: runner.os == 'Linux'
@@ -68,11 +76,12 @@ jobs:
 
       - name: Package (signed) into dist/
         env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}   # cargo-packager's build + cross-compile (macOS x86_64 on the arm runner)
           CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
           CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
         # Absolute paths: --out-dir is package-relative otherwise (crates/app/dist),
         # and ${{ github.workspace }} is correct across the runners' different shells.
-        run: cargo packager --release -p rspace --formats ${{ matrix.formats }} --out-dir "${{ github.workspace }}/dist" --binaries-dir "${{ github.workspace }}/target/release"
+        run: cargo packager --release -p rspace --formats ${{ matrix.formats }} --target ${{ matrix.target }} --out-dir "${{ github.workspace }}/dist" --binaries-dir "${{ github.workspace }}/target/${{ matrix.target }}/release"
 
       # Stage the release assets from cargo-packager's own out-dir and build this
       # platform's slice of the update manifest ({url, signature, format}). The
