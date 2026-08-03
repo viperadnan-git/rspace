@@ -36,6 +36,13 @@ rspace-core = { path = "crates/core" }
 rspace-rclone-rc = { path = "crates/rclone_rc" }
 rspace-ui = { path = "crates/ui" }
 
+[profile.release]
+opt-level = "s"       # size-optimized; gpui is GPU-bound so the CPU tradeoff is minor
+lto = "fat"           # cross-crate dead-code elimination + inlining
+codegen-units = 1     # best whole-program optimization / smallest output
+strip = true          # drop symbols
+# panic = "abort" omitted: gpui relies on unwinding.
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
