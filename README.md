@@ -1,4 +1,19 @@
-# rspace
+<p align="center">
+  <img src="assets/icon.png" alt="rspace" width="128" height="128">
+</p>
+
+<h1 align="center">rspace</h1>
+
+<p align="center">
+  <a href="https://github.com/viperadnan-git/rspace/releases"><img alt="Release" src="https://img.shields.io/github/v/release/viperadnan-git/rspace?style=plastic"></a>
+  <a href="https://github.com/viperadnan-git/rspace/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/viperadnan-git/rspace/total?style=plastic"></a>
+  <a href="https://github.com/viperadnan-git/rspace/actions/workflows/package.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/viperadnan-git/rspace/package.yml?style=plastic&label=build"></a>
+  <img alt="Code size" src="https://img.shields.io/github/languages/code-size/viperadnan-git/rspace?style=plastic">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=plastic">
+  <img alt="Rust version" src="https://img.shields.io/badge/dynamic/toml?url=https://raw.githubusercontent.com/viperadnan-git/rspace/main/Cargo.toml&query=%24.workspace.package%5B%27rust-version%27%5D&style=plastic&label=rust&logo=rust&logoColor=white&color=DEA584&prefix=%E2%89%A5">
+  <img alt="Powered by rclone" src="https://img.shields.io/badge/powered%20by-rclone-3B7DED?style=plastic&logo=rclone&logoColor=white">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue?style=plastic"></a>
+</p>
 
 rspace is a fast, native desktop app for your cloud storage. Connect Drive, S3,
 Dropbox, and 70+ more providers, then browse, move, and sync files across all of
@@ -7,15 +22,17 @@ native UI on top.
 
 ## Install
 
-Grab the archive for your platform from [Releases](https://github.com/viperadnan-git/rspace/releases),
-or use the one-line installer linked there.
+Download the installer for your platform from [Releases](https://github.com/viperadnan-git/rspace/releases):
 
-On **macOS**, the app is ad-hoc signed (not notarized), so Gatekeeper quarantines
-it on first launch. Clear the flag once after moving it to Applications:
+- **macOS** — `.dmg`; drag `rspace` to Applications.
+- **Windows** — `.msi` or the `-setup.exe`.
+- **Linux** — `.AppImage` (universal, chmod +x and run) or `.deb`.
 
-```sh
-xattr -dr com.apple.quarantine /Applications/rspace.app
-```
+The app is **not code-signed** (no paid developer certificates), so each OS shows
+a one-time "unidentified developer" prompt:
+
+- **macOS** — right-click the app → **Open** (or `xattr -dr com.apple.quarantine /Applications/rspace.app`).
+- **Windows** — SmartScreen → **More info → Run anyway**.
 
 To uninstall, use **rspace → Uninstall rspace** — it wipes all app data and moves
 the app to the Trash. Your rclone config and cloud files are left untouched.
@@ -52,12 +69,18 @@ and `platform_{macos,windows,linux}` (mount integration, later phases).
 Releases are automated by [release-plz](https://release-plz.dev): every push to
 `main` keeps a **Release PR** open that bumps the shared version and updates
 `CHANGELOG.md` from the Conventional Commit history. **Merge that PR** to ship —
-release-plz tags `vX.Y.Z`, which triggers [cargo-dist](https://github.com/axodotdev/cargo-dist)
-(`.github/workflows/release.yml`) to build the macOS/Linux/Windows artifacts and
+release-plz tags `vX.Y.Z`, which triggers [cargo-packager](https://github.com/crabnebula-dev/cargo-packager)
+(`.github/workflows/package.yml`) to build the macOS/Linux/Windows installers and
 publish the GitHub Release. No local release commands.
 
-One-time setup: add a repo secret `RELEASE_PLZ_TOKEN` (a PAT with `contents` +
-`pull-requests` write) so release-plz's tag can trigger the dist workflow.
+One-time repo secrets:
+
+- `RELEASE_PLZ_TOKEN` — a PAT (`contents` + `pull-requests` write) so release-plz's
+  tag can trigger the packager workflow.
+- `CARGO_PACKAGER_SIGN_PRIVATE_KEY` / `CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD` —
+  the updater signing key + password (generated via `cargo packager signer generate`)
+  so `package.yml` can sign the auto-update artifacts. The public half is embedded
+  in `crates/ui/src/update.rs`; in-app self-update verifies against it.
 
 ## License
 
