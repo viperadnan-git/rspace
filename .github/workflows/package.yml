@@ -1,0 +1,140 @@
+# Hand-authored: cargo-packager has no workflow generator for the GitHub-Releases
+# path (its only generated CI targets CrabNebula Cloud). This builds the native
+# installers, signs the auto-update artifacts, and publishes everything (+ the
+# update manifest) to the GitHub Release, triggered by the `vX.Y.Z` tag release-plz
+# creates when the Release PR merges.
+#
+# Installers are UNSIGNED for Gatekeeper/SmartScreen (no paid certs) — users clear
+# the one-time prompt (see README). The *updater* artifacts are signed with the
+# cargo-packager key so in-app self-update can verify them.
+#
+# Required repo secrets (named after cargo-packager's env vars, so the mapping is 1:1):
+#   CARGO_PACKAGER_SIGN_PRIVATE_KEY          — private key from `cargo packager signer generate`
+#   CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD — its password
+name: package
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon
+            platform: macos-aarch64
+            formats: app,dmg
+            updater_glob: "target/**/*.app.tar.gz"
+            updater_format: app
+          - os: macos-13        # Intel
+            platform: macos-x86_64
+            formats: app,dmg
+            updater_glob: "target/**/*.app.tar.gz"
+            updater_format: app
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            formats: appimage,deb
+            updater_glob: "target/**/*.AppImage.tar.gz"
+            updater_format: appimage
+          - os: windows-latest
+            platform: windows-x86_64
+            formats: nsis,msi
+            updater_glob: "target/**/*.nsis.zip"
+            updater_format: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # gpui build deps (from Zed's script/linux) + AppImage tooling (FUSE, file).
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev \
+            libssl-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libzstd-dev libsqlite3-dev libfuse2 file
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Package (signed updater artifacts)
+        env:
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: cargo packager --release -p rspace --formats ${{ matrix.formats }}
+
+      # Build this platform's slice of the multi-platform update manifest:
+      # { "<platform>": { url, signature, format } }. URL points at the release asset.
+      - name: Update-manifest fragment
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          artifact=( ${{ matrix.updater_glob }} )
+          test ${#artifact[@]} -gt 0 || { echo "no updater artifact found"; exit 1; }
+          art="${artifact[0]}"
+          base="$(basename "$art")"
+          sig="$(cat "${art}.sig")"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${base}"
+          mkdir -p frag
+          jq -n --arg u "$url" --arg s "$sig" --arg f "${{ matrix.updater_format }}" \
+            '{url:$u, signature:$s, format:$f}' > "frag/${{ matrix.platform }}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.platform }}
+          path: |
+            target/**/*.dmg
+            target/**/*.deb
+            target/**/*.AppImage
+            target/**/*.msi
+            target/**/*-setup.exe
+            target/**/*.app.tar.gz
+            target/**/*.AppImage.tar.gz
+            target/**/*.nsis.zip
+            frag/*.json
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+          merge-multiple: true
+
+      - name: Assemble latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Key each platform fragment ({url,signature,format}) by its filename,
+          # then merge into one platforms map.
+          platforms="$(for f in dl/frag/*.json; do
+            jq --arg k "$(basename "$f" .json)" '{($k): .}' "$f"
+          done | jq -s 'add')"
+          jq -n --arg v "$version" --argjson p "$platforms" \
+            '{version:$v, platforms:$p}' > latest.json
+          cat latest.json
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dl/**/*.dmg
+            dl/**/*.deb
+            dl/**/*.AppImage
+            dl/**/*.msi
+            dl/**/*-setup.exe
+            dl/**/*.app.tar.gz
+            dl/**/*.AppImage.tar.gz
+            dl/**/*.nsis.zip
+            latest.json
+          generate_release_notes: true

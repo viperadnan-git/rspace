@@ -13,17 +13,26 @@ homepage.workspace = true
 name = "rspace"
 path = "src/main.rs"
 
-# Mark this crate's binary as distable: the workspace is `publish = false`, which
-# would otherwise hide it from `dist`.
-[package.metadata.dist]
-dist = true
-
-# `cargo bundle` packages crates/app into rspace.app with this icon.
-[package.metadata.bundle]
-name = "rspace"
+# cargo-packager builds the native installers (.dmg/.app, .msi/.nsis, .deb/.AppImage).
+# macOS is ad-hoc signed only (the linker's default ad-hoc signature on the
+# binary) — no Apple Developer account, so users clear Gatekeeper once on first
+# launch. `formats` is passed per-OS in CI, not pinned here.
+[package.metadata.packager]
+product-name = "rspace"
 identifier = "com.viperadnan.rspace"
-icon = ["resources/rspace.icns"]
-category = "public.app-category.utilities"
+category = "Utility"
+before-packaging-command = "cargo build --release --bin rspace"
+binaries = [{ path = "rspace", main = true }]
+icons = ["resources/rspace.icns", "resources/icon.ico", "resources/app-icon.png"]
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+
+# ponytail: gpui's Linux runtime libs — verify on a clean Debian box before
+# relying on the .deb; the AppImage bundles its own libs and is the safe channel.
+[package.metadata.packager.deb]
+depends = ["libxkbcommon0", "libwayland-client0", "libvulkan1", "libgl1", "libfontconfig1"]
+section = "utils"
 
 [dependencies]
 rspace-core.workspace = true
