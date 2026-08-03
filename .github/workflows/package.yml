@@ -48,7 +48,7 @@ jobs:
             updater_format: nsis
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       # gpui build deps (from Zed's script/linux) + AppImage tooling (FUSE, file).
@@ -86,7 +86,7 @@ jobs:
           jq -n --arg u "$url" --arg s "$sig" --arg f "${{ matrix.updater_format }}" \
             '{url:$u, signature:$s, format:$f}' > "frag/${{ matrix.platform }}.json"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.platform }}
           path: |
@@ -105,7 +105,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dl
           merge-multiple: true
@@ -125,7 +125,7 @@ jobs:
           cat latest.json
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dl/**/*.dmg
