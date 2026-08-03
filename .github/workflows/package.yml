@@ -29,22 +29,22 @@ jobs:
           - os: macos-14        # Apple Silicon
             platform: macos-aarch64
             formats: app,dmg
-            updater_glob: "target/**/*.app.tar.gz"
+            updater_name: "*.app.tar.gz"
             updater_format: app
           - os: macos-13        # Intel
             platform: macos-x86_64
             formats: app,dmg
-            updater_glob: "target/**/*.app.tar.gz"
+            updater_name: "*.app.tar.gz"
             updater_format: app
           - os: ubuntu-22.04
             platform: linux-x86_64
             formats: appimage,deb
-            updater_glob: "target/**/*.AppImage.tar.gz"
+            updater_name: "*.AppImage"
             updater_format: appimage
           - os: windows-latest
             platform: windows-x86_64
-            formats: nsis,msi
-            updater_glob: "target/**/*.nsis.zip"
+            formats: nsis,wix
+            updater_name: "*-setup.exe"
             updater_format: nsis
     runs-on: ${{ matrix.os }}
     steps:
@@ -74,11 +74,12 @@ jobs:
       - name: Update-manifest fragment
         shell: bash
         run: |
-          set -euo pipefail
-          shopt -s globstar nullglob
-          artifact=( ${{ matrix.updater_glob }} )
-          test ${#artifact[@]} -gt 0 || { echo "no updater artifact found"; exit 1; }
-          art="${artifact[0]}"
+          set -uo pipefail
+          # find (not a bash ** glob) — the runner shells differ (macOS bash 3.2 lacks globstar).
+          art="$(find target -maxdepth 3 -name '${{ matrix.updater_name }}' | head -n1)"
+          if [ -z "$art" ]; then
+            echo "no updater artifact matching '${{ matrix.updater_name }}'"; ls -R target/release || true; exit 1
+          fi
           base="$(basename "$art")"
           sig="$(cat "${art}.sig")"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${base}"
@@ -96,8 +97,6 @@ jobs:
             target/**/*.msi
             target/**/*-setup.exe
             target/**/*.app.tar.gz
-            target/**/*.AppImage.tar.gz
-            target/**/*.nsis.zip
             frag/*.json
           if-no-files-found: error
 
@@ -134,7 +133,5 @@ jobs:
             dl/**/*.msi
             dl/**/*-setup.exe
             dl/**/*.app.tar.gz
-            dl/**/*.AppImage.tar.gz
-            dl/**/*.nsis.zip
             latest.json
           generate_release_notes: true
