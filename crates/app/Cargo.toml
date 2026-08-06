@@ -30,7 +30,7 @@ minimum-system-version = "11.0"
 
 # "both": user picks per-machine (Program Files) or per-user, plus the install dir.
 [package.metadata.packager.nsis]
-install-mode = "both"
+installMode = "both"
 
 # ponytail: gpui's Linux runtime libs — verify on a clean Debian box before
 # relying on the .deb; the AppImage bundles its own libs and is the safe channel.
