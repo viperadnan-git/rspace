@@ -28,22 +28,23 @@ permissions:
 
 jobs:
   build:
+    timeout-minutes: 45   # fail fast if a runner never gets allocated (deprecated-image scarcity)
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Both macOS arches build on the Apple-Silicon runner (x86_64 cross-
-          # compiles natively) — avoids the scarce macos-13 Intel runners and keeps
-          # per-arch installers minimal. updater_ext = cargo-packager's file for the
-          # updater_format; renamed per-platform since both macOS arches emit the
-          # same rspace.app.tar.gz.
-          - os: macos-14
+          # Both macOS arches build on a current Apple-Silicon runner (macos-15;
+          # macos-14 began deprecation 2026-07-06, macos-13 already gone). x86_64
+          # cross-compiles natively, keeping per-arch installers minimal. updater_ext
+          # = cargo-packager's file for the updater_format; renamed per-platform
+          # since both macOS arches emit the same rspace.app.tar.gz.
+          - os: macos-15
             platform: macos-aarch64
             target: aarch64-apple-darwin
             formats: app,dmg
             updater_ext: ".app.tar.gz"
             updater_format: app
-          - os: macos-14
+          - os: macos-15
             platform: macos-x86_64
             target: x86_64-apple-darwin
             formats: app,dmg
