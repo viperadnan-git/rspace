@@ -11,4 +11,5 @@ pub mod picker;
 pub mod prompt;
 pub mod text_input;
 pub mod toast;
+pub mod update_modal;
 pub mod widgets;

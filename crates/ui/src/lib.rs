@@ -496,6 +496,7 @@ impl Workspace {
             bisync_resync: false,
         };
         this.load_remotes(cx);
+        Self::check_updates_on_startup(cx);
         this
     }
 

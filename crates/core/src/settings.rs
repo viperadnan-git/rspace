@@ -21,6 +21,8 @@ pub struct Settings {
     pub sort_order: SortOrder,
     /// Base UI font size in px (Zed's `ui_font_size`); drives the window rem size.
     pub ui_font_size: f32,
+    /// Version the user skipped; suppresses the update prompt for just that version.
+    pub skipped_update_version: Option<String>,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             sort_field: SortField::Modified,
             sort_order: SortOrder::Desc,
             ui_font_size: 16.0,
+            skipped_update_version: None,
         }
     }
 }
