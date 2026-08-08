@@ -20,13 +20,20 @@ Dropbox, and 70+ more providers, then browse, move, and sync files across all of
 them from one window — no command line required. Built on rclone, with a clean
 native UI on top.
 
-## Install
+## Download
 
-Download the installer for your platform from [Releases](https://github.com/viperadnan-git/rspace/releases):
+Every link points at the **latest release**:
 
-- **macOS** — `.dmg`; drag `rspace` to Applications.
-- **Windows** — `.msi` or the `-setup.exe`.
-- **Linux** — `.AppImage` (universal, chmod +x and run) or `.deb`.
+| Platform | Download |
+| --- | --- |
+| macOS · Apple Silicon | [rspace-macos-aarch64.dmg](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-macos-aarch64.dmg) |
+| macOS · Intel | [rspace-macos-x86_64.dmg](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-macos-x86_64.dmg) |
+| Windows · Installer | [rspace-windows-x86_64-setup.exe](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-windows-x86_64-setup.exe) |
+| Windows · MSI | [rspace-windows-x86_64.msi](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-windows-x86_64.msi) |
+| Linux · AppImage | [rspace-linux-x86_64.AppImage](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-linux-x86_64.AppImage) |
+| Linux · Debian/Ubuntu | [rspace-linux-x86_64.deb](https://github.com/viperadnan-git/rspace/releases/latest/download/rspace-linux-x86_64.deb) |
+
+macOS: open the `.dmg` and drag rspace to Applications. Linux: `chmod +x` the AppImage and run it. All releases are at [Releases](https://github.com/viperadnan-git/rspace/releases).
 
 The app is **not code-signed** (no paid developer certificates), so each OS shows
 a one-time "unidentified developer" prompt:

@@ -103,7 +103,10 @@ jobs:
           updater="rspace-${{ matrix.platform }}${{ matrix.updater_ext }}"
           cp "$src" "upload/$updater"
           sig="$(cat "$src.sig")"
-          for f in dist/*.dmg dist/*.deb dist/*.msi; do [ -e "$f" ] && cp "$f" upload/; done
+          # Stable, version-less names so /releases/latest/download/<name> always resolves.
+          for f in dist/*.dmg dist/*.deb dist/*.msi; do
+            [ -e "$f" ] && cp "$f" "upload/rspace-${{ matrix.platform }}.${f##*.}"
+          done
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$updater"
           jq -n --arg u "$url" --arg s "$sig" --arg f "${{ matrix.updater_format }}" \
             '{url:$u, signature:$s, format:$f}' > "frag/${{ matrix.platform }}.json"
