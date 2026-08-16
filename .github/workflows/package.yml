@@ -1,0 +1,189 @@
+# Build the native installers, sign the auto-update artifacts, and publish them
+# with the update manifest to the GitHub Release.
+#
+# `cargo release <patch|minor|major>` bumps the shared version and pushes the
+# `vX.Y.Z` tag that triggers this. Hand-authored because cargo-packager only
+# generates CI for CrabNebula Cloud, not GitHub Releases.
+#
+# Installers are UNSIGNED for Gatekeeper/SmartScreen (no paid certs) — users clear
+# the one-time prompt (see README). The *updater* artifacts are signed with the
+# cargo-packager key so in-app self-update can verify them.
+#
+# Required repo secrets (named after cargo-packager's env vars, so the mapping is 1:1):
+#   CARGO_PACKAGER_SIGN_PRIVATE_KEY          — private key from `cargo packager signer generate`
+#   CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD — its password
+name: package
+
+on:
+  push:
+    tags: ["v*"]   # `cargo release` pushes the tag; that is the whole trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    timeout-minutes: 45   # fail fast if a runner never gets allocated (deprecated-image scarcity)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both macOS arches build on the Apple-Silicon runner; x86_64
+          # cross-compiles, keeping per-arch installers minimal. `updater_ext` is
+          # cargo-packager's file for the `updater_format`, renamed per-platform
+          # because both macOS arches emit the same rspace.app.tar.gz.
+          #
+          # macOS packages the .app only — the disk image is built below. See the
+          # "Build the disk image" step for why. `dmg_arch` keeps cargo-packager's
+          # own naming (it maps x86_64 to x64 and leaves aarch64 alone).
+          - os: macos-15
+            platform: macos-aarch64
+            target: aarch64-apple-darwin
+            formats: app
+            dmg_arch: aarch64
+            updater_ext: ".app.tar.gz"
+            updater_format: app
+          - os: macos-15
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+            formats: app
+            dmg_arch: x64
+            updater_ext: ".app.tar.gz"
+            updater_format: app
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            formats: appimage,deb
+            updater_ext: ".AppImage"
+            updater_format: appimage
+          - os: windows-latest
+            platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            formats: nsis,wix
+            updater_ext: "-setup.exe"
+            updater_format: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # gpui build deps (from Zed's script/linux) + AppImage tooling (FUSE, file).
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev \
+            libssl-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libzstd-dev libsqlite3-dev libfuse2 file
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Package (signed) into dist/
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}   # cargo-packager's build + cross-compile (macOS x86_64 on the arm runner)
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        # Absolute paths: --out-dir is package-relative otherwise (crates/app/dist),
+        # and ${{ github.workspace }} is correct across the runners' different shells.
+        run: cargo packager --release -p rspace --formats ${{ matrix.formats }} --target ${{ matrix.target }} --out-dir "${{ github.workspace }}/dist" --binaries-dir "${{ github.workspace }}/target/${{ matrix.target }}/release"
+
+      # cargo-packager signs every macOS output once an identity is set, the
+      # disk image included — but a disk image should only ever carry a Developer
+      # ID signature, and Gatekeeper refuses an ad-hoc signed one outright. The
+      # .app needs its ad-hoc signature (without it macOS calls the app damaged),
+      # so package the app there and build the image here, unsigned.
+      - name: Build the disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          app="${{ github.workspace }}/dist/rspace.app"
+          dmg="${{ github.workspace }}/dist/rspace_${version}_${{ matrix.dmg_arch }}.dmg"
+          # The app must be validly signed, or macOS reports it as damaged.
+          codesign --verify --deep --strict "$app"
+          stage="$(mktemp -d)"
+          cp -R "$app" "$stage/"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname rspace -srcfolder "$stage" -ov -format UDZO "$dmg"
+          rm -rf "$stage"
+          [ -f "$dmg" ] || { echo "::error::hdiutil produced no $(basename "$dmg")"; exit 1; }
+          # `--verify` succeeds only on a real signature; success is the failure case.
+          codesign -dv "$dmg" 2>&1 || true
+          if codesign --verify "$dmg" 2>/dev/null; then
+            echo "::error::$(basename "$dmg") is signed; Gatekeeper will refuse it"
+            exit 1
+          fi
+          echo "built unsigned $(basename "$dmg")"
+
+      # Stage the release assets from cargo-packager's own out-dir and build this
+      # platform's slice of the update manifest ({url, signature, format}). The
+      # updater artifact is renamed per-platform so nothing collides on the release.
+      - name: Stage assets + update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob   # non-matching globs vanish, so `set -e` is safe below
+          mkdir -p upload frag
+          matches=(dist/*'${{ matrix.updater_ext }}')
+          [ ${#matches[@]} -gt 0 ] || { echo "no '*${{ matrix.updater_ext }}' in dist/"; ls -la dist; exit 1; }
+          src="${matches[0]}"
+          sig="$(cat "$src.sig")"
+          # Keep cargo-packager's versioned names (the standard); they're unique
+          # except macOS's rspace.app.tar.gz (unversioned, identical across arches).
+          # Name it exactly like this arch's .dmg so every asset matches
+          # (rspace_<ver>_<arch>.app.tar.gz).
+          case "${{ matrix.platform }}" in
+            macos-*) dmg=(dist/*.dmg); updater="$(basename "${dmg[0]%.dmg}").app.tar.gz" ;;
+            *)       updater="$(basename "$src")" ;;
+          esac
+          cp "$src" "upload/$updater"
+          for f in dist/*.dmg dist/*.deb dist/*.msi; do cp "$f" upload/; done
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$updater"
+          jq -n --arg u "$url" --arg s "$sig" --arg f "${{ matrix.updater_format }}" \
+            '{url:$u, signature:$s, format:$f}' > "frag/${{ matrix.platform }}.json"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.platform }}
+          path: |
+            upload
+            frag
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dl
+          merge-multiple: true
+
+      - name: Assemble latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Key each platform fragment ({url,signature,format}) by its filename,
+          # then merge into one platforms map.
+          platforms="$(for f in dl/frag/*.json; do
+            jq --arg k "$(basename "$f" .json)" '{($k): .}' "$f"
+          done | jq -s 'add')"
+          jq -n --arg v "$version" --argjson p "$platforms" \
+            '{version:$v, platforms:$p}' > latest.json
+          cat latest.json
+          # Clients read this from releases/latest; a partial one breaks every install.
+          jq -e '(.platforms|length) == 4 and (.platforms|all(.url != "" and .signature != ""))' \
+            latest.json >/dev/null || { echo "::error::latest.json incomplete"; exit 1; }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dl/upload/*
+            latest.json
+          generate_release_notes: true

@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Adnan Ahmad <viperadnan@gmail.com>"]
+publish = false
+license = "GPL-3.0-or-later"
+repository = "https://github.com/viperadnan-git/rspace"
+homepage = "https://github.com/viperadnan-git/rspace"
+
+# `cargo release <patch|minor|major>` is the whole release flow: bump the shared
+# version, one commit, push, and push one `vX.Y.Z` tag — which triggers
+# package.yml to build + publish. No crates.io publish (internal workspace).
+[workspace.metadata.release]
+shared-version = true
+consolidate-commits = true
+tag-name = "v{{version}}"
+tag-prefix = ""
+publish = false
+push = true
+pre-release-commit-message = "chore(release): v{{version}}"
+
+[workspace.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "939d2d700038639cdfe3aa37481eaef14653825f" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "939d2d700038639cdfe3aa37481eaef14653825f", features = ["font-kit"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tokio = { version = "1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+getrandom = "0.4"
+rspace-core = { path = "crates/core" }
+rspace-rclone-rc = { path = "crates/rclone_rc" }
+rspace-ui = { path = "crates/ui" }
+
+[profile.release]
+opt-level = "s"       # size-optimized; gpui is GPU-bound so the CPU tradeoff is minor
+lto = "fat"           # cross-crate dead-code elimination + inlining
+codegen-units = 1     # best whole-program optimization / smallest output
+strip = true          # drop symbols
+# panic = "abort" omitted: gpui relies on unwinding.
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

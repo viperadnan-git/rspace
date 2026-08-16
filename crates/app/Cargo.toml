@@ -1,0 +1,57 @@
+[package]
+name = "rspace"
+description = "A fast, native desktop app to manage and sync all your cloud storage. Powered by rclone."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "rspace"
+path = "src/main.rs"
+
+# cargo-packager builds the native installers (.dmg/.app, .msi/.nsis, .deb/.AppImage).
+# macOS is ad-hoc signed only (the linker's default ad-hoc signature on the
+# binary) — no Apple Developer account, so users clear Gatekeeper once on first
+# launch. `formats` is passed per-OS in CI, not pinned here.
+[package.metadata.packager]
+product-name = "rspace"
+identifier = "com.viperadnan.rspace"
+category = "Utility"
+before-packaging-command = "cargo build --release --bin rspace"
+binaries = [{ path = "rspace", main = true }]
+icons = ["resources/rspace.icns", "resources/icon.ico", "resources/app-icon.png"]
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+# Ad-hoc sign the assembled bundle. Without this only the linker's signature is
+# present, which promises a _CodeSignature the bundle doesn't have, and macOS
+# rejects the download as "damaged". Notarization is skipped (no Apple account),
+# so users still clear Gatekeeper once — see README.
+signing-identity = "-"
+
+# "both": user picks per-machine (Program Files) or per-user, plus the install dir.
+[package.metadata.packager.nsis]
+installMode = "both"
+
+# ponytail: gpui's Linux runtime libs — verify on a clean Debian box before
+# relying on the .deb; the AppImage bundles its own libs and is the safe channel.
+[package.metadata.packager.deb]
+depends = ["libxkbcommon0", "libwayland-client0", "libvulkan1", "libgl1", "libfontconfig1"]
+section = "utils"
+
+[dependencies]
+rspace-core.workspace = true
+rspace-rclone-rc.workspace = true
+rspace-ui.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

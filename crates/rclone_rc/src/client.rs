@@ -1,0 +1,516 @@
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use thiserror::Error;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct JobStatus {
+    #[serde(default)]
+    pub finished: bool,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub error: String,
+    /// seconds; set by rclone when finished
+    #[serde(default)]
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Stats {
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default, rename = "totalBytes")]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub speed: f64,
+    #[serde(default)]
+    pub eta: Option<u64>,
+    #[serde(default)]
+    pub transfers: u64,
+    /// Total files queued for this group (0 until rclone has scanned).
+    #[serde(default, rename = "totalTransfers")]
+    pub total_transfers: u64,
+    #[serde(default, rename = "elapsedTime")]
+    pub elapsed_time: f64,
+    /// Files removed. Deletes and purges transfer no bytes, so this is the only
+    /// measure of what they did.
+    #[serde(default)]
+    pub deletes: u64,
+    #[serde(default, rename = "deletedDirs")]
+    pub deleted_dirs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub kind: String,
+}
+
+/// A configurable rclone backend (`config/providers`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Provider {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Description", default)]
+    pub description: String,
+    #[serde(rename = "Options", default)]
+    pub options: Vec<RemoteOption>,
+}
+
+/// One backend option, also the shape of an interactive config question
+/// (`ConfigOut.Option`). Field names match rclone's JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteOption {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Help", default)]
+    pub help: String,
+    #[serde(rename = "Type", default)]
+    pub kind: String,
+    #[serde(rename = "DefaultStr", default)]
+    pub default: String,
+    #[serde(rename = "Required", default)]
+    pub required: bool,
+    #[serde(rename = "IsPassword", default)]
+    pub is_password: bool,
+    #[serde(rename = "Advanced", default)]
+    pub advanced: bool,
+    #[serde(rename = "Examples", default)]
+    pub examples: Vec<OptionExample>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OptionExample {
+    #[serde(rename = "Value", default)]
+    pub value: String,
+    #[serde(rename = "Help", default)]
+    pub help: String,
+}
+
+/// One step of the interactive config flow (`config/create`/`config/update`).
+/// A non-empty `state` means `option` is the next question to ask; an empty
+/// `state` with no error means the remote is fully configured.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigStep {
+    #[serde(rename = "State", default)]
+    pub state: String,
+    #[serde(rename = "Option", default)]
+    pub option: Option<RemoteOption>,
+    #[serde(rename = "Error", default)]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigPaths {
+    pub config: String,
+    pub cache: String,
+    pub temp: String,
+}
+
+/// One entry from `operations/list`. Field names match rclone's JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Entry {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Path")]
+    pub path: String,
+    #[serde(rename = "Size")]
+    pub size: i64,
+    /// RFC3339; empty when the backend omits it. Sorts chronologically as text.
+    #[serde(rename = "ModTime", default)]
+    pub mod_time: String,
+    #[serde(rename = "IsDir")]
+    pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+struct Listing {
+    list: Vec<Entry>,
+}
+
+/// Reusable AND matcher: query split+lowercased once, then tested per name.
+pub struct Matcher {
+    words: Vec<String>,
+}
+
+impl Matcher {
+    pub fn new(query: &str) -> Self {
+        Self { words: query.split_whitespace().map(str::to_lowercase).collect() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
+    pub fn matches(&self, name: &str) -> bool {
+        if self.words.is_empty() {
+            return false;
+        }
+        let name = name.to_lowercase();
+        self.words.iter().all(|w| name.contains(w))
+    }
+
+    pub fn positions(&self, text: &str) -> Vec<usize> {
+        let t: Vec<char> = text.chars().collect();
+        let mut hits = BTreeSet::new();
+        for w in &self.words {
+            let q: Vec<char> = w.chars().collect();
+            if q.is_empty() || q.len() > t.len() {
+                continue;
+            }
+            let mut i = 0;
+            while i + q.len() <= t.len() {
+                if t[i..i + q.len()].iter().zip(&q).all(|(a, b)| a.to_lowercase().eq(b.to_lowercase())) {
+                    hits.extend(i..i + q.len());
+                    i += q.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        hits.into_iter().collect()
+    }
+}
+
+fn glob_escape(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for c in query.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[derive(Debug, Error)]
+pub enum RcError {
+    #[error("rc request: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("{message}")]
+    Status { status: u16, message: String },
+}
+
+fn rc_error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| body.trim().to_string())
+}
+
+/// Authenticated client for the rclone remote-control API.
+#[derive(Debug, Clone)]
+pub struct RcClient {
+    base_url: String,
+    user: String,
+    pass: String,
+    http: Client,
+}
+
+impl RcClient {
+    pub fn new(base_url: String, user: String, pass: String) -> Self {
+        // Bound stalls, not total duration: `read_timeout` fires on a gap
+        // between bytes, so a slow but progressing transfer still completes.
+        let http = Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        Self { base_url, user, pass, http }
+    }
+
+    /// POST to an RC method with a JSON body, returning the decoded response.
+    /// Polls log at `trace`, other calls at `debug`, failures at `warn`.
+    pub async fn call<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        body: &Value,
+    ) -> Result<T, RcError> {
+        let start = std::time::Instant::now();
+        let result = self.call_inner(method, body).await;
+        let ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Err(e) => tracing::warn!(method, elapsed_ms = ms, error = %e, "rc call failed"),
+            Ok(_) if matches!(method, "job/status" | "core/stats") => {
+                tracing::trace!(method, elapsed_ms = ms, "rc call")
+            }
+            Ok(_) => tracing::debug!(method, elapsed_ms = ms, "rc call"),
+        }
+        result
+    }
+
+    async fn call_inner<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        body: &Value,
+    ) -> Result<T, RcError> {
+        let resp = self
+            .http
+            .post(format!("{}/{method}", self.base_url))
+            .basic_auth(&self.user, Some(&self.pass))
+            .json(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(RcError::Status {
+                status: status.as_u16(),
+                message: rc_error_message(&body),
+            });
+        }
+        Ok(resp.json::<T>().await?)
+    }
+
+    /// Fetch up to `max_bytes` of `remote:path`'s content from the `--rc-serve`
+    /// object endpoint (a `Range` request), for file previews.
+    pub async fn fetch_object(
+        &self,
+        remote: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, RcError> {
+        // `--rc-serve` serves objects at `/[remote:]/path` (literal brackets).
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|e| RcError::Status { status: 0, message: e.to_string() })?;
+        // Per-segment encoding: `set_path` leaves '%' verbatim, assuming it
+        // already introduces an escape.
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| RcError::Status { status: 0, message: "bad base url".into() })?;
+            segments.clear().push(&format!("[{remote}:]"));
+            segments.extend(path.split('/').filter(|s| !s.is_empty()));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header(reqwest::header::RANGE, format!("bytes=0-{}", max_bytes.saturating_sub(1)))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(RcError::Status { status: status.as_u16(), message: rc_error_message(&body) });
+        }
+        // Backends may ignore Range and answer 200 with the whole body.
+        let body = resp.bytes().await?;
+        let capped = body.len().min(max_bytes as usize);
+        Ok(body[..capped].to_vec())
+    }
+
+    pub async fn noop(&self) -> Result<(), RcError> {
+        let _: Value = self.call("rc/noop", &json!({})).await?;
+        Ok(())
+    }
+
+    pub async fn list_remotes(&self) -> Result<Vec<String>, RcError> {
+        #[derive(serde::Deserialize)]
+        struct Remotes {
+            remotes: Vec<String>,
+        }
+        let r: Remotes = self.call("config/listremotes", &json!({})).await?;
+        Ok(r.remotes)
+    }
+
+    pub async fn remotes(&self) -> Result<Vec<RemoteInfo>, RcError> {
+        let dump: std::collections::BTreeMap<String, Value> =
+            self.call("config/dump", &json!({})).await?;
+        let mut out: Vec<RemoteInfo> = dump
+            .into_iter()
+            .map(|(name, cfg)| {
+                let kind = cfg.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+                RemoteInfo { name, kind }
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(out)
+    }
+
+    pub async fn config_delete(&self, name: &str) -> Result<(), RcError> {
+        let _: Value = self.call("config/delete", &json!({ "name": name })).await?;
+        Ok(())
+    }
+
+    /// Stop rclone's local OAuth callback webserver (`config/oauthstop`).
+    /// Best-effort: errors when no auth runs or the method is absent (older
+    /// rclone), so it logs at debug via `call_inner` instead of `call`'s warn.
+    pub async fn config_oauth_stop(&self) -> Result<(), RcError> {
+        let result = self.call_inner::<Value>("config/oauthstop", &json!({})).await;
+        if let Err(e) = &result {
+            tracing::debug!(error = %e, "config/oauthstop best-effort failed");
+        }
+        result.map(|_| ())
+    }
+
+    pub async fn config_providers(&self) -> Result<Vec<Provider>, RcError> {
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: Vec<Provider>,
+        }
+        let r: Providers = self.call("config/providers", &json!({})).await?;
+        Ok(r.providers)
+    }
+
+    pub async fn config_paths(&self) -> Result<ConfigPaths, RcError> {
+        self.call("config/paths", &json!({})).await
+    }
+
+    pub async fn config_get(&self, name: &str) -> Result<serde_json::Map<String, Value>, RcError> {
+        self.call("config/get", &json!({ "name": name })).await
+    }
+
+    /// One step of interactive remote creation (`config/create`). `parameters`
+    /// pre-fills known answers; `opt` drives the state machine
+    /// (`state`/`result`/`continue`/`obscure`/`nonInteractive`).
+    pub async fn config_create(
+        &self,
+        name: &str,
+        kind: &str,
+        parameters: Value,
+        opt: Value,
+    ) -> Result<ConfigStep, RcError> {
+        self.call(
+            "config/create",
+            &json!({ "name": name, "type": kind, "parameters": parameters, "opt": opt }),
+        )
+        .await
+    }
+
+    pub async fn config_update(
+        &self,
+        name: &str,
+        parameters: Value,
+        opt: Value,
+    ) -> Result<ConfigStep, RcError> {
+        self.call("config/update", &json!({ "name": name, "parameters": parameters, "opt": opt }))
+            .await
+    }
+
+    /// List one directory level. `fs` is the remote (e.g. `"drive:"`), `remote`
+    /// is the path within it (empty for the root).
+    pub async fn list(&self, fs: &str, remote: &str) -> Result<Vec<Entry>, RcError> {
+        let r: Listing = self.call("operations/list", &json!({ "fs": fs, "remote": remote })).await?;
+        Ok(r.list)
+    }
+
+    /// Server-side file bound on longest query word; caller narrows with [`Matcher`].
+    pub async fn list_filtered(&self, fs: &str, remote: &str, query: &str) -> Result<Vec<Entry>, RcError> {
+        let anchor = query.split_whitespace().max_by_key(|w| w.chars().count()).unwrap_or(query);
+        let pattern = format!("*{}*", glob_escape(anchor));
+        let r: Listing = self
+            .call(
+                "operations/list",
+                &json!({
+                    "fs": fs,
+                    "remote": remote,
+                    "opt": { "recurse": true },
+                    "_filter": { "IncludeRule": [pattern], "IgnoreCase": true },
+                }),
+            )
+            .await?;
+        Ok(r.list)
+    }
+
+    /// Run `method` as an async rclone job in stats group `group`, returning the
+    /// job id immediately. Progress is then read via [`stats`](Self::stats) and
+    /// state via [`job_status`](Self::job_status).
+    pub async fn call_async(
+        &self,
+        method: &str,
+        mut params: Value,
+        group: &str,
+    ) -> Result<u64, RcError> {
+        params["_async"] = Value::Bool(true);
+        params["_group"] = Value::String(group.to_string());
+        #[derive(Deserialize)]
+        struct JobId {
+            jobid: u64,
+        }
+        let r: JobId = self.call(method, &params).await?;
+        Ok(r.jobid)
+    }
+
+    pub async fn job_status(&self, jobid: u64) -> Result<JobStatus, RcError> {
+        self.call("job/status", &json!({ "jobid": jobid })).await
+    }
+
+    pub async fn job_stop(&self, jobid: u64) -> Result<(), RcError> {
+        let _: Value = self.call("job/stop", &json!({ "jobid": jobid })).await?;
+        Ok(())
+    }
+
+    /// Job ids the daemon currently tracks (running + finished-not-yet-expired).
+    pub async fn job_list(&self) -> Result<Vec<u64>, RcError> {
+        #[derive(Deserialize)]
+        struct JobList {
+            #[serde(default)]
+            jobids: Vec<u64>,
+        }
+        let res: JobList = self.call("job/list", &json!({})).await?;
+        Ok(res.jobids)
+    }
+
+    pub async fn stats(&self, group: &str) -> Result<Stats, RcError> {
+        self.call("core/stats", &json!({ "group": group })).await
+    }
+
+    pub async fn quit(&self) -> Result<(), RcError> {
+        let _: Value = self.call("core/quit", &json!({})).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod matcher_tests {
+    use super::Matcher;
+
+    #[test]
+    fn matches_all_words_case_insensitive() {
+        let m = Matcher::new("Foo Bar");
+        assert!(m.matches("a foobar baz"));
+        assert!(m.matches("BAR foo"));
+        assert!(!m.matches("foo only"));
+        assert!(!Matcher::new("").matches("anything"));
+    }
+
+    #[test]
+    fn positions_marks_matched_runs() {
+        assert_eq!(Matcher::new("ba").positions("abate"), vec![1, 2]);
+        assert!(Matcher::new("zz").positions("abate").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    /// The preview URL percent-encodes the path, '%' included: unescaped, it
+    /// either forms an invalid escape or decodes into a different object.
+    fn preview_url(base: &str, remote: &str, path: &str) -> String {
+        let mut url = reqwest::Url::parse(base).unwrap();
+        {
+            let mut segments = url.path_segments_mut().unwrap();
+            segments.clear().push(&format!("[{remote}:]"));
+            segments.extend(path.split('/').filter(|s| !s.is_empty()));
+        }
+        url.to_string()
+    }
+
+    #[test]
+    fn percent_and_slashes_are_encoded() {
+        let base = "http://127.0.0.1:5572";
+        assert!(preview_url(base, "gd", "50% off.pdf").ends_with("/50%25%20off.pdf"));
+        // A literal '%2F' in a name stays one segment, not a path separator.
+        assert!(preview_url(base, "gd", "report%2Fq1.pdf").ends_with("/report%252Fq1.pdf"));
+        // Real separators stay separators.
+        assert!(preview_url(base, "gd", "dir/sub/a.txt").ends_with("/dir/sub/a.txt"));
+        // `--rc-serve` matches on literal brackets, so those must NOT be escaped.
+        assert!(preview_url(base, "gd", "a.txt").contains("/[gd:]/"));
+    }
+}
