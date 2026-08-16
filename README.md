@@ -20,6 +20,24 @@ Dropbox, and 70+ more providers, then browse, move, and sync files across all of
 them from one window — no command line required. Built on rclone, with a clean
 native UI on top.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=jQisdXnXKvc"><b>▶ See it in action — 90 seconds</b></a>
+</p>
+
+## Features
+
+- **Every remote in one window** — Drive, S3, Dropbox, OneDrive, Backblaze B2,
+  Azure, SFTP, WebDAV and the rest of rclone's 70+ backends, side by side.
+- **Real transfers** — copies, moves and syncs run in the background with live
+  progress, throughput and ETA.
+- **Built-in previews** — read documents, code and images without downloading
+  them first.
+- **Search that reaches into subfolders** — filter a deep tree, then act on the
+  results.
+- **Keyboard-driven** — a command palette and shortcuts for every action.
+- **rclone stays visible** — daemon status, version and logs are one click away,
+  never hidden behind the UI.
+
 ## Download
 
 Download the latest build for your platform from the
@@ -28,6 +46,11 @@ Download the latest build for your platform from the
 - **macOS** — `.dmg` (Apple Silicon or Intel); open it and drag rspace to Applications.
 - **Windows** — `.exe` installer (or `.msi`).
 - **Linux** — `.AppImage` (`chmod +x` and run) or `.deb`.
+
+rspace drives [rclone](https://rclone.org/install/), so **rclone must be
+installed** — it is the only thing rspace needs to run. rspace finds it
+automatically and offers to install it if it's missing, and it reads the rclone
+config you already have, so configured remotes show up on first launch.
 
 The app is **not notarized** (no paid developer certificates), so each OS shows
 a one-time prompt:
@@ -39,20 +62,31 @@ a one-time prompt:
 To uninstall, use **rspace → Uninstall rspace** — it wipes all app data and moves
 the app to the Trash. Your rclone config and cloud files are left untouched.
 
-## Prerequisites
+## Screenshots
+
+| | |
+| :-: | :-: |
+| <img src="https://github.com/user-attachments/assets/03583d42-6ca8-48f4-9b4d-c55d28c77c87" alt="Browsing a remote, with 45 configured remotes in the sidebar"> | <img src="https://github.com/user-attachments/assets/51e0836c-6eb9-4c1c-affc-cefbf5ec8500" alt="Live transfers with progress, speed and ETA"> |
+| Every remote in one window | Transfers, with live speed and ETA |
+| <img src="https://github.com/user-attachments/assets/62bfdb7f-8632-4543-ba43-f9f00c2cfee2" alt="A file open in the preview pane"> | <img src="https://github.com/user-attachments/assets/4ff7da9e-2c5b-4442-95bd-e9f873cf9f92" alt="Searching for .png across subfolders"> |
+| Built-in previews | Search across subfolders |
+| <img src="https://github.com/user-attachments/assets/2ae0b36f-b49d-4e35-b3f3-0b82f89204fd" alt="The keyboard shortcuts sheet"> | <img src="https://github.com/user-attachments/assets/cc4b75a7-4539-42fe-97a4-155d59dc9fb5" alt="The rclone daemon status popover, showing the connected version and log path"> |
+| Keyboard shortcuts for everything | rclone status, version and logs |
+
+## Building from source
+
+Only needed if you're contributing or building yourself — the
+[Releases](https://github.com/viperadnan-git/rspace/releases/latest) page has
+prebuilt installers.
 
 - **Rust** — current stable (edition 2024; `rustc` ≥ 1.85).
-- **rclone** — install it yourself ([rclone.org/install](https://rclone.org/install/)).
-  rspace auto-detects it and prompts to install if missing.
-- **macOS build only** — full **Xcode** (not just Command Line Tools) plus the
+- **macOS only** — full **Xcode** (not just Command Line Tools) plus the
   **Metal Toolchain**, required to compile gpui's shaders:
   ```sh
   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
   sudo xcodebuild -license accept
   xcodebuild -downloadComponent MetalToolchain
   ```
-
-## Build & run
 
 ```sh
 cargo build --workspace      # build everything
@@ -62,9 +96,12 @@ cargo run -p rspace          # launch the app
 
 ## Layout
 
-Cargo workspace under `crates/`: `core` (storage, manifest, accounting),
-`rclone_rc` (detection, daemon, RC client), `ui` (gpui shell), `app` (binary),
-and `platform_{macos,windows,linux}` (mount integration, later phases).
+Cargo workspace under `crates/`:
+
+- `core` — storage, manifest, accounting
+- `rclone_rc` — rclone detection, daemon lifecycle, RC API client
+- `ui` — the gpui shell
+- `app` — the binary
 
 ## Releasing
 
